@@ -1,0 +1,9 @@
+/target
+/build
+*.hex
+*.map
+*.lst
+*.asm
+*.ast
+*.ir
+*.tokens
