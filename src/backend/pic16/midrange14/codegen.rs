@@ -36,8 +36,8 @@ struct RegisterPair {
 
 #[derive(Clone, Copy, Debug)]
 struct HelperRegisters {
-    arg0: RegisterPair,
-    arg1: RegisterPair,
+    stack_ptr: RegisterPair,
+    frame_ptr: RegisterPair,
     return_high: u16,
     scratch0: u16,
     scratch1: u16,
@@ -52,8 +52,26 @@ struct BranchTargets<'a> {
 #[derive(Debug)]
 struct StorageLayout {
     helpers: HelperRegisters,
-    symbol_bases: BTreeMap<SymbolId, u16>,
+    symbol_storage: BTreeMap<SymbolId, SymbolStorage>,
     temp_bases: BTreeMap<(SymbolId, usize), u16>,
+    frames: BTreeMap<SymbolId, FrameLayout>,
+    stack_base: u16,
+    stack_end: u16,
+    stack_capacity: u16,
+    max_stack_depth: u16,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SymbolStorage {
+    Absolute(u16),
+    Frame(u16),
+}
+
+#[derive(Clone, Debug)]
+struct FrameLayout {
+    arg_bytes: u16,
+    saved_fp_offset: u16,
+    frame_bytes: u16,
 }
 
 /// Lowers typed IR into assembly, encoded words, and a final linker map.
@@ -100,11 +118,11 @@ impl<'a> StorageAllocator<'a> {
     ) -> Option<StorageLayout> {
         let mut allocator = AddressAllocator::new(self.ranges);
 
-        let Some(arg0_lo) = allocator.next_span(2) else {
+        let Some(stack_ptr_lo) = allocator.next_span(2) else {
             diagnostics.error("backend", None, "not enough RAM for ABI helper slots", None);
             return None;
         };
-        let Some(arg1_lo) = allocator.next_span(2) else {
+        let Some(frame_ptr_lo) = allocator.next_span(2) else {
             diagnostics.error("backend", None, "not enough RAM for ABI helper slots", None);
             return None;
         };
@@ -122,26 +140,28 @@ impl<'a> StorageAllocator<'a> {
         };
 
         let helpers = HelperRegisters {
-            arg0: RegisterPair {
-                lo: arg0_lo,
-                hi: arg0_lo + 1,
+            stack_ptr: RegisterPair {
+                lo: stack_ptr_lo,
+                hi: stack_ptr_lo + 1,
             },
-            arg1: RegisterPair {
-                lo: arg1_lo,
-                hi: arg1_lo + 1,
+            frame_ptr: RegisterPair {
+                lo: frame_ptr_lo,
+                hi: frame_ptr_lo + 1,
             },
             return_high,
             scratch0,
             scratch1,
         };
 
-        let mut symbol_bases = BTreeMap::new();
+        let mut symbol_storage = BTreeMap::new();
         for symbol in &typed_program.symbols {
             if let Some(addr) = symbol.fixed_address {
-                symbol_bases.insert(symbol.id, addr);
+                symbol_storage.insert(symbol.id, SymbolStorage::Absolute(addr));
                 continue;
             }
-            if matches!(symbol.kind, SymbolKind::Global | SymbolKind::Local | SymbolKind::Param) {
+            if symbol.kind == SymbolKind::Global
+                || (symbol.kind == SymbolKind::Local && symbol.storage_class == crate::frontend::types::StorageClass::Static)
+            {
                 let Some(base) = allocator.next_span(symbol.ty.byte_width()) else {
                     diagnostics.error(
                         "backend",
@@ -151,8 +171,37 @@ impl<'a> StorageAllocator<'a> {
                     );
                     return None;
                 };
-                symbol_bases.insert(symbol.id, base);
+                symbol_storage.insert(symbol.id, SymbolStorage::Absolute(base));
             }
+        }
+
+        let mut frames = BTreeMap::new();
+        for function in &typed_program.functions {
+            let mut arg_bytes = 0u16;
+            for param in &function.params {
+                symbol_storage.insert(*param, SymbolStorage::Frame(arg_bytes));
+                arg_bytes += self.symbol_width(typed_program, *param)?;
+            }
+
+            let saved_fp_offset = arg_bytes;
+            let mut local_cursor = arg_bytes + 2;
+            for local in &function.locals {
+                let symbol = &typed_program.symbols[*local];
+                if symbol.kind != SymbolKind::Local || symbol.storage_class == crate::frontend::types::StorageClass::Static {
+                    continue;
+                }
+                symbol_storage.insert(*local, SymbolStorage::Frame(local_cursor));
+                local_cursor += self.symbol_width(typed_program, *local)?;
+            }
+
+            frames.insert(
+                function.symbol,
+                FrameLayout {
+                    arg_bytes,
+                    saved_fp_offset,
+                    frame_bytes: local_cursor - arg_bytes,
+                },
+            );
         }
 
         let mut temp_bases = BTreeMap::new();
@@ -171,11 +220,44 @@ impl<'a> StorageAllocator<'a> {
             }
         }
 
+        let Some((stack_base, stack_end, stack_capacity)) = allocator.stack_region() else {
+            diagnostics.error(
+                "backend",
+                None,
+                "not enough RAM left for the Phase 4 software stack",
+                None,
+            );
+            return None;
+        };
+
+        let max_stack_depth = compute_max_stack_depth(ir_program, &frames);
+        if max_stack_depth > stack_capacity {
+            diagnostics.error(
+                "backend",
+                None,
+                format!(
+                    "Phase 4 software stack needs {max_stack_depth} bytes but only {stack_capacity} bytes remain"
+                ),
+                Some("reduce local storage, call depth, or argument count for this target".to_string()),
+            );
+            return None;
+        }
+
         Some(StorageLayout {
             helpers,
-            symbol_bases,
+            symbol_storage,
             temp_bases,
+            frames,
+            stack_base,
+            stack_end,
+            stack_capacity,
+            max_stack_depth,
         })
+    }
+
+    /// Returns the byte width of one symbol object while validating the conversion to `u16`.
+    fn symbol_width(&self, typed_program: &TypedProgram, symbol: SymbolId) -> Option<u16> {
+        u16::try_from(typed_program.symbols[symbol].ty.byte_width()).ok()
     }
 }
 
@@ -218,6 +300,15 @@ impl<'a> AddressAllocator<'a> {
             }
         }
         None
+    }
+
+    /// Returns the remaining contiguous tail region reserved for the software stack.
+    fn stack_region(&self) -> Option<(u16, u16, u16)> {
+        let range = self.ranges.get(self.range_index).copied()?;
+        if self.next_addr > range.end {
+            return None;
+        }
+        Some((self.next_addr, range.end, range.end - self.next_addr + 1))
     }
 }
 
@@ -266,9 +357,18 @@ impl<'a> CodegenContext<'a> {
 
     /// Emits startup initialization for globals and transfers control to `main`.
     fn emit_startup(&mut self, ir_program: &IrProgram, diagnostics: &mut DiagnosticBag) {
+        self.program.push(AsmLine::Comment(format!(
+            "stack base=0x{:04X} end=0x{:04X} capacity={} max_depth={}",
+            self.layout.stack_base,
+            self.layout.stack_end,
+            self.layout.stack_capacity,
+            self.layout.max_stack_depth
+        )));
         for global in &self.typed_program.globals {
             let symbol = &self.typed_program.symbols[global.symbol];
-            let Some(base) = self.layout.symbol_bases.get(&global.symbol).copied() else {
+            let Some(SymbolStorage::Absolute(base)) =
+                self.layout.symbol_storage.get(&global.symbol).copied()
+            else {
                 continue;
             };
             if let Some(initializer) = &global.initializer {
@@ -278,6 +378,17 @@ impl<'a> CodegenContext<'a> {
                 self.clear_slot(base, symbol.ty);
             }
         }
+
+        self.store_const_value(
+            self.layout.helpers.stack_ptr.lo,
+            Type::new(ScalarType::U16),
+            i64::from(self.layout.stack_base),
+        );
+        self.store_const_value(
+            self.layout.helpers.frame_ptr.lo,
+            Type::new(ScalarType::U16),
+            i64::from(self.layout.stack_base),
+        );
 
         let Some(main_symbol) = self
             .typed_program
@@ -318,27 +429,7 @@ impl<'a> CodegenContext<'a> {
         let name = self.symbol_name(function.symbol).to_string();
         self.program.push(AsmLine::Label(function_label(&name)));
         self.current_bank = 0;
-
-        for (index, param) in function.params.iter().enumerate() {
-            let param_symbol = &self.typed_program.symbols[*param];
-            let Some(base) = self.layout.symbol_bases.get(param).copied() else {
-                continue;
-            };
-            let slot = match index {
-                0 => self.layout.helpers.arg0,
-                1 => self.layout.helpers.arg1,
-                _ => {
-                    diagnostics.error(
-                        "backend",
-                        None,
-                        "phase 2 ABI supports at most two parameters",
-                        None,
-                    );
-                    continue;
-                }
-            };
-            self.copy_register_pair_to_slot(slot, base, param_symbol.ty);
-        }
+        self.emit_prologue(function.symbol);
 
         let reachable = function.reachable_blocks();
         for block in &function.blocks {
@@ -363,7 +454,7 @@ impl<'a> CodegenContext<'a> {
             IrInstr::AddrOf { dst, symbol } => {
                 let dst_ty = function.temp_types[*dst];
                 let dst_base = self.temp_base(function.symbol, *dst);
-                self.store_const_value(dst_base, dst_ty, i64::from(self.symbol_base(*symbol)));
+                self.emit_address_of_symbol(*symbol, dst_ty, dst_base);
             }
             IrInstr::Cast { dst, kind, src } => {
                 let dst_ty = function.temp_types[*dst];
@@ -463,8 +554,7 @@ impl<'a> CodegenContext<'a> {
             }
             IrInstr::Store { target, value } => {
                 let target_ty = self.symbol_type(*target);
-                let base = self.symbol_base(*target);
-                self.copy_operand_to_slot(function.symbol, *value, target_ty, base);
+                self.copy_operand_to_symbol(function.symbol, *value, target_ty, *target);
             }
             IrInstr::LoadIndirect { dst, ptr } => {
                 let dst_ty = function.temp_types[*dst];
@@ -497,6 +587,7 @@ impl<'a> CodegenContext<'a> {
                 if let Some(value) = value {
                     self.emit_return_value(function.symbol, *value, function.return_type);
                 }
+                self.emit_epilogue(function.symbol);
                 self.program.push(AsmLine::Instr(AsmInstr::Return));
             }
             IrTerminator::Jump(target) => self.branch_to_label(&block_label(fn_name, *target)),
@@ -513,7 +604,7 @@ impl<'a> CodegenContext<'a> {
         }
     }
 
-    /// Lowers a direct call using the fixed helper-slot ABI and captures return values.
+    /// Lowers a direct call using the Phase 4 software-stack ABI and captures return values.
     fn emit_call(
         &mut self,
         function: &IrFunction,
@@ -533,25 +624,17 @@ impl<'a> CodegenContext<'a> {
                 );
                 continue;
             };
-            let slot = match index {
-                0 => self.layout.helpers.arg0,
-                1 => self.layout.helpers.arg1,
-                _ => {
-                    diagnostics.error(
-                        "backend",
-                        None,
-                        "phase 2 ABI supports at most two call arguments",
-                        None,
-                    );
-                    continue;
-                }
-            };
-            self.copy_operand_to_register_pair(function.symbol, *arg, param_ty, slot);
+            self.push_operand(function.symbol, *arg, param_ty);
         }
 
         let label = function_label(self.symbol_name(callee));
         self.program.push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
         self.program.push(AsmLine::Instr(AsmInstr::Call(label)));
+
+        let arg_bytes = self.function_arg_bytes(callee);
+        if arg_bytes != 0 {
+            self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(arg_bytes));
+        }
 
         if let Some(dst) = dst {
             let dst_ty = function.temp_types[dst];
@@ -564,7 +647,7 @@ impl<'a> CodegenContext<'a> {
         }
     }
 
-    /// Places a return operand into the Phase 2 return convention locations.
+    /// Places a return operand into the Phase 4 return convention locations.
     fn emit_return_value(&mut self, function_symbol: SymbolId, value: Operand, return_ty: Type) {
         if return_ty.byte_width() == 2 {
             self.load_operand_byte_to_w(function_symbol, value, return_ty, 1);
@@ -1038,53 +1121,23 @@ impl<'a> CodegenContext<'a> {
                 }
             }
             CastKind::SignExtend => {
-                match src {
-                    Operand::Constant(value) => {
-                        let low = low_byte(value, Type::new(ScalarType::U8));
-                        self.store_const_value(dst_base, Type::new(ScalarType::U8), i64::from(low));
-                        if dst_ty.byte_width() == 2 {
-                            let high = if (low & 0x80) != 0 { 0xFF } else { 0x00 };
-                            self.store_const_value(dst_base + 1, Type::new(ScalarType::U8), i64::from(high));
-                        }
-                    }
-                    Operand::Symbol(symbol) => {
-                        let source_base = self.symbol_base(symbol);
-                        self.copy_addr_to_addr(source_base, dst_base);
-                        if dst_ty.byte_width() == 2 {
-                            let positive = self.unique_label("sext_pos");
-                            let end = self.unique_label("sext_end");
-                            self.select_bank(source_base);
-                            self.program.push(AsmLine::Instr(AsmInstr::Btfss {
-                                f: low7(source_base),
-                                b: 7,
-                            }));
-                            self.branch_to_label(&positive);
-                            self.store_const_value(dst_base + 1, Type::new(ScalarType::U8), 0xFF);
-                            self.branch_to_label(&end);
-                            self.program.push(AsmLine::Label(positive));
-                            self.clear_addr(dst_base + 1);
-                            self.program.push(AsmLine::Label(end));
-                        }
-                    }
-                    Operand::Temp(temp) => {
-                        let source_base = self.temp_base(function_symbol, temp);
-                        self.copy_addr_to_addr(source_base, dst_base);
-                        if dst_ty.byte_width() == 2 {
-                            let positive = self.unique_label("sext_pos");
-                            let end = self.unique_label("sext_end");
-                            self.select_bank(source_base);
-                            self.program.push(AsmLine::Instr(AsmInstr::Btfss {
-                                f: low7(source_base),
-                                b: 7,
-                            }));
-                            self.branch_to_label(&positive);
-                            self.store_const_value(dst_base + 1, Type::new(ScalarType::U8), 0xFF);
-                            self.branch_to_label(&end);
-                            self.program.push(AsmLine::Label(positive));
-                            self.clear_addr(dst_base + 1);
-                            self.program.push(AsmLine::Label(end));
-                        }
-                    }
+                self.load_operand_byte_to_w(function_symbol, src, Type::new(ScalarType::U8), 0);
+                self.store_w_to_addr(dst_base);
+                if dst_ty.byte_width() == 2 {
+                    self.store_w_to_addr(self.layout.helpers.scratch0);
+                    let positive = self.unique_label("sext_pos");
+                    let end = self.unique_label("sext_end");
+                    self.select_bank(self.layout.helpers.scratch0);
+                    self.program.push(AsmLine::Instr(AsmInstr::Btfss {
+                        f: low7(self.layout.helpers.scratch0),
+                        b: 7,
+                    }));
+                    self.branch_to_label(&positive);
+                    self.store_const_value(dst_base + 1, Type::new(ScalarType::U8), 0xFF);
+                    self.branch_to_label(&end);
+                    self.program.push(AsmLine::Label(positive));
+                    self.clear_addr(dst_base + 1);
+                    self.program.push(AsmLine::Label(end));
                 }
             }
         }
@@ -1096,6 +1149,25 @@ impl<'a> CodegenContext<'a> {
         self.copy_operand_to_slot(function_symbol, src, ty, base);
     }
 
+    /// Copies an operand into one symbol storage location, absolute or frame-relative.
+    fn copy_operand_to_symbol(
+        &mut self,
+        function_symbol: SymbolId,
+        src: Operand,
+        ty: Type,
+        symbol: SymbolId,
+    ) {
+        match self.symbol_storage(symbol) {
+            SymbolStorage::Absolute(base) => self.copy_operand_to_slot(function_symbol, src, ty, base),
+            SymbolStorage::Frame(offset) => {
+                for byte in 0..ty.byte_width() {
+                    self.load_operand_byte_to_w(function_symbol, src, ty, byte);
+                    self.store_w_to_frame_byte(function_symbol, offset + byte as u16);
+                }
+            }
+        }
+    }
+
     /// Copies an operand into any RAM slot, respecting 8-bit or 16-bit width.
     fn copy_operand_to_slot(&mut self, function_symbol: SymbolId, src: Operand, ty: Type, dst_base: u16) {
         for byte in 0..ty.byte_width() {
@@ -1104,38 +1176,148 @@ impl<'a> CodegenContext<'a> {
         }
     }
 
-    /// Copies an operand into one ABI register pair used for call arguments.
-    fn copy_operand_to_register_pair(
+    /// Materializes the address of one symbol into a temp slot.
+    fn emit_address_of_symbol(
         &mut self,
-        function_symbol: SymbolId,
-        src: Operand,
-        ty: Type,
-        dst: RegisterPair,
+        symbol: SymbolId,
+        dst_ty: Type,
+        dst_base: u16,
     ) {
-        self.load_operand_byte_to_w(function_symbol, src, ty, 0);
-        self.store_w_to_addr(dst.lo);
-        if ty.byte_width() == 2 {
-            self.load_operand_byte_to_w(function_symbol, src, ty, 1);
-            self.store_w_to_addr(dst.hi);
-        } else {
-            self.clear_addr(dst.hi);
+        match self.symbol_storage(symbol) {
+            SymbolStorage::Absolute(base) => self.store_const_value(dst_base, dst_ty, i64::from(base)),
+            SymbolStorage::Frame(offset) => {
+                self.copy_pair_with_signed_offset(
+                    self.layout.helpers.frame_ptr,
+                    RegisterPair {
+                        lo: dst_base,
+                        hi: dst_base + 1,
+                    },
+                    offset,
+                );
+            }
         }
     }
 
-    /// Copies bytes from an ABI register pair into a symbol or local slot.
-    fn copy_register_pair_to_slot(&mut self, src: RegisterPair, dst_base: u16, ty: Type) {
+    /// Emits one function prologue that establishes the Phase 4 software frame pointer.
+    fn emit_prologue(&mut self, function_symbol: SymbolId) {
+        let arg_bytes = self.frame_layout(function_symbol).arg_bytes;
+        let frame_bytes = self.frame_layout(function_symbol).frame_bytes;
+        self.load_addr_to_w(self.layout.helpers.frame_ptr.lo);
+        self.store_w_to_addr(self.layout.helpers.scratch0);
+        self.load_addr_to_w(self.layout.helpers.frame_ptr.hi);
+        self.store_w_to_addr(self.layout.helpers.scratch1);
+        self.copy_pair_with_signed_offset(
+            self.layout.helpers.stack_ptr,
+            self.layout.helpers.frame_ptr,
+            negate_u16(arg_bytes),
+        );
+        self.load_addr_to_w(self.layout.helpers.scratch0);
+        self.push_w();
+        self.load_addr_to_w(self.layout.helpers.scratch1);
+        self.push_w();
+        let local_bytes = frame_bytes - 2;
+        if local_bytes != 0 {
+            self.add_immediate_to_pair(self.layout.helpers.stack_ptr, local_bytes);
+        }
+    }
+
+    /// Emits one function epilogue that restores the caller frame and stack pointer.
+    fn emit_epilogue(&mut self, function_symbol: SymbolId) {
+        let saved_fp_offset = self.frame_layout(function_symbol).saved_fp_offset;
+        let arg_bytes = self.frame_layout(function_symbol).arg_bytes;
+        self.load_frame_byte_to_w(function_symbol, saved_fp_offset);
+        self.store_w_to_addr(self.layout.helpers.scratch0);
+        self.load_frame_byte_to_w(function_symbol, saved_fp_offset + 1);
+        self.store_w_to_addr(self.layout.helpers.scratch1);
+        self.load_addr_to_w(self.layout.helpers.scratch0);
+        self.store_w_to_addr(self.layout.helpers.frame_ptr.lo);
+        self.load_addr_to_w(self.layout.helpers.scratch1);
+        self.store_w_to_addr(self.layout.helpers.frame_ptr.hi);
+        self.copy_pair_with_signed_offset(
+            self.layout.helpers.frame_ptr,
+            self.layout.helpers.stack_ptr,
+            arg_bytes,
+        );
+    }
+
+    /// Pushes one 8-bit or 16-bit operand onto the upward-growing software stack.
+    fn push_operand(&mut self, function_symbol: SymbolId, operand: Operand, ty: Type) {
+        for byte in 0..ty.byte_width() {
+            self.load_operand_byte_to_w(function_symbol, operand, ty, byte);
+            self.push_w();
+        }
+    }
+
+    /// Pushes the current `W` byte to the stack top and advances `SP`.
+    fn push_w(&mut self) {
+        self.store_w_to_addr(self.layout.helpers.scratch0);
+        self.prepare_pointer_from_pair(self.layout.helpers.stack_ptr, 0);
+        self.load_addr_to_w(self.layout.helpers.scratch0);
+        self.store_w_to_indirect();
+        self.add_immediate_to_pair(self.layout.helpers.stack_ptr, 1);
+    }
+
+    /// Copies one 16-bit helper pair into another while applying a signed constant offset.
+    fn copy_pair_with_signed_offset(
+        &mut self,
+        src: RegisterPair,
+        dst: RegisterPair,
+        delta: u16,
+    ) {
+        let delta_ty = Type::new(ScalarType::U16);
         self.load_addr_to_w(src.lo);
-        self.store_w_to_addr(dst_base);
-        if ty.byte_width() == 2 {
-            self.load_addr_to_w(src.hi);
-            self.store_w_to_addr(dst_base + 1);
+        self.program.push(AsmLine::Instr(AsmInstr::Addlw(low_byte(i64::from(delta), delta_ty))));
+        self.store_w_to_addr(dst.lo);
+        self.load_addr_to_w(src.hi);
+        self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+            f: low7(STATUS_ADDR),
+            b: STATUS_C_BIT,
+        }));
+        self.program.push(AsmLine::Instr(AsmInstr::Addlw(1)));
+        let high = high_byte(i64::from(delta), delta_ty);
+        if high != 0 {
+            self.program.push(AsmLine::Instr(AsmInstr::Addlw(high)));
         }
+        self.store_w_to_addr(dst.hi);
     }
 
-    /// Copies one byte from one RAM address to another through `W`.
-    fn copy_addr_to_addr(&mut self, src: u16, dst: u16) {
-        self.load_addr_to_w(src);
-        self.store_w_to_addr(dst);
+    /// Adds a small constant delta to one 16-bit helper pair in place.
+    fn add_immediate_to_pair(&mut self, pair: RegisterPair, delta: u16) {
+        self.copy_pair_with_signed_offset(pair, pair, delta);
+    }
+
+    /// Loads a stack-frame byte addressed by `FP + offset` into `W`.
+    fn load_frame_byte_to_w(&mut self, _function_symbol: SymbolId, offset: u16) {
+        self.prepare_pointer_from_pair(self.layout.helpers.frame_ptr, offset);
+        self.load_indirect_to_w();
+    }
+
+    /// Stores `W` into a stack-frame byte addressed by `FP + offset`.
+    fn store_w_to_frame_byte(&mut self, _function_symbol: SymbolId, offset: u16) {
+        self.prepare_pointer_from_pair(self.layout.helpers.frame_ptr, offset);
+        self.store_w_to_indirect();
+    }
+
+    /// Programs `FSR/IRP` from one helper pair plus a constant byte offset.
+    fn prepare_pointer_from_pair(&mut self, pair: RegisterPair, byte_offset: u16) {
+        let offset_ty = Type::new(ScalarType::U16);
+        self.load_addr_to_w(pair.lo);
+        let low = low_byte(i64::from(byte_offset), offset_ty);
+        self.program.push(AsmLine::Instr(AsmInstr::Addlw(low)));
+        self.store_w_to_addr(FSR_ADDR);
+
+        self.load_addr_to_w(pair.hi);
+        self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+            f: low7(STATUS_ADDR),
+            b: STATUS_C_BIT,
+        }));
+        self.program.push(AsmLine::Instr(AsmInstr::Addlw(1)));
+        let high = high_byte(i64::from(byte_offset), offset_ty);
+        if high != 0 {
+            self.program.push(AsmLine::Instr(AsmInstr::Addlw(high)));
+        }
+        self.store_w_to_addr(self.layout.helpers.scratch1);
+        self.set_irp_from_addr(self.layout.helpers.scratch1);
     }
 
     /// Loads one indirectly addressed scalar object through `FSR/INDF` into a temp slot.
@@ -1246,7 +1428,12 @@ impl<'a> CodegenContext<'a> {
                 };
                 self.emit_const_to_w(byte);
             }
-            Operand::Symbol(symbol) => self.load_addr_to_w(self.symbol_base(symbol) + byte_index as u16),
+            Operand::Symbol(symbol) => match self.symbol_storage(symbol) {
+                SymbolStorage::Absolute(base) => self.load_addr_to_w(base + byte_index as u16),
+                SymbolStorage::Frame(offset) => {
+                    self.load_frame_byte_to_w(function_symbol, offset + byte_index as u16)
+                }
+            },
             Operand::Temp(temp) => self.load_addr_to_w(self.temp_base(function_symbol, temp) + byte_index as u16),
         }
     }
@@ -1342,9 +1529,19 @@ impl<'a> CodegenContext<'a> {
         self.current_bank = bank;
     }
 
-    /// Returns the RAM base address assigned to a symbol.
-    fn symbol_base(&self, symbol: SymbolId) -> u16 {
-        self.layout.symbol_bases[&symbol]
+    /// Returns the storage classification assigned to one source-level symbol.
+    fn symbol_storage(&self, symbol: SymbolId) -> SymbolStorage {
+        self.layout.symbol_storage[&symbol]
+    }
+
+    /// Returns the frame layout metadata associated with one function symbol.
+    fn frame_layout(&self, function_symbol: SymbolId) -> &FrameLayout {
+        &self.layout.frames[&function_symbol]
+    }
+
+    /// Returns the total argument byte count for one callee signature.
+    fn function_arg_bytes(&self, function_symbol: SymbolId) -> u16 {
+        self.frame_layout(function_symbol).arg_bytes
     }
 
     /// Returns the RAM base address assigned to a function-local temp.
@@ -1380,6 +1577,56 @@ fn block_label(function_name: &str, block: usize) -> String {
     format!("fn_{function_name}_b{block}")
 }
 
+/// Computes the worst-case software-stack depth over the non-recursive call graph.
+fn compute_max_stack_depth(ir_program: &IrProgram, frames: &BTreeMap<SymbolId, FrameLayout>) -> u16 {
+    let mut calls = BTreeMap::<SymbolId, Vec<SymbolId>>::new();
+    for function in &ir_program.functions {
+        let mut callees = Vec::new();
+        for block in &function.blocks {
+            for instr in &block.instructions {
+                if let IrInstr::Call { function: callee, .. } = instr {
+                    callees.push(*callee);
+                }
+            }
+        }
+        calls.insert(function.symbol, callees);
+    }
+
+    let mut memo = BTreeMap::new();
+    calls.keys()
+        .copied()
+        .map(|symbol| compute_function_stack_depth(symbol, &calls, frames, &mut memo))
+        .max()
+        .unwrap_or(0)
+}
+
+/// Computes the worst-case stack usage while one function is active.
+fn compute_function_stack_depth(
+    symbol: SymbolId,
+    calls: &BTreeMap<SymbolId, Vec<SymbolId>>,
+    frames: &BTreeMap<SymbolId, FrameLayout>,
+    memo: &mut BTreeMap<SymbolId, u16>,
+) -> u16 {
+    if let Some(depth) = memo.get(&symbol).copied() {
+        return depth;
+    }
+
+    let own = frames.get(&symbol).map_or(0, |frame| frame.frame_bytes);
+    let nested = calls
+        .get(&symbol)
+        .into_iter()
+        .flatten()
+        .map(|callee| {
+            let arg_bytes = frames.get(callee).map_or(0, |frame| frame.arg_bytes);
+            arg_bytes + compute_function_stack_depth(*callee, calls, frames, memo)
+        })
+        .max()
+        .unwrap_or(0);
+    let depth = own + nested;
+    memo.insert(symbol, depth);
+    depth
+}
+
 /// Builds the final map file from encoded labels and allocated data symbols.
 fn build_map(
     typed_program: &TypedProgram,
@@ -1397,11 +1644,10 @@ fn build_map(
         .iter()
         .filter(|symbol| symbol.kind != SymbolKind::Function)
         .filter_map(|symbol| {
-            layout
-                .symbol_bases
-                .get(&symbol.id)
-                .copied()
-                .map(|addr| (symbol.name.clone(), addr))
+            match layout.symbol_storage.get(&symbol.id).copied() {
+                Some(SymbolStorage::Absolute(addr)) => Some((symbol.name.clone(), addr)),
+                Some(SymbolStorage::Frame(_)) | None => None,
+            }
         })
         .collect::<Vec<_>>();
     data_symbols.sort_by_key(|(_, addr)| *addr);
@@ -1447,15 +1693,21 @@ const fn low7(addr: u16) -> u8 {
     (addr & 0x7F) as u8
 }
 
+/// Returns the two's-complement negation of a 16-bit byte count.
+const fn negate_u16(value: u16) -> u16 {
+    value.wrapping_neg()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::compile_program;
+    use super::{compile_program, compute_max_stack_depth, FrameLayout};
     use crate::backend::pic16::devices::DeviceRegistry;
     use crate::diagnostics::{DiagnosticBag, WarningProfile};
     use crate::frontend::semantic::{Symbol, SymbolKind, TypedFunction, TypedGlobal, TypedProgram};
     use crate::frontend::types::{ScalarType, StorageClass, Type};
     use crate::ir::model::{IrBlock, IrFunction, IrInstr, IrProgram, IrTerminator, Operand};
     use crate::common::source::Span;
+    use std::collections::BTreeMap;
 
     #[test]
     /// Verifies indirect loads and stores emit the expected `FSR/INDF` assembly pattern.
@@ -1518,6 +1770,150 @@ mod tests {
         assert!(asm.contains("movwf 0x04"));
         assert!(asm.contains("movwf 0x00"));
         assert!(asm.contains("movf 0x00,w"));
+    }
+
+    #[test]
+    /// Verifies stack-depth analysis includes both frame bytes and caller-pushed argument bytes.
+    fn phase_four_stack_depth_accounts_for_frames_and_args() {
+        let program = IrProgram {
+            globals: Vec::new(),
+            functions: vec![
+                IrFunction {
+                    symbol: 1,
+                    params: Vec::new(),
+                    locals: Vec::new(),
+                    entry: 0,
+                    temp_types: Vec::new(),
+                    return_type: Type::new(ScalarType::Void),
+                    blocks: vec![IrBlock {
+                        id: 0,
+                        name: "entry".to_string(),
+                        instructions: vec![IrInstr::Call {
+                            dst: None,
+                            function: 2,
+                            args: vec![Operand::Constant(1), Operand::Constant(2), Operand::Constant(3)],
+                        }],
+                        terminator: IrTerminator::Return(None),
+                    }],
+                },
+                IrFunction {
+                    symbol: 2,
+                    params: Vec::new(),
+                    locals: Vec::new(),
+                    entry: 0,
+                    temp_types: Vec::new(),
+                    return_type: Type::new(ScalarType::Void),
+                    blocks: vec![IrBlock {
+                        id: 0,
+                        name: "entry".to_string(),
+                        instructions: Vec::new(),
+                        terminator: IrTerminator::Return(None),
+                    }],
+                },
+            ],
+        };
+        let frames = BTreeMap::from([
+            (
+                1,
+                FrameLayout {
+                    arg_bytes: 0,
+                    saved_fp_offset: 0,
+                    frame_bytes: 6,
+                },
+            ),
+            (
+                2,
+                FrameLayout {
+                    arg_bytes: 6,
+                    saved_fp_offset: 6,
+                    frame_bytes: 4,
+                },
+            ),
+        ]);
+
+        assert_eq!(compute_max_stack_depth(&program, &frames), 16);
+    }
+
+    #[test]
+    /// Verifies Phase 4 function prologues emit software-stack setup comments and calls survive.
+    fn phase_four_stack_abi_emits_stack_metadata() {
+        let registry = DeviceRegistry::new();
+        let target = registry.device("pic16f628a").expect("device");
+        let u16_ty = Type::new(ScalarType::U16);
+        let mut sum3_symbol = symbol(1, "sum3", u16_ty, SymbolKind::Function);
+        sum3_symbol.parameter_types = vec![u16_ty, u16_ty, u16_ty];
+        let program = TypedProgram {
+            symbols: vec![
+                symbol(0, "main", Type::new(ScalarType::Void), SymbolKind::Function),
+                sum3_symbol,
+                symbol(2, "a", u16_ty, SymbolKind::Param),
+                symbol(3, "b", u16_ty, SymbolKind::Param),
+                symbol(4, "c", u16_ty, SymbolKind::Param),
+            ],
+            globals: Vec::new(),
+            functions: vec![
+                TypedFunction {
+                    symbol: 0,
+                    params: Vec::new(),
+                    locals: Vec::new(),
+                    body: None,
+                    return_type: Type::new(ScalarType::Void),
+                    span: Span::new(0, 0),
+                },
+                TypedFunction {
+                    symbol: 1,
+                    params: vec![2, 3, 4],
+                    locals: Vec::new(),
+                    body: None,
+                    return_type: u16_ty,
+                    span: Span::new(0, 0),
+                },
+            ],
+        };
+        let ir = IrProgram {
+            globals: Vec::new(),
+            functions: vec![
+                IrFunction {
+                    symbol: 0,
+                    params: Vec::new(),
+                    locals: Vec::new(),
+                    entry: 0,
+                    temp_types: vec![u16_ty],
+                    return_type: Type::new(ScalarType::Void),
+                    blocks: vec![IrBlock {
+                        id: 0,
+                        name: "entry".to_string(),
+                        instructions: vec![IrInstr::Call {
+                            dst: Some(0),
+                            function: 1,
+                            args: vec![Operand::Constant(1), Operand::Constant(2), Operand::Constant(3)],
+                        }],
+                        terminator: IrTerminator::Return(None),
+                    }],
+                },
+                IrFunction {
+                    symbol: 1,
+                    params: vec![2, 3, 4],
+                    locals: Vec::new(),
+                    entry: 0,
+                    temp_types: Vec::new(),
+                    return_type: u16_ty,
+                    blocks: vec![IrBlock {
+                        id: 0,
+                        name: "entry".to_string(),
+                        instructions: Vec::new(),
+                        terminator: IrTerminator::Return(Some(Operand::Constant(0))),
+                    }],
+                },
+            ],
+        };
+        let mut diagnostics = DiagnosticBag::new(WarningProfile::default());
+        let output = compile_program(target, &program, &ir, &mut diagnostics).expect("backend");
+
+        assert!(!diagnostics.has_errors());
+        let asm = output.program.render();
+        assert!(asm.contains("stack base="));
+        assert!(asm.contains("call fn_sum3"));
     }
 
     /// Builds one typed symbol used by the backend unit test fixture.

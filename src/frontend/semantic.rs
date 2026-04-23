@@ -147,6 +147,12 @@ pub struct SemanticAnalyzer<'a> {
     loop_depth: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum VisitState {
+    Active,
+    Done,
+}
+
 impl<'a> SemanticAnalyzer<'a> {
     /// Creates a semantic analyzer primed with target-specific device registers.
     pub fn new(target: &'a TargetDevice) -> Self {
@@ -183,6 +189,8 @@ impl<'a> SemanticAnalyzer<'a> {
                 Item::Global(global) => self.define_global(global, diagnostics),
             }
         }
+
+        self.reject_recursive_calls(diagnostics);
 
         self.emit_warnings(diagnostics);
         if diagnostics.has_errors() {
@@ -289,14 +297,6 @@ impl<'a> SemanticAnalyzer<'a> {
         }
 
         self.validate_return_type(function.return_type, function.span, &function.name, diagnostics);
-        if function.params.len() > 2 {
-            diagnostics.error(
-                "semantic",
-                Some(function.span),
-                "phase 3 ABI supports at most two parameters",
-                None,
-            );
-        }
 
         let parameter_types = function
             .params
@@ -381,6 +381,7 @@ impl<'a> SemanticAnalyzer<'a> {
 
         self.current_function = Some(symbol);
         self.push_scope();
+        let function_symbol_start = self.symbols.len();
 
         let mut params = Vec::new();
         for param in function.params {
@@ -409,7 +410,7 @@ impl<'a> SemanticAnalyzer<'a> {
             .as_ref()
             .map(|stmt| self.analyze_stmt(stmt, diagnostics));
 
-        let locals = self.current_scope_symbols();
+        let locals = self.function_symbols_since(function_symbol_start);
         self.pop_scope();
         self.current_function = None;
         self.symbols[symbol].is_defined = function.body.is_some();
@@ -561,7 +562,20 @@ impl<'a> SemanticAnalyzer<'a> {
                         None
                     } else {
                         typed.map(|expr| {
-                            self.coerce_expr(expr, return_type, diagnostics, "return value", true)
+                            let expr =
+                                self.coerce_expr(expr, return_type, diagnostics, "return value", true);
+                            if self.returns_stack_local_address(&expr) {
+                                diagnostics.error(
+                                    "semantic",
+                                    Some(expr.span),
+                                    "returning the address of a stack local is not supported",
+                                    Some(
+                                        "return a global/static object address or write through an output parameter"
+                                            .to_string(),
+                                    ),
+                                );
+                            }
+                            expr
                         })
                     }
                 } else {
@@ -1069,7 +1083,7 @@ impl<'a> SemanticAnalyzer<'a> {
         })
     }
 
-    /// Analyzes one direct function call within the current fixed-argument ABI.
+    /// Analyzes one direct function call within the Phase 4 call ABI.
     fn analyze_call_expr(
         &mut self,
         callee: &str,
@@ -1525,6 +1539,96 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
+    /// Rejects direct or mutual recursion because Phase 4 still uses non-reentrant temp storage.
+    fn reject_recursive_calls(&self, diagnostics: &mut DiagnosticBag) {
+        let mut state = BTreeMap::<SymbolId, VisitState>::new();
+        for function in &self.functions {
+            self.visit_call_graph(function.symbol, &mut state, &mut Vec::new(), diagnostics);
+        }
+    }
+
+    /// Walks one function in DFS order and emits a diagnostic when a call cycle is found.
+    fn visit_call_graph(
+        &self,
+        symbol: SymbolId,
+        state: &mut BTreeMap<SymbolId, VisitState>,
+        stack: &mut Vec<SymbolId>,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        match state.get(&symbol).copied() {
+            Some(VisitState::Done) => return,
+            Some(VisitState::Active) => {
+                let name = self.symbols[symbol].name.clone();
+                diagnostics.error(
+                    "semantic",
+                    Some(self.symbols[symbol].span),
+                    format!("recursive call cycle involving `{name}` is not supported in phase 4"),
+                    Some("rewrite the call graph to be acyclic for now".to_string()),
+                );
+                return;
+            }
+            None => {}
+        }
+
+        state.insert(symbol, VisitState::Active);
+        stack.push(symbol);
+        if let Some(function) = self.functions.iter().find(|function| function.symbol == symbol)
+            && let Some(body) = &function.body
+        {
+            let mut callees = BTreeSet::new();
+            collect_stmt_calls(body, &mut callees);
+            for callee in callees {
+                if matches!(state.get(&callee).copied(), Some(VisitState::Active)) {
+                    let cycle = stack
+                        .iter()
+                        .map(|id| self.symbols[*id].name.as_str())
+                        .chain(std::iter::once(self.symbols[callee].name.as_str()))
+                        .collect::<Vec<_>>()
+                        .join(" -> ");
+                    diagnostics.error(
+                        "semantic",
+                        Some(self.symbols[callee].span),
+                        format!("recursive call cycle `{cycle}` is not supported in phase 4"),
+                        Some("rewrite the call graph to be acyclic for now".to_string()),
+                    );
+                    continue;
+                }
+                self.visit_call_graph(callee, state, stack, diagnostics);
+            }
+        }
+        stack.pop();
+        state.insert(symbol, VisitState::Done);
+    }
+
+    /// Returns true when the expression directly produces a pointer into a non-static local object.
+    fn returns_stack_local_address(&self, expr: &TypedExpr) -> bool {
+        if !expr.ty.is_pointer() {
+            return false;
+        }
+        match &expr.kind {
+            TypedExprKind::ArrayDecay(value) | TypedExprKind::AddressOf(value) => {
+                self.is_stack_lvalue(value)
+            }
+            TypedExprKind::Binary { lhs, rhs, .. } => {
+                self.returns_stack_local_address(lhs) || self.returns_stack_local_address(rhs)
+            }
+            TypedExprKind::Cast { expr, .. } => self.returns_stack_local_address(expr),
+            _ => false,
+        }
+    }
+
+    /// Returns true when the lvalue names a non-static local object allocated in the call frame.
+    fn is_stack_lvalue(&self, expr: &TypedExpr) -> bool {
+        match &expr.kind {
+            TypedExprKind::Symbol(symbol) => {
+                let symbol = &self.symbols[*symbol];
+                symbol.kind == SymbolKind::Local && symbol.storage_class != StorageClass::Static
+            }
+            TypedExprKind::Deref(_) => false,
+            _ => false,
+        }
+    }
+
     /// Assigns a stable symbol id and stores a symbol in the global table.
     fn insert_symbol(&mut self, mut symbol: Symbol) -> SymbolId {
         let id = self.symbols.len();
@@ -1596,13 +1700,13 @@ impl<'a> SemanticAnalyzer<'a> {
         self.scopes.pop();
     }
 
-    /// Collects the symbol ids currently visible across all active lexical scopes.
-    fn current_scope_symbols(&self) -> Vec<SymbolId> {
-        let mut locals = BTreeSet::new();
-        for scope in &self.scopes {
-            locals.extend(scope.values().copied());
-        }
-        locals.into_iter().collect()
+    /// Collects all symbols created while analyzing the current function body.
+    fn function_symbols_since(&self, start: usize) -> Vec<SymbolId> {
+        self.symbols[start..]
+            .iter()
+            .filter(|symbol| matches!(symbol.kind, SymbolKind::Local | SymbolKind::Param))
+            .map(|symbol| symbol.id)
+            .collect()
     }
 
     /// Returns true when the named function already has an analyzed body.
@@ -1658,6 +1762,97 @@ fn is_constant_expression(expr: &TypedExpr) -> bool {
         | TypedExprKind::AddressOf(_)
         | TypedExprKind::Deref(_)
         | TypedExprKind::Symbol(_) => false,
+    }
+}
+
+/// Collects direct function-call targets that appear anywhere inside one typed statement tree.
+fn collect_stmt_calls(stmt: &TypedStmt, callees: &mut BTreeSet<SymbolId>) {
+    match stmt {
+        TypedStmt::Block(statements, _) => {
+            for statement in statements {
+                collect_stmt_calls(statement, callees);
+            }
+        }
+        TypedStmt::VarDecl(_, initializer, _) => {
+            if let Some(initializer) = initializer {
+                collect_expr_calls(initializer, callees);
+            }
+        }
+        TypedStmt::Expr(expr, _) => collect_expr_calls(expr, callees),
+        TypedStmt::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_expr_calls(condition, callees);
+            collect_stmt_calls(then_branch, callees);
+            if let Some(else_branch) = else_branch {
+                collect_stmt_calls(else_branch, callees);
+            }
+        }
+        TypedStmt::While {
+            condition, body, ..
+        } => {
+            collect_expr_calls(condition, callees);
+            collect_stmt_calls(body, callees);
+        }
+        TypedStmt::DoWhile {
+            body, condition, ..
+        } => {
+            collect_stmt_calls(body, callees);
+            collect_expr_calls(condition, callees);
+        }
+        TypedStmt::For {
+            init,
+            condition,
+            step,
+            body,
+            ..
+        } => {
+            if let Some(init) = init {
+                collect_stmt_calls(init, callees);
+            }
+            if let Some(condition) = condition {
+                collect_expr_calls(condition, callees);
+            }
+            if let Some(step) = step {
+                collect_expr_calls(step, callees);
+            }
+            collect_stmt_calls(body, callees);
+        }
+        TypedStmt::Return(expr, _) => {
+            if let Some(expr) = expr {
+                collect_expr_calls(expr, callees);
+            }
+        }
+        TypedStmt::Break(_) | TypedStmt::Continue(_) | TypedStmt::Empty(_) => {}
+    }
+}
+
+/// Collects direct function-call targets that appear anywhere inside one typed expression tree.
+fn collect_expr_calls(expr: &TypedExpr, callees: &mut BTreeSet<SymbolId>) {
+    match &expr.kind {
+        TypedExprKind::Unary { expr, .. }
+        | TypedExprKind::ArrayDecay(expr)
+        | TypedExprKind::AddressOf(expr)
+        | TypedExprKind::Deref(expr)
+        | TypedExprKind::Cast { expr, .. } => collect_expr_calls(expr, callees),
+        TypedExprKind::Binary { lhs, rhs, .. } => {
+            collect_expr_calls(lhs, callees);
+            collect_expr_calls(rhs, callees);
+        }
+        TypedExprKind::Assign { target, value } => {
+            collect_expr_calls(target, callees);
+            collect_expr_calls(value, callees);
+        }
+        TypedExprKind::Call { function, args } => {
+            callees.insert(*function);
+            for arg in args {
+                collect_expr_calls(arg, callees);
+            }
+        }
+        TypedExprKind::IntLiteral(_) | TypedExprKind::Symbol(_) => {}
     }
 }
 

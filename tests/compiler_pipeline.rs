@@ -169,6 +169,36 @@ fn compiles_phase3_word_pointer_example() {
 }
 
 #[test]
+/// Verifies the Phase 4 stack ABI handles 3+ arguments and nested calls on PIC16F628A.
+fn compiles_phase4_stack_abi_example() {
+    let output = compile_example("pic16f628a", "examples/pic16f628a/stack_abi.c");
+    let asm = read_artifact(&output, "asm");
+    let map = read_artifact(&output, "map");
+
+    assert_hex_is_programmable(&output);
+    assert!(asm.contains("stack base="));
+    assert!(asm.contains("call fn_sum4"));
+    assert!(asm.contains("call fn_build_local"));
+    assert!(asm.contains("call fn_sum_bytes"));
+    assert!(map.contains("final_value"));
+}
+
+#[test]
+/// Verifies the Phase 4 frame model handles deeper non-recursive call chains on PIC16F877A.
+fn compiles_phase4_call_chain_example() {
+    let output = compile_example("pic16f877a", "examples/pic16f877a/call_chain.c");
+    let asm = read_artifact(&output, "asm");
+    let map = read_artifact(&output, "map");
+
+    assert_hex_is_programmable(&output);
+    assert!(asm.contains("stack base="));
+    assert!(asm.contains("call fn_top_sum"));
+    assert!(asm.contains("call fn_middle_sum"));
+    assert!(asm.contains("call fn_leaf_sum"));
+    assert!(map.contains("latest"));
+}
+
+#[test]
 /// Verifies pointer arguments, pointer returns, and local array decay through a fixture.
 fn compiles_phase3_pointer_return_fixture() {
     let output = compile_source(
@@ -202,6 +232,35 @@ void main(void) {
     assert!(ir.contains("Equal"));
     assert!(asm.contains("call fn_pick"));
     assert!(asm.contains("movwf 0x04"));
+}
+
+#[test]
+/// Verifies a five-argument call compiles through the Phase 4 caller-pushed stack ABI.
+fn compiles_phase4_five_argument_fixture() {
+    let output = compile_source(
+        "pic16f628a",
+        "sum5.c",
+        "\
+#include <pic16/pic16f628a.h>
+/** Returns the sum of five arguments through the Phase 4 ABI. */
+unsigned int sum5(unsigned int a, unsigned int b, unsigned int c, unsigned int d, unsigned int e) {
+    return a + b + c + d + e;
+}
+/** Exercises a five-argument call and 16-bit return handling. */
+void main(void) {
+    unsigned int value = sum5(1, 2, 3, 4, 5);
+    TRISB = 0x00;
+    if (value >= 15) {
+        PORTB = 0x77;
+    }
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    assert_hex_is_programmable(&output);
+    assert!(asm.contains("call fn_sum5"));
+    assert!(asm.contains("stack base="));
 }
 
 #[test]
@@ -285,6 +344,37 @@ void main(void) {
 }
 
 #[test]
+/// Verifies taking the address of a stack local and passing it across a call compiles.
+fn compiles_phase4_address_of_local_fixture() {
+    let output = compile_source(
+        "pic16f877a",
+        "addr-local.c",
+        "\
+#include <pic16/pic16f877a.h>
+/** Loads one byte through a caller-provided pointer. */
+unsigned char load_byte(unsigned char *ptr, unsigned int index, unsigned char fallback) {
+    if (index != 0) {
+        return ptr[index];
+    }
+    return fallback;
+}
+/** Exercises `&local`, pointer arguments, and stack-backed local scalars. */
+void main(void) {
+    unsigned char local = 0x21;
+    unsigned char *ptr = &local;
+    TRISB = 0x00;
+    ADCON1 = 0x06;
+    PORTB = load_byte(ptr, 0, local);
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    assert_hex_is_programmable(&output);
+    assert!(asm.contains("call fn_load_byte"));
+}
+
+#[test]
 /// Verifies unsupported multiply operations fail with a clear Phase 2 diagnostic.
 fn reports_unsupported_multiply() {
     let source = temp_file("unsupported.c");
@@ -357,6 +447,120 @@ void main(void) {
     .expect_err("must fail");
 
     assert!(format!("{error}").contains("mixed signedness"));
+}
+
+#[test]
+/// Verifies direct recursion is rejected under the current non-reentrant Phase 4 model.
+fn reports_unsupported_recursion() {
+    let error = execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: "pic16f628a".to_string(),
+            input: {
+                let input = temp_file("recursion.c");
+                fs::write(
+                    &input,
+                    "\
+#include <pic16/pic16f628a.h>
+int loop_forever(int value) {
+    return loop_forever(value);
+}
+void main(void) {
+    TRISB = 0x00;
+    PORTB = loop_forever(1);
+}
+",
+                )
+                .expect("fixture");
+                input
+            },
+            output: temp_file("recursion.hex"),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O0,
+            artifacts: OutputArtifacts::default(),
+            verbose: false,
+            warning_profile: WarningProfile::default(),
+        }),
+    })
+    .expect_err("must fail");
+
+    assert!(format!("{error}").contains("recursive call cycle"));
+}
+
+#[test]
+/// Verifies returning the address of a stack local is rejected clearly.
+fn reports_returning_stack_local_address() {
+    let error = execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: "pic16f628a".to_string(),
+            input: {
+                let input = temp_file("return-local.c");
+                fs::write(
+                    &input,
+                    "\
+#include <pic16/pic16f628a.h>
+unsigned char *bad_ptr(void) {
+    unsigned char local[2];
+    return local;
+}
+void main(void) {
+    unsigned char *ptr = bad_ptr();
+    TRISB = 0x00;
+    PORTB = ptr[0];
+}
+",
+                )
+                .expect("fixture");
+                input
+            },
+            output: temp_file("return-local.hex"),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O0,
+            artifacts: OutputArtifacts::default(),
+            verbose: false,
+            warning_profile: WarningProfile::default(),
+        }),
+    })
+    .expect_err("must fail");
+
+    assert!(format!("{error}").contains("stack local"));
+}
+
+#[test]
+/// Verifies statically oversized local allocations fail with a stack-capacity diagnostic.
+fn reports_oversized_local_allocation() {
+    let error = execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: "pic16f628a".to_string(),
+            input: {
+                let input = temp_file("oversized-local.c");
+                fs::write(
+                    &input,
+                    "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    unsigned char local[80];
+    TRISB = 0x00;
+    PORTB = local[0];
+}
+",
+                )
+                .expect("fixture");
+                input
+            },
+            output: temp_file("oversized-local.hex"),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O0,
+            artifacts: OutputArtifacts::default(),
+            verbose: false,
+            warning_profile: WarningProfile::default(),
+        }),
+    })
+    .expect_err("must fail");
+
+    assert!(format!("{error}").contains("software stack"));
 }
 
 #[test]
