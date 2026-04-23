@@ -17,6 +17,9 @@ use super::encoder::encode_program;
 const STATUS_ADDR: u16 = 0x03;
 const STATUS_C_BIT: u8 = 0;
 const STATUS_Z_BIT: u8 = 2;
+const STATUS_IRP_BIT: u8 = 7;
+const INDF_ADDR: u16 = 0x00;
+const FSR_ADDR: u16 = 0x04;
 
 #[derive(Debug)]
 pub struct BackendOutput {
@@ -357,6 +360,11 @@ impl<'a> CodegenContext<'a> {
                 let ty = function.temp_types[*dst];
                 self.copy_operand_to_temp(function.symbol, *src, ty, *dst);
             }
+            IrInstr::AddrOf { dst, symbol } => {
+                let dst_ty = function.temp_types[*dst];
+                let dst_base = self.temp_base(function.symbol, *dst);
+                self.store_const_value(dst_base, dst_ty, i64::from(self.symbol_base(*symbol)));
+            }
             IrInstr::Cast { dst, kind, src } => {
                 let dst_ty = function.temp_types[*dst];
                 let dst_base = self.temp_base(function.symbol, *dst);
@@ -457,6 +465,14 @@ impl<'a> CodegenContext<'a> {
                 let target_ty = self.symbol_type(*target);
                 let base = self.symbol_base(*target);
                 self.copy_operand_to_slot(function.symbol, *value, target_ty, base);
+            }
+            IrInstr::LoadIndirect { dst, ptr } => {
+                let dst_ty = function.temp_types[*dst];
+                let dst_base = self.temp_base(function.symbol, *dst);
+                self.emit_indirect_load(function.symbol, *ptr, dst_ty, dst_base);
+            }
+            IrInstr::StoreIndirect { ptr, value, ty } => {
+                self.emit_indirect_store(function.symbol, *ptr, *value, *ty);
             }
             IrInstr::Call {
                 dst,
@@ -1122,6 +1138,97 @@ impl<'a> CodegenContext<'a> {
         self.store_w_to_addr(dst);
     }
 
+    /// Loads one indirectly addressed scalar object through `FSR/INDF` into a temp slot.
+    fn emit_indirect_load(
+        &mut self,
+        function_symbol: SymbolId,
+        ptr: Operand,
+        ty: Type,
+        dst_base: u16,
+    ) {
+        for byte in 0..ty.byte_width() {
+            self.prepare_indirect_pointer(function_symbol, ptr, byte as u8);
+            self.load_indirect_to_w();
+            self.store_w_to_addr(dst_base + byte as u16);
+        }
+    }
+
+    /// Stores one scalar value through an indirect pointer using `FSR/INDF`.
+    fn emit_indirect_store(
+        &mut self,
+        function_symbol: SymbolId,
+        ptr: Operand,
+        value: Operand,
+        ty: Type,
+    ) {
+        for byte in 0..ty.byte_width() {
+            self.load_operand_byte_to_w(function_symbol, value, ty, byte);
+            self.store_w_to_addr(self.layout.helpers.scratch0);
+            self.prepare_indirect_pointer(function_symbol, ptr, byte as u8);
+            self.load_addr_to_w(self.layout.helpers.scratch0);
+            self.store_w_to_indirect();
+        }
+    }
+
+    /// Programs `FSR` and `STATUS.IRP` for one pointer plus a small byte offset.
+    fn prepare_indirect_pointer(
+        &mut self,
+        function_symbol: SymbolId,
+        ptr: Operand,
+        byte_offset: u8,
+    ) {
+        let ptr_ty = Type::new(ScalarType::U16);
+        self.load_operand_byte_to_w(function_symbol, ptr, ptr_ty, 0);
+        if byte_offset != 0 {
+            self.program.push(AsmLine::Instr(AsmInstr::Addlw(byte_offset)));
+        }
+        self.store_w_to_addr(FSR_ADDR);
+
+        self.load_operand_byte_to_w(function_symbol, ptr, ptr_ty, 1);
+        if byte_offset != 0 {
+            self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+                f: low7(STATUS_ADDR),
+                b: STATUS_C_BIT,
+            }));
+            self.program.push(AsmLine::Instr(AsmInstr::Addlw(1)));
+        }
+        self.store_w_to_addr(self.layout.helpers.scratch1);
+        self.set_irp_from_addr(self.layout.helpers.scratch1);
+    }
+
+    /// Loads the byte addressed by the current `FSR/IRP` pair into `W`.
+    fn load_indirect_to_w(&mut self) {
+        self.select_bank(INDF_ADDR);
+        self.program.push(AsmLine::Instr(AsmInstr::Movf {
+            f: low7(INDF_ADDR),
+            d: Dest::W,
+        }));
+    }
+
+    /// Stores `W` into the byte addressed by the current `FSR/IRP` pair.
+    fn store_w_to_indirect(&mut self) {
+        self.select_bank(INDF_ADDR);
+        self.program.push(AsmLine::Instr(AsmInstr::Movwf(low7(INDF_ADDR))));
+    }
+
+    /// Updates the indirect-bank select bit from a scratch byte that holds the pointer high byte.
+    fn set_irp_from_addr(&mut self, addr: u16) {
+        let status = low7(STATUS_ADDR);
+        self.program.push(AsmLine::Instr(AsmInstr::Bcf {
+            f: status,
+            b: STATUS_IRP_BIT,
+        }));
+        self.select_bank(addr);
+        self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+            f: low7(addr),
+            b: 0,
+        }));
+        self.program.push(AsmLine::Instr(AsmInstr::Bsf {
+            f: status,
+            b: STATUS_IRP_BIT,
+        }));
+    }
+
     /// Loads one operand byte into `W`, handling constants, symbols, and temps.
     fn load_operand_byte_to_w(
         &mut self,
@@ -1186,9 +1293,8 @@ impl<'a> CodegenContext<'a> {
 
     /// Clears every byte that belongs to a value slot.
     fn clear_slot(&mut self, base: u16, ty: Type) {
-        self.clear_addr(base);
-        if ty.byte_width() == 2 {
-            self.clear_addr(base + 1);
+        for byte in 0..ty.byte_width() {
+            self.clear_addr(base + byte as u16);
         }
     }
 
@@ -1327,11 +1433,106 @@ fn eval_const_expr(expr: &TypedExpr) -> i64 {
                 CastKind::SignExtend => normalize_value(signed_value(value, value_expr.ty), target_ty),
             }
         }
-        TypedExprKind::Assign { .. } | TypedExprKind::Call { .. } | TypedExprKind::Symbol(_) => 0,
+        TypedExprKind::Assign { .. }
+        | TypedExprKind::Call { .. }
+        | TypedExprKind::ArrayDecay(_)
+        | TypedExprKind::AddressOf(_)
+        | TypedExprKind::Deref(_)
+        | TypedExprKind::Symbol(_) => 0,
     }
 }
 
 /// Returns the low seven address bits used by direct-register PIC16 instructions.
 const fn low7(addr: u16) -> u8 {
     (addr & 0x7F) as u8
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compile_program;
+    use crate::backend::pic16::devices::DeviceRegistry;
+    use crate::diagnostics::{DiagnosticBag, WarningProfile};
+    use crate::frontend::semantic::{Symbol, SymbolKind, TypedFunction, TypedGlobal, TypedProgram};
+    use crate::frontend::types::{ScalarType, StorageClass, Type};
+    use crate::ir::model::{IrBlock, IrFunction, IrInstr, IrProgram, IrTerminator, Operand};
+    use crate::common::source::Span;
+
+    #[test]
+    /// Verifies indirect loads and stores emit the expected `FSR/INDF` assembly pattern.
+    fn phase_three_indirect_memory_ops_use_fsr_and_indf() {
+        let registry = DeviceRegistry::new();
+        let target = registry.device("pic16f628a").expect("device");
+        let pointer_ty = Type::new(ScalarType::U8).pointer_to();
+        let byte_ty = Type::new(ScalarType::U8);
+        let program = TypedProgram {
+            symbols: vec![
+                symbol(0, "main", Type::new(ScalarType::Void), SymbolKind::Function),
+                symbol(1, "bytes", byte_ty.array_of(2), SymbolKind::Global),
+            ],
+            globals: vec![TypedGlobal {
+                symbol: 1,
+                initializer: None,
+            }],
+            functions: vec![TypedFunction {
+                symbol: 0,
+                params: Vec::new(),
+                locals: Vec::new(),
+                body: None,
+                return_type: Type::new(ScalarType::Void),
+                span: Span::new(0, 0),
+            }],
+        };
+        let ir = IrProgram {
+            globals: vec![1],
+            functions: vec![IrFunction {
+                symbol: 0,
+                params: Vec::new(),
+                locals: Vec::new(),
+                entry: 0,
+                temp_types: vec![pointer_ty, byte_ty],
+                return_type: Type::new(ScalarType::Void),
+                blocks: vec![IrBlock {
+                    id: 0,
+                    name: "entry".to_string(),
+                    instructions: vec![
+                        IrInstr::AddrOf { dst: 0, symbol: 1 },
+                        IrInstr::StoreIndirect {
+                            ptr: Operand::Temp(0),
+                            value: Operand::Constant(0x34),
+                            ty: byte_ty,
+                        },
+                        IrInstr::LoadIndirect {
+                            dst: 1,
+                            ptr: Operand::Temp(0),
+                        },
+                    ],
+                    terminator: IrTerminator::Return(None),
+                }],
+            }],
+        };
+        let mut diagnostics = DiagnosticBag::new(WarningProfile::default());
+        let output = compile_program(target, &program, &ir, &mut diagnostics).expect("backend");
+
+        assert!(!diagnostics.has_errors());
+        let asm = output.program.render();
+        assert!(asm.contains("movwf 0x04"));
+        assert!(asm.contains("movwf 0x00"));
+        assert!(asm.contains("movf 0x00,w"));
+    }
+
+    /// Builds one typed symbol used by the backend unit test fixture.
+    fn symbol(id: usize, name: &str, ty: Type, kind: SymbolKind) -> Symbol {
+        Symbol {
+            id,
+            name: name.to_string(),
+            ty,
+            storage_class: StorageClass::Auto,
+            kind,
+            span: Span::new(0, 0),
+            fixed_address: None,
+            is_defined: true,
+            is_referenced: true,
+            parameter_types: Vec::new(),
+        }
+    }
 }

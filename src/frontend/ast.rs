@@ -82,10 +82,16 @@ pub enum ExprKind {
         op: UnaryOp,
         expr: Box<Expr>,
     },
+    AddressOf(Box<Expr>),
+    Deref(Box<Expr>),
     Binary {
         op: BinaryOp,
         lhs: Box<Expr>,
         rhs: Box<Expr>,
+    },
+    Index {
+        base: Box<Expr>,
+        index: Box<Expr>,
     },
     Assign {
         target: Box<Expr>,
@@ -95,6 +101,8 @@ pub enum ExprKind {
         callee: String,
         args: Vec<Expr>,
     },
+    SizeOfExpr(Box<Expr>),
+    SizeOfType(Type),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -237,8 +245,13 @@ fn render_expr(expr: &Expr) -> String {
         ExprKind::IntLiteral(value) => value.to_string(),
         ExprKind::Name(name) => name.clone(),
         ExprKind::Unary { op, expr } => format!("{op:?}({})", render_expr(expr)),
+        ExprKind::AddressOf(expr) => format!("&({})", render_expr(expr)),
+        ExprKind::Deref(expr) => format!("*({})", render_expr(expr)),
         ExprKind::Binary { op, lhs, rhs } => {
             format!("({} {op:?} {})", render_expr(lhs), render_expr(rhs))
+        }
+        ExprKind::Index { base, index } => {
+            format!("{}[{}]", render_expr(base), render_expr(index))
         }
         ExprKind::Assign { target, value } => {
             format!("({} = {})", render_expr(target), render_expr(value))
@@ -248,5 +261,7 @@ fn render_expr(expr: &Expr) -> String {
             callee,
             args.iter().map(render_expr).collect::<Vec<_>>().join(", ")
         ),
+        ExprKind::SizeOfExpr(expr) => format!("sizeof({})", render_expr(expr)),
+        ExprKind::SizeOfType(ty) => format!("sizeof({ty})"),
     }
 }

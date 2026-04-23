@@ -30,6 +30,7 @@ pub enum Keyword {
     Volatile,
     While,
     Break,
+    Sizeof,
     Switch,
 }
 
@@ -37,6 +38,8 @@ pub enum Keyword {
 pub enum Symbol {
     LParen,
     RParen,
+    LBracket,
+    RBracket,
     LBrace,
     RBrace,
     Comma,
@@ -172,6 +175,8 @@ impl<'a> Lexer<'a> {
                 match ch {
                     '(' => TokenKind::Symbol(Symbol::LParen),
                     ')' => TokenKind::Symbol(Symbol::RParen),
+                    '[' => TokenKind::Symbol(Symbol::LBracket),
+                    ']' => TokenKind::Symbol(Symbol::RBracket),
                     '{' => TokenKind::Symbol(Symbol::LBrace),
                     '}' => TokenKind::Symbol(Symbol::RBrace),
                     ',' => TokenKind::Symbol(Symbol::Comma),
@@ -278,6 +283,7 @@ fn keyword_or_ident(text: &str) -> TokenKind {
         "if" => Some(Keyword::If),
         "int" => Some(Keyword::Int),
         "return" => Some(Keyword::Return),
+        "sizeof" => Some(Keyword::Sizeof),
         "static" => Some(Keyword::Static),
         "unsigned" => Some(Keyword::Unsigned),
         "void" => Some(Keyword::Void),

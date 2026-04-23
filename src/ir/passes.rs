@@ -17,6 +17,10 @@ pub fn constant_fold(program: &mut IrProgram) {
                             constants.insert(dst, value);
                         }
                     }
+                    IrInstr::AddrOf { dst, symbol } => {
+                        *instr = IrInstr::AddrOf { dst, symbol };
+                        constants.remove(&dst);
+                    }
                     IrInstr::Cast { dst, kind, src } => {
                         let src = resolve_operand(src, &constants);
                         *instr = IrInstr::Cast { dst, kind, src };
@@ -56,10 +60,24 @@ pub fn constant_fold(program: &mut IrProgram) {
                             constants.insert(dst, result);
                         }
                     }
+                    IrInstr::LoadIndirect { dst, ptr } => {
+                        *instr = IrInstr::LoadIndirect {
+                            dst,
+                            ptr: resolve_operand(ptr, &constants),
+                        };
+                        constants.remove(&dst);
+                    }
                     IrInstr::Store { target, value } => {
                         *instr = IrInstr::Store {
                             target,
                             value: resolve_operand(value, &constants),
+                        };
+                    }
+                    IrInstr::StoreIndirect { ptr, value, ty } => {
+                        *instr = IrInstr::StoreIndirect {
+                            ptr: resolve_operand(ptr, &constants),
+                            value: resolve_operand(value, &constants),
+                            ty,
                         };
                     }
                     IrInstr::Call { dst, .. } => {
@@ -123,6 +141,11 @@ pub fn dead_code_elimination(program: &mut IrProgram) {
                             retained.push(instr.clone());
                         }
                     }
+                    IrInstr::AddrOf { dst, .. } => {
+                        if live_temps.remove(dst) {
+                            retained.push(instr.clone());
+                        }
+                    }
                     IrInstr::Binary { dst, lhs, rhs, .. } => {
                         if live_temps.remove(dst) {
                             collect_operand(*lhs, &mut live_temps);
@@ -130,7 +153,18 @@ pub fn dead_code_elimination(program: &mut IrProgram) {
                             retained.push(instr.clone());
                         }
                     }
+                    IrInstr::LoadIndirect { dst, ptr } => {
+                        if live_temps.remove(dst) {
+                            collect_operand(*ptr, &mut live_temps);
+                            retained.push(instr.clone());
+                        }
+                    }
                     IrInstr::Store { value, .. } => {
+                        collect_operand(*value, &mut live_temps);
+                        retained.push(instr.clone());
+                    }
+                    IrInstr::StoreIndirect { ptr, value, .. } => {
+                        collect_operand(*ptr, &mut live_temps);
                         collect_operand(*value, &mut live_temps);
                         retained.push(instr.clone());
                     }

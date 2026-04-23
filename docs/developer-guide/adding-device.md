@@ -26,4 +26,4 @@
 2. add a header in `include/pic16/<target>.h`
 3. add minimal examples
 4. add compile-pipeline tests
-5. verify banked SFRs and the config word
+5. verify banked SFRs, indirect `FSR/INDF` access, and the config word

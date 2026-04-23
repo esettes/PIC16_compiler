@@ -10,9 +10,10 @@
 
 The target backend is the classic 14-bit PIC16 mid-range family. It is not a generic 8-bit CPU model.
 
-Phase 2 keeps that split intact while extending:
+Phase 3 keeps that split intact while extending:
 
-- 16-bit integer lowering
-- typed IR casts and compare nodes
-- signed/unsigned relational lowering
-- fixed-slot ABI support for 16-bit args and returns
+- 16-bit integer lowering from Phase 2
+- lvalue/rvalue-aware semantic analysis
+- typed IR address, indirect-load, and indirect-store nodes
+- constrained data pointers and one-dimensional arrays
+- PIC16 `FSR/INDF` indirect access without backend duplication per device

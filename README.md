@@ -38,11 +38,11 @@ Why Rust:
 - ownership helps keep cross-layer APIs explicit and maintainable
 - unit and integration testing are easy to keep close to the code
 
-## Phase 2 Status
+## Phase 3 Status
 
-Phase 2 extends the original v0.1 pipeline without changing the architecture. The shared `midrange14` backend remains common to both devices; only device descriptors vary.
+Phase 3 extends the original v0.1 and Phase 2 pipeline without changing the architecture. The shared `midrange14` backend remains common to both devices; only device descriptors vary.
 
-### Fully supported in Phase 2
+### Fully supported in Phase 3
 
 - `#include`
 - `#define` object-like macros
@@ -65,20 +65,42 @@ Phase 2 extends the original v0.1 pipeline without changing the architecture. Th
 - equality/inequality `==`, `!=`
 - relational comparisons `<`, `<=`, `>`, `>=`
 - 8-bit and 16-bit temporaries, locals, globals, arguments, and return values inside the current ABI limits
+- fixed-size one-dimensional arrays of `char`, `unsigned char`, `int`, and `unsigned int`
+- constrained data pointers to `char`, `unsigned char`, `int`, and `unsigned int`
+- `&obj`
+- `*ptr`
+- `a[i]`
+- `p[i]`
+- array-to-pointer decay in value contexts
+- pointer `+ integer`
+- pointer `- integer`
+- pointer `==` and `!=`
+- pointer arguments and pointer returns inside the current two-argument ABI
+- compile-time `sizeof` for supported scalars, pointers, and fixed arrays
+- indirect PIC16 data-memory load/store through `FSR/INDF`
 - valid Intel HEX generation for `PIC16F628A` and `PIC16F877A`
 
-### Partially supported in Phase 2
+### Partially supported in Phase 3
 
 - booleans are materialized as `unsigned char` values normalized to `0` or `1`
 - parameters and call arguments are limited to **two** values
 - mixed signedness comparisons on equal-width integer operands require explicit user-side normalization; implicit mixed signedness compare lowering is rejected
 - `const` data still lowers into startup-initialized RAM, not dedicated ROM placement
+- pointers are **data-space-only** in this phase; code pointers and function pointers are not supported
+- pointer-compatible assignments and comparisons require matching pointee types or literal `0` as the null pointer constant
+- array bounds in declarations must currently be positive integer literals
+- locals, local arrays, and temporaries still use static RAM slots; there is no software stack yet
 
 ### Still unsupported
 
 - `switch`
-- arrays
-- pointers
+- pointer-to-pointer types
+- function pointers
+- multidimensional arrays
+- taking the address of a whole array object
+- pointer relational comparisons other than `==` / `!=`
+- pointer subtraction between two pointers
+- array initializers
 - `struct`, `union`, `enum`
 - `float`
 - recursion
@@ -87,20 +109,29 @@ Phase 2 extends the original v0.1 pipeline without changing the architecture. Th
 - multiplication, division, modulo
 - more than two function parameters/arguments in the current ABI
 
-## Phase 2 ABI
+## Phase 3 ABI and Memory Model
 
 - `char`: 8-bit signed
 - `unsigned char`: 8-bit unsigned
 - `int`: 16-bit signed
 - `unsigned int`: 16-bit unsigned
+- `sizeof(...)` result type: `unsigned int`
 - 16-bit storage order: little-endian in RAM slots (`low byte = base`, `high byte = base + 1`)
+- pointer size: 16 bits
+- pointer representation: little-endian data-space address
+- null pointer representation: `0x0000`
+- supported pointer targets: `char`, `unsigned char`, `int`, `unsigned int`
+- pointer address space: PIC16 data memory only
 - locals and temporaries: static RAM slots, no software stack yet
+- local arrays: contiguous static RAM slots in the current function storage region
+- global arrays: contiguous static RAM slots initialized or zeroed at startup according to the current model
 - argument passing:
   - argument 0 uses helper pair `arg0.lo` / `arg0.hi`
   - argument 1 uses helper pair `arg1.lo` / `arg1.hi`
 - return values:
   - 8-bit return in `W`
   - 16-bit return in `W` for low byte and backend helper slot `return_high` for high byte
+  - pointer return follows the same 16-bit return rule
 - boolean results: normalized `0` or `1` in an `unsigned char`
 - compare lowering:
   - equality compares high byte then low byte for 16-bit values
@@ -108,8 +139,14 @@ Phase 2 extends the original v0.1 pipeline without changing the architecture. Th
   - signed relations first inspect sign-byte mismatch, then reuse unsigned compare flow when signs match
 - banking: explicit `STATUS.RP0/RP1`
 - paging: explicit `PCLATH<4:3>` before `CALL` / `GOTO`
+- indirect data access:
+  - direct named-object access uses banked file-register instructions
+  - pointer-based access loads `FSR` from the pointer low byte
+  - `STATUS.IRP` is derived from the pointer high byte
+  - `INDF` performs the final indirect byte load/store
+  - 16-bit indirect objects are lowered byte by byte at `ptr` and `ptr + 1`
 
-More detail: [DESIGN.md](/home/settes/cursus/PIC16_compiler/DESIGN.md:1) and [docs/backend/phase2-abi.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase2-abi.md:1).
+More detail: [DESIGN.md](/home/settes/cursus/PIC16_compiler/DESIGN.md:1), [docs/backend/phase2-abi.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase2-abi.md:1), [docs/backend/phase3-memory-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase3-memory-model.md:1), and [docs/ir/phase3-memory.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase3-memory.md:1).
 
 ## Build
 
@@ -161,8 +198,22 @@ cargo run -- --list-targets
 
 - [examples/pic16f628a/blink.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/blink.c:1)
 - [examples/pic16f628a/arith16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/arith16.c:1)
+- [examples/pic16f628a/array_fill.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/array_fill.c:1)
 - [examples/pic16f877a/blink.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/blink.c:1)
 - [examples/pic16f877a/compare16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/compare16.c:1)
+- [examples/pic16f877a/pointer16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/pointer16.c:1)
+
+Phase 3 pointer/array example:
+
+```bash
+cargo run -- \
+  --target pic16f877a \
+  -I include \
+  -O2 -Wall -Wextra \
+  --emit-ir --emit-asm --map --list-file \
+  -o build/pointer16.hex \
+  examples/pic16f877a/pointer16.c
+```
 
 ## Documentation
 
@@ -170,14 +221,16 @@ cargo run -- --list-targets
 - [CONTRIBUTING.md](/home/settes/cursus/PIC16_compiler/CONTRIBUTING.md:1)
 - [docs/architecture/overview.md](/home/settes/cursus/PIC16_compiler/docs/architecture/overview.md:1)
 - [docs/ir/phase2-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase2-lowering.md:1)
+- [docs/ir/phase3-memory.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase3-memory.md:1)
 - [docs/backend/phase2-abi.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase2-abi.md:1)
+- [docs/backend/phase3-memory-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase3-memory-model.md:1)
 - [docs/developer-guide/adding-device.md](/home/settes/cursus/PIC16_compiler/docs/developer-guide/adding-device.md:1)
 
 ## Remaining Phases
 
 1. runtime helpers for multiply/divide/modulo
 2. optional software stack and wider ABI
-3. arrays and constrained pointer support
+3. richer pointer compatibility and initializer support
 4. ISR support
 5. stronger PIC16 banking/page optimization passes
 6. more PIC16 mid-range descriptors without backend duplication

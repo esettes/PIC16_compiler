@@ -41,8 +41,8 @@ impl<'a> Parser<'a> {
     /// Parses one top-level declaration or function definition.
     fn parse_item(&mut self) -> Item {
         let start = self.current_span().start;
-        let (storage_class, ty) = self.parse_decl_specifiers();
-        let (name, name_span) = self.expect_identifier();
+        let (storage_class, base_ty) = self.parse_decl_specifiers();
+        let (name, name_span, ty) = self.parse_declarator(base_ty);
 
         if self.match_symbol(Symbol::LParen) {
             let params = self.parse_params();
@@ -98,8 +98,8 @@ impl<'a> Parser<'a> {
         let mut params = Vec::new();
         loop {
             let start = self.current_span().start;
-            let (storage_class, ty) = self.parse_decl_specifiers();
-            let (name, _) = self.expect_identifier();
+            let (storage_class, base_ty) = self.parse_decl_specifiers();
+            let (name, _, ty) = self.parse_declarator(base_ty);
             params.push(VarDecl {
                 name,
                 ty,
@@ -255,8 +255,8 @@ impl<'a> Parser<'a> {
     /// Parses a local variable declaration terminated by a semicolon.
     fn parse_local_decl(&mut self) -> VarDecl {
         let start = self.current_span().start;
-        let (storage_class, ty) = self.parse_decl_specifiers();
-        let (name, _) = self.expect_identifier();
+        let (storage_class, base_ty) = self.parse_decl_specifiers();
+        let (name, _, ty) = self.parse_declarator(base_ty);
         let initializer = if self.match_symbol(Symbol::Assign) {
             Some(self.parse_expression())
         } else {
@@ -395,9 +395,32 @@ impl<'a> Parser<'a> {
         expr
     }
 
-    /// Parses prefix unary operators before delegating to primary expressions.
+    /// Parses prefix unary operators before delegating to postfix expressions.
     fn parse_unary(&mut self) -> Expr {
         let start = self.current_span().start;
+        if self.match_keyword(Keyword::Sizeof) {
+            if self.match_symbol(Symbol::LParen) {
+                if self.is_decl_start() {
+                    let ty = self.parse_type_name();
+                    self.expect_symbol(Symbol::RParen);
+                    return Expr {
+                        kind: ExprKind::SizeOfType(ty),
+                        span: Span::new(start, self.previous_span().end),
+                    };
+                }
+                let expr = self.parse_expression();
+                self.expect_symbol(Symbol::RParen);
+                return Expr {
+                    kind: ExprKind::SizeOfExpr(Box::new(expr)),
+                    span: Span::new(start, self.previous_span().end),
+                };
+            }
+            let expr = self.parse_unary();
+            return Expr {
+                kind: ExprKind::SizeOfExpr(Box::new(expr)),
+                span: Span::new(start, self.previous_span().end),
+            };
+        }
         if self.match_symbol(Symbol::Minus) {
             let expr = self.parse_unary();
             return Expr {
@@ -428,10 +451,81 @@ impl<'a> Parser<'a> {
                 span: Span::new(start, self.previous_span().end),
             };
         }
-        self.parse_primary()
+        if self.match_symbol(Symbol::Ampersand) {
+            let expr = self.parse_unary();
+            return Expr {
+                kind: ExprKind::AddressOf(Box::new(expr)),
+                span: Span::new(start, self.previous_span().end),
+            };
+        }
+        if self.match_symbol(Symbol::Star) {
+            let expr = self.parse_unary();
+            return Expr {
+                kind: ExprKind::Deref(Box::new(expr)),
+                span: Span::new(start, self.previous_span().end),
+            };
+        }
+        self.parse_postfix()
     }
 
-    /// Parses literals, names, calls, and parenthesized expressions.
+    /// Parses postfix calls and indexing after a primary expression.
+    fn parse_postfix(&mut self) -> Expr {
+        let mut expr = self.parse_primary();
+        loop {
+            if self.match_symbol(Symbol::LParen) {
+                let start = expr.span.start;
+                let mut args = Vec::new();
+                if !self.check_symbol(Symbol::RParen) {
+                    loop {
+                        args.push(self.parse_expression());
+                        if self.match_symbol(Symbol::Comma) {
+                            continue;
+                        }
+                        break;
+                    }
+                }
+                self.expect_symbol(Symbol::RParen);
+
+                let callee = match expr.kind {
+                    ExprKind::Name(name) => name,
+                    _ => {
+                        self.diagnostics.error(
+                            "parser",
+                            Some(expr.span),
+                            "only direct function calls are supported",
+                            Some("call a named function directly in this phase".to_string()),
+                        );
+                        "__error".to_string()
+                    }
+                };
+
+                expr = Expr {
+                    kind: ExprKind::Call { callee, args },
+                    span: Span::new(start, self.previous_span().end),
+                };
+                continue;
+            }
+
+            if self.match_symbol(Symbol::LBracket) {
+                let start = expr.span.start;
+                let index = self.parse_expression();
+                self.expect_symbol(Symbol::RBracket);
+                expr = Expr {
+                    kind: ExprKind::Index {
+                        base: Box::new(expr),
+                        index: Box::new(index),
+                    },
+                    span: Span::new(start, self.previous_span().end),
+                };
+                continue;
+            }
+
+            break;
+        }
+        expr
+    }
+
+    /// Parses literals, names, and parenthesized expressions.
     fn parse_primary(&mut self) -> Expr {
         let start = self.current_span().start;
         if self.match_symbol(Symbol::LParen) {
@@ -448,23 +542,6 @@ impl<'a> Parser<'a> {
         }
         if let TokenKind::Identifier(name) = self.current().kind.clone() {
             self.advance();
-            if self.match_symbol(Symbol::LParen) {
-                let mut args = Vec::new();
-                if !self.check_symbol(Symbol::RParen) {
-                    loop {
-                        args.push(self.parse_expression());
-                        if self.match_symbol(Symbol::Comma) {
-                            continue;
-                        }
-                        break;
-                    }
-                }
-                self.expect_symbol(Symbol::RParen);
-                return Expr {
-                    kind: ExprKind::Call { callee: name, args },
-                    span: Span::new(start, self.previous_span().end),
-                };
-            }
             return Expr {
                 kind: ExprKind::Name(name),
                 span: Span::new(start, self.previous_span().end),
@@ -542,6 +619,88 @@ impl<'a> Parser<'a> {
             ScalarType::I16
         });
         (storage, Type::new(scalar).with_qualifiers(qualifiers))
+    }
+
+    /// Parses a named declarator with Phase 3 pointer and one-dimensional array suffixes.
+    fn parse_declarator(&mut self, mut ty: Type) -> (String, Span, Type) {
+        if self.check_symbol(Symbol::LParen) && self.peek_symbol(1, Symbol::Star) {
+            let span = self.current_span();
+            self.diagnostics.error(
+                "parser",
+                Some(span),
+                "function pointer declarators are not supported in phase 3",
+                Some("use direct function calls only for now".to_string()),
+            );
+            while !self.check_symbol(Symbol::RParen) && !self.is_eof() {
+                self.advance();
+            }
+            self.expect_symbol(Symbol::RParen);
+            return ("__unsupported".to_string(), span, ty);
+        }
+        while self.match_symbol(Symbol::Star) {
+            ty = ty.pointer_to();
+        }
+        let (name, span) = self.expect_identifier();
+        (name, span, self.parse_type_suffixes(ty))
+    }
+
+    /// Parses a standalone type name used by `sizeof(type)`.
+    fn parse_type_name(&mut self) -> Type {
+        let (_, base_ty) = self.parse_decl_specifiers();
+        self.parse_abstract_declarator(base_ty)
+    }
+
+    /// Parses the pointer and array suffix pieces of an abstract declarator.
+    fn parse_abstract_declarator(&mut self, mut ty: Type) -> Type {
+        while self.match_symbol(Symbol::Star) {
+            ty = ty.pointer_to();
+        }
+        self.parse_type_suffixes(ty)
+    }
+
+    /// Parses the supported one-dimensional array suffix for one declarator.
+    fn parse_type_suffixes(&mut self, mut ty: Type) -> Type {
+        if self.match_symbol(Symbol::LBracket) {
+            let len = self.parse_array_len();
+            self.expect_symbol(Symbol::RBracket);
+            ty = ty.array_of(len);
+            while self.match_symbol(Symbol::LBracket) {
+                self.diagnostics.error(
+                    "parser",
+                    Some(self.previous_span()),
+                    "multidimensional arrays are not supported in phase 3",
+                    Some("use one-dimensional arrays only for now".to_string()),
+                );
+                let _ = self.parse_array_len();
+                self.expect_symbol(Symbol::RBracket);
+            }
+        }
+        ty
+    }
+
+    /// Parses one fixed array length expression restricted to an integer literal.
+    fn parse_array_len(&mut self) -> usize {
+        let span = self.current_span();
+        let TokenKind::Number(value) = self.current().kind.clone() else {
+            self.diagnostics.error(
+                "parser",
+                Some(span),
+                "array length must be an integer literal",
+                None,
+            );
+            return 1;
+        };
+        self.advance();
+        if value <= 0 {
+            self.diagnostics.error(
+                "parser",
+                Some(span),
+                "array length must be positive",
+                None,
+            );
+            return 1;
+        }
+        value as usize
     }
 
     /// Skips tokens until a likely statement boundary after a parse error.

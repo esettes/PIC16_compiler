@@ -51,14 +51,16 @@ Build a real compiler foundation for classic PIC16 devices, with strict separati
 
 The backend knows the `midrange14` family, not concrete devices. RAM details, program memory, SFRs, vectors, and configuration words live in descriptors.
 
-### Phase 2 Memory Model
+### Phase 3 Memory Model
 
 There is no software stack yet:
 
 - parameters in fixed helper register pairs
 - 8-bit return in `W`
 - 16-bit return in `W` + helper byte
+- 16-bit pointer return in `W` + helper byte
 - locals and temporaries in static RAM slots
+- local arrays in contiguous static RAM slots
 
 Trade-offs:
 
@@ -74,13 +76,15 @@ The backend explicitly models:
 
 Phase 2 still uses a simple and safe policy before an optimal one.
 
-## Phase 2 C Subset
+## Phase 3 C Subset
 
 Supported in code generation:
 
 - `void`, `char`, `unsigned char`, `int`, `unsigned int`
 - functions
 - global/local variables
+- fixed-size one-dimensional arrays of supported scalar types
+- data pointers to supported scalar types
 - `if/else`
 - `while`
 - `for`
@@ -88,22 +92,30 @@ Supported in code generation:
 - `break`, `continue`
 - `return`
 - direct calls
+- `&obj`
+- `*ptr`
+- `a[i]`
+- `p[i]`
 - `==`, `!=`, `<`, `<=`, `>`, `>=`
 - `+`, `-`, `&`, `|`, `^`, `!`, `~`
 - typed casts inserted by semantic analysis for widening and truncation
 - boolean materialization as `0` / `1`
+- compile-time `sizeof` for supported scalar, pointer, and array types
 
 Deferred:
 
 - `*`, `/`, `%`
 - mixed signedness compares on equal-width operands without explicit normalization
 - more than two parameters / arguments
+- richer pointer compatibility rules
+- array initializers
 
 Not implemented:
 
 - `switch`
-- pointers
-- arrays
+- pointer-to-pointer
+- function pointers
+- multidimensional arrays
 - structs
 - floats
 - user ISR support
@@ -115,8 +127,10 @@ Not implemented:
 - every SFR address comes from a descriptor
 - IR records operand types for branch compares; backend does not infer signedness from opcodes alone
 - 16-bit values always occupy two consecutive bytes in little-endian order
+- pointers are always 16-bit data-space addresses in this phase
+- arrays only exist as addressable objects; value contexts lower them through explicit decay
 
-## Phase 2 Lowering
+## Phase 3 Lowering
 
 ### Frontend / Semantic Layer
 
@@ -127,12 +141,19 @@ Not implemented:
   - truncation
   - same-width bitcasts
 - unsupported equal-width mixed signedness compares are rejected with diagnostics instead of silently picking a rule
+- expressions carry enough information to distinguish lvalues from rvalues
+- array lvalues decay through an explicit typed node instead of implicit backend special-casing
+- indexing lowers semantically into pointer arithmetic plus dereference
+- `sizeof` folds to a compile-time `unsigned int` literal during semantic analysis
 
 ### IR
 
-Phase 2 extends the IR with:
+Phase 3 extends the IR with:
 
 - `IrInstr::Cast`
+- `IrInstr::AddrOf`
+- `IrInstr::LoadIndirect`
+- `IrInstr::StoreIndirect`
 - typed `IrCondition::NonZero`
 - typed `IrCondition::Compare`
 
@@ -142,6 +163,14 @@ Relational and logical comparison expressions lower through branch form first, t
 - loop headers
 - `!expr`
 - assignments such as `flag = lhs < rhs`
+
+Memory-oriented expressions lower through explicit address and indirect memory operations:
+
+1. named objects become lvalues in the typed tree
+2. array decay produces a pointer-valued IR temp through `AddrOf`
+3. `*ptr` in value position becomes `LoadIndirect`
+4. `*ptr = value` becomes `StoreIndirect`
+5. `a[i]` and `p[i]` lower to pointer add/sub with element-size scaling followed by dereference
 
 ### Backend
 
@@ -154,6 +183,10 @@ The shared `midrange14` backend now lowers:
 - 16-bit equality and inequality
 - unsigned `< <= > >=`
 - signed `< <= > >=`
+- pointer `==` and `!=`
+- address materialization for globals, locals, params, and SFR symbols
+- indirect scalar loads and stores through `FSR/INDF`
+- 8-bit and 16-bit indexed access with byte-wise element scaling
 
 Signed relation lowering strategy:
 
@@ -167,6 +200,14 @@ Unsigned relation lowering strategy:
 2. branch from carry/zero
 3. only inspect low byte when the high byte is equal
 
+Indirect memory strategy:
+
+1. direct named-object accesses still use banked file-register instructions
+2. pointer low byte programs `FSR`
+3. pointer high byte drives `STATUS.IRP`
+4. `INDF` performs the final byte load/store
+5. 16-bit indirect objects lower as two byte-wise accesses at `ptr` and `ptr + 1`
+
 ### ABI Details
 
 - helper slots:
@@ -177,18 +218,21 @@ Unsigned relation lowering strategy:
 - helper slots are backend-managed and not user-visible symbols
 - booleans are normalized `unsigned char`
 - `main` still requires zero parameters in this phase
+- pointers use the same 16-bit calling and return path as `unsigned int`
+- supported pointers target PIC16 data memory only
+- null is `0x0000`
 
 Trade-offs:
 
 - clear, testable byte-wise lowering
 - no hidden runtime helpers for operations not implemented yet
-- no fake frontend-only `int` support; every accepted Phase 2 integer path reaches HEX emission
+- no fake frontend-only memory support; every accepted Phase 3 pointer/array path reaches HEX emission
 
 ## Growth Plan
 
 1. runtime helpers for multiply/divide/modulo
 2. optional software stack
-3. arrays/pointers
+3. richer pointer compatibility and initializer support
 4. interrupts
 5. stronger PIC16 peephole and bank/page optimization
 6. new PIC16 mid-range targets

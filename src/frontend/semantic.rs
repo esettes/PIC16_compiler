@@ -8,7 +8,7 @@ use crate::diagnostics::DiagnosticBag;
 use super::ast::{
     BinaryOp, Expr, ExprKind, FunctionDecl, Item, Stmt, TranslationUnit, UnaryOp, VarDecl,
 };
-use super::types::{CastKind, ScalarType, StorageClass, Type};
+use super::types::{CastKind, Qualifiers, ScalarType, StorageClass, Type};
 
 pub type SymbolId = usize;
 
@@ -92,11 +92,18 @@ pub enum TypedStmt {
     Empty(Span),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ValueCategory {
+    LValue,
+    RValue,
+}
+
 #[derive(Clone, Debug)]
 pub struct TypedExpr {
     pub kind: TypedExprKind,
     pub ty: Type,
     pub span: Span,
+    pub value_category: ValueCategory,
 }
 
 #[derive(Clone, Debug)]
@@ -112,8 +119,11 @@ pub enum TypedExprKind {
         lhs: Box<TypedExpr>,
         rhs: Box<TypedExpr>,
     },
+    ArrayDecay(Box<TypedExpr>),
+    AddressOf(Box<TypedExpr>),
+    Deref(Box<TypedExpr>),
     Assign {
-        target: SymbolId,
+        target: Box<TypedExpr>,
         value: Box<TypedExpr>,
     },
     Call {
@@ -192,7 +202,7 @@ impl<'a> SemanticAnalyzer<'a> {
             let symbol = self.insert_symbol(Symbol {
                 id: self.symbols.len(),
                 name: register.name.to_string(),
-                ty: Type::new(ScalarType::U8).with_qualifiers(super::types::Qualifiers {
+                ty: Type::new(ScalarType::U8).with_qualifiers(Qualifiers {
                     is_const: false,
                     is_volatile: true,
                 }),
@@ -208,52 +218,58 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
-    /// Registers a top-level declaration before bodies and initializers are analyzed.
+    /// Registers one top-level declaration before bodies and initializers are analyzed.
     fn declare_item(&mut self, item: &Item, diagnostics: &mut DiagnosticBag) {
         match item {
             Item::Function(function) => self.declare_function_signature(function, diagnostics),
-            Item::Global(global) => {
-                if self.globals_by_name.contains_key(&global.name) {
-                    if let Some(existing) = self.globals_by_name.get(&global.name).copied()
-                        && self.symbols[existing].kind == SymbolKind::DeviceRegister
-                        && global.storage_class == StorageClass::Extern
-                    {
-                        return;
-                    }
-                    diagnostics.error(
-                        "semantic",
-                        Some(global.span),
-                        format!("redefinition of symbol `{}`", global.name),
-                        None,
-                    );
-                    return;
-                }
-                if !global.ty.is_supported_codegen_scalar() || global.ty.is_void() {
-                    diagnostics.error(
-                        "semantic",
-                        Some(global.span),
-                        format!("type `{}` is not lowered in phase 2", global.ty),
-                        None,
-                    );
-                }
-                let symbol = self.insert_symbol(Symbol {
-                    id: self.symbols.len(),
-                    name: global.name.clone(),
-                    ty: global.ty,
-                    storage_class: global.storage_class,
-                    kind: SymbolKind::Global,
-                    span: global.span,
-                    fixed_address: None,
-                    is_defined: global.initializer.is_none(),
-                    is_referenced: false,
-                    parameter_types: Vec::new(),
-                });
-                self.globals_by_name.insert(global.name.clone(), symbol);
-            }
+            Item::Global(global) => self.declare_global(global, diagnostics),
         }
     }
 
-    /// Adds a function signature to the global symbol table and validates ABI limits.
+    /// Registers one global variable declaration and validates its Phase 3 type shape.
+    fn declare_global(&mut self, global: &VarDecl, diagnostics: &mut DiagnosticBag) {
+        if self.globals_by_name.contains_key(&global.name) {
+            if let Some(existing) = self.globals_by_name.get(&global.name).copied()
+                && self.symbols[existing].kind == SymbolKind::DeviceRegister
+                && global.storage_class == StorageClass::Extern
+            {
+                return;
+            }
+            diagnostics.error(
+                "semantic",
+                Some(global.span),
+                format!("redefinition of symbol `{}`", global.name),
+                None,
+            );
+            return;
+        }
+
+        self.validate_object_type(global.ty, global.span, &global.name, "global", diagnostics);
+        if global.ty.is_array() && global.initializer.is_some() {
+            diagnostics.error(
+                "semantic",
+                Some(global.span),
+                "array initializers are not implemented in phase 3",
+                Some("declare the array without an initializer and fill it in code".to_string()),
+            );
+        }
+
+        let symbol = self.insert_symbol(Symbol {
+            id: self.symbols.len(),
+            name: global.name.clone(),
+            ty: global.ty,
+            storage_class: global.storage_class,
+            kind: SymbolKind::Global,
+            span: global.span,
+            fixed_address: None,
+            is_defined: global.initializer.is_none(),
+            is_referenced: false,
+            parameter_types: Vec::new(),
+        });
+        self.globals_by_name.insert(global.name.clone(), symbol);
+    }
+
+    /// Adds a function signature to the global symbol table and validates the fixed ABI.
     fn declare_function_signature(
         &mut self,
         function: &FunctionDecl,
@@ -272,24 +288,25 @@ impl<'a> SemanticAnalyzer<'a> {
             return;
         }
 
-        if !function.return_type.is_supported_codegen_scalar() {
-            diagnostics.error(
-                "semantic",
-                Some(function.span),
-                format!("return type `{}` is not lowered in phase 2", function.return_type),
-                None,
-            );
-        }
+        self.validate_return_type(function.return_type, function.span, &function.name, diagnostics);
         if function.params.len() > 2 {
             diagnostics.error(
                 "semantic",
                 Some(function.span),
-                "phase 2 ABI supports at most two parameters",
+                "phase 3 ABI supports at most two parameters",
                 None,
             );
         }
 
-        let parameter_types = function.params.iter().map(|param| param.ty).collect::<Vec<_>>();
+        let parameter_types = function
+            .params
+            .iter()
+            .map(|param| self.normalize_param_type(param.ty))
+            .collect::<Vec<_>>();
+        for (param, ty) in function.params.iter().zip(parameter_types.iter().copied()) {
+            self.validate_param_type(ty, param.span, &param.name, diagnostics);
+        }
+
         let symbol = self.insert_symbol(Symbol {
             id: self.symbols.len(),
             name: function.name.clone(),
@@ -315,25 +332,29 @@ impl<'a> SemanticAnalyzer<'a> {
         }
 
         self.symbols[symbol].is_defined = true;
-        let initializer = global.initializer.as_ref().and_then(|expr| {
-            let expr = self.analyze_expr(expr, diagnostics)?;
-            let coerced = self.coerce_expr(
-                expr,
-                global.ty,
-                diagnostics,
-                "global initializer",
-                false,
-            );
-            Some(coerced)
-        });
+        let initializer = if self.symbols[symbol].ty.is_array() {
+            None
+        } else {
+            global.initializer.as_ref().and_then(|expr| {
+                let expr = self.analyze_expr(expr, diagnostics)?;
+                let coerced = self.coerce_expr(
+                    expr,
+                    global.ty,
+                    diagnostics,
+                    "global initializer",
+                    false,
+                );
+                Some(coerced)
+            })
+        };
         if let Some(initializer) = initializer.as_ref()
             && !is_constant_expression(initializer)
         {
             diagnostics.error(
                 "semantic",
                 Some(initializer.span),
-                "global initializer must be a constant expression",
-                None,
+                "global initializer must be a constant expression in phase 3",
+                Some("use literals, casts, and integer operators only".to_string()),
             );
         }
 
@@ -363,18 +384,11 @@ impl<'a> SemanticAnalyzer<'a> {
 
         let mut params = Vec::new();
         for param in function.params {
-            if !param.ty.is_supported_codegen_scalar() || param.ty.is_void() {
-                diagnostics.error(
-                    "semantic",
-                    Some(param.span),
-                    format!("parameter `{}` uses unsupported type `{}`", param.name, param.ty),
-                    None,
-                );
-            }
+            let param_ty = self.normalize_param_type(param.ty);
             let param_id = self.insert_symbol(Symbol {
                 id: self.symbols.len(),
                 name: param.name.clone(),
-                ty: param.ty,
+                ty: param_ty,
                 storage_class: param.storage_class,
                 kind: SymbolKind::Param,
                 span: param.span,
@@ -423,12 +437,13 @@ impl<'a> SemanticAnalyzer<'a> {
                 TypedStmt::Block(typed, *span)
             }
             Stmt::VarDecl(decl) => {
-                if !decl.ty.is_supported_codegen_scalar() || decl.ty.is_void() {
+                self.validate_object_type(decl.ty, decl.span, &decl.name, "local", diagnostics);
+                if decl.ty.is_array() && decl.initializer.is_some() {
                     diagnostics.error(
                         "semantic",
                         Some(decl.span),
-                        format!("local `{}` uses unsupported type `{}`", decl.name, decl.ty),
-                        None,
+                        "array initializers are not implemented in phase 3",
+                        Some("declare the array without an initializer and fill it in code".to_string()),
                     );
                 }
                 let symbol = self.insert_scoped_symbol(
@@ -438,10 +453,14 @@ impl<'a> SemanticAnalyzer<'a> {
                     SymbolKind::Local,
                     decl.span,
                 );
-                let initializer = decl.initializer.as_ref().and_then(|expr| {
-                    let expr = self.analyze_expr(expr, diagnostics)?;
-                    Some(self.coerce_expr(expr, decl.ty, diagnostics, "local initializer", true))
-                });
+                let initializer = if decl.ty.is_array() {
+                    None
+                } else {
+                    decl.initializer.as_ref().and_then(|expr| {
+                        let expr = self.analyze_expr(expr, diagnostics)?;
+                        Some(self.coerce_expr(expr, decl.ty, diagnostics, "local initializer", true))
+                    })
+                };
                 TypedStmt::VarDecl(symbol, initializer, decl.span)
             }
             Stmt::Expr(expr, span) => TypedStmt::Expr(
@@ -568,171 +587,609 @@ impl<'a> SemanticAnalyzer<'a> {
 
     /// Analyzes one expression into a typed form suitable for IR lowering.
     fn analyze_expr(&mut self, expr: &Expr, diagnostics: &mut DiagnosticBag) -> Option<TypedExpr> {
+        self.analyze_expr_with_decay(expr, diagnostics, true)
+    }
+
+    /// Analyzes one expression while controlling whether array lvalues decay automatically.
+    fn analyze_expr_with_decay(
+        &mut self,
+        expr: &Expr,
+        diagnostics: &mut DiagnosticBag,
+        decay_arrays: bool,
+    ) -> Option<TypedExpr> {
         let typed = match &expr.kind {
             ExprKind::IntLiteral(value) => TypedExpr {
                 kind: TypedExprKind::IntLiteral(*value),
                 ty: infer_integer_literal_type(*value),
                 span: expr.span,
+                value_category: ValueCategory::RValue,
             },
-            ExprKind::Name(name) => {
-                let symbol = self
-                    .resolve_name(name)
-                    .or_else(|| self.globals_by_name.get(name).copied());
-                let Some(symbol) = symbol else {
+            ExprKind::Name(name) => self.analyze_name(name, expr.span, diagnostics)?,
+            ExprKind::Unary { op, expr: value } => {
+                self.analyze_unary_expr(*op, value, expr.span, diagnostics)?
+            }
+            ExprKind::AddressOf(value) => self.analyze_address_of(value, expr.span, diagnostics)?,
+            ExprKind::Deref(value) => self.analyze_deref(value, expr.span, diagnostics)?,
+            ExprKind::Binary { op, lhs, rhs } => {
+                self.analyze_binary_expr(*op, lhs, rhs, expr.span, diagnostics)?
+            }
+            ExprKind::Index { base, index } => {
+                self.analyze_index_expr(base, index, expr.span, diagnostics)?
+            }
+            ExprKind::Assign { target, value } => {
+                self.analyze_assign_expr(target, value, expr.span, diagnostics)?
+            }
+            ExprKind::Call { callee, args } => {
+                self.analyze_call_expr(callee, args, expr.span, diagnostics)?
+            }
+            ExprKind::SizeOfExpr(value) => self.analyze_sizeof_expr(value, expr.span, diagnostics)?,
+            ExprKind::SizeOfType(ty) => self.analyze_sizeof_type(*ty, expr.span, diagnostics)?,
+        };
+
+        if decay_arrays && typed.ty.is_array() {
+            Some(self.decay_array_expr(typed, expr.span))
+        } else {
+            Some(typed)
+        }
+    }
+
+    /// Resolves one source-level name into a typed symbol reference.
+    fn analyze_name(
+        &mut self,
+        name: &str,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        let symbol = self
+            .resolve_name(name)
+            .or_else(|| self.globals_by_name.get(name).copied());
+        let Some(symbol) = symbol else {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("undefined symbol `{name}`"),
+                None,
+            );
+            return None;
+        };
+        if self.symbols[symbol].kind == SymbolKind::Function {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "function values and function pointers are not supported in phase 3",
+                Some("call the function directly instead".to_string()),
+            );
+            return None;
+        }
+        self.symbols[symbol].is_referenced = true;
+        Some(TypedExpr {
+            kind: TypedExprKind::Symbol(symbol),
+            ty: self.symbols[symbol].ty,
+            span,
+            value_category: ValueCategory::LValue,
+        })
+    }
+
+    /// Analyzes one unary expression in the supported Phase 3 scalar model.
+    fn analyze_unary_expr(
+        &mut self,
+        op: UnaryOp,
+        expr: &Expr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        let value = self.analyze_expr(expr, diagnostics)?;
+        match op {
+            UnaryOp::LogicalNot => {
+                if !value.ty.is_scalar_value() {
                     diagnostics.error(
                         "semantic",
-                        Some(expr.span),
-                        format!("undefined symbol `{name}`"),
+                        Some(span),
+                        "logical not requires an integer or pointer operand",
                         None,
                     );
                     return None;
-                };
-                self.symbols[symbol].is_referenced = true;
-                TypedExpr {
-                    kind: TypedExprKind::Symbol(symbol),
-                    ty: self.symbols[symbol].ty,
-                    span: expr.span,
                 }
+                Some(TypedExpr {
+                    kind: TypedExprKind::Unary {
+                        op,
+                        expr: Box::new(value),
+                    },
+                    ty: Type::new(ScalarType::U8),
+                    span,
+                    value_category: ValueCategory::RValue,
+                })
             }
-            ExprKind::Unary { op, expr: value } => {
-                let value = self.analyze_expr(value, diagnostics)?;
+            UnaryOp::Negate | UnaryOp::BitwiseNot => {
                 if !value.ty.is_integer() {
                     diagnostics.error(
                         "semantic",
-                        Some(expr.span),
+                        Some(span),
                         "unary operator requires an integer operand",
                         None,
                     );
                     return None;
                 }
-                let result_ty = match op {
-                    UnaryOp::LogicalNot => Type::new(ScalarType::U8),
-                    UnaryOp::Negate | UnaryOp::BitwiseNot => value.ty,
-                };
-                TypedExpr {
+                Some(TypedExpr {
                     kind: TypedExprKind::Unary {
-                        op: *op,
-                        expr: Box::new(value),
+                        op,
+                        expr: Box::new(value.clone()),
                     },
-                    ty: result_ty,
-                    span: expr.span,
-                }
+                    ty: value.ty,
+                    span,
+                    value_category: ValueCategory::RValue,
+                })
             }
-            ExprKind::Binary { op, lhs, rhs } => {
+        }
+    }
+
+    /// Analyzes one address-of expression over a supported assignable object.
+    fn analyze_address_of(
+        &mut self,
+        expr: &Expr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        let value = self.analyze_expr_with_decay(expr, diagnostics, false)?;
+        if value.value_category != ValueCategory::LValue {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "address-of requires an lvalue operand",
+                None,
+            );
+            return None;
+        }
+        if value.ty.is_array() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "taking the address of a whole array is not supported in phase 3",
+                Some("use the array name for decay or take `&array[index]`".to_string()),
+            );
+            return None;
+        }
+        if !value.ty.is_supported_pointer_target() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("cannot take the address of unsupported type `{}`", value.ty),
+                None,
+            );
+            return None;
+        }
+        let target_ty = value.ty;
+        Some(TypedExpr {
+            kind: TypedExprKind::AddressOf(Box::new(value)),
+            ty: target_ty.pointer_to(),
+            span,
+            value_category: ValueCategory::RValue,
+        })
+    }
+
+    /// Analyzes one dereference expression over a constrained Phase 3 data pointer.
+    fn analyze_deref(
+        &mut self,
+        expr: &Expr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        let pointer = self.analyze_expr(expr, diagnostics)?;
+        if !pointer.ty.is_pointer() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "dereference requires a supported data pointer",
+                None,
+            );
+            return None;
+        }
+        let element_ty = pointer.ty.element_type();
+        if !element_ty.is_supported_pointer_target() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("pointer target `{}` is not supported in phase 3", element_ty),
+                None,
+            );
+            return None;
+        }
+        Some(TypedExpr {
+            kind: TypedExprKind::Deref(Box::new(pointer)),
+            ty: element_ty,
+            span,
+            value_category: ValueCategory::LValue,
+        })
+    }
+
+    /// Analyzes one binary expression, including pointer arithmetic and comparisons.
+    fn analyze_binary_expr(
+        &mut self,
+        op: BinaryOp,
+        lhs: &Expr,
+        rhs: &Expr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        match op {
+            BinaryOp::LogicalAnd | BinaryOp::LogicalOr => {
                 let lhs = self.analyze_expr(lhs, diagnostics)?;
                 let rhs = self.analyze_expr(rhs, diagnostics)?;
-                let (lhs, rhs, operand_ty) =
-                    self.balance_binary_operands(*op, lhs, rhs, diagnostics, expr.span);
-                let result_ty = match op {
-                    BinaryOp::Equal
-                    | BinaryOp::NotEqual
-                    | BinaryOp::Less
-                    | BinaryOp::LessEqual
-                    | BinaryOp::Greater
-                    | BinaryOp::GreaterEqual
-                    | BinaryOp::LogicalAnd
-                    | BinaryOp::LogicalOr => Type::new(ScalarType::U8),
-                    _ => operand_ty,
-                };
-                TypedExpr {
+                if !lhs.ty.is_scalar_value() || !rhs.ty.is_scalar_value() {
+                    diagnostics.error(
+                        "semantic",
+                        Some(span),
+                        "logical operators require integer or pointer operands",
+                        None,
+                    );
+                    return None;
+                }
+                Some(TypedExpr {
                     kind: TypedExprKind::Binary {
-                        op: *op,
+                        op,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    },
+                    ty: Type::new(ScalarType::U8),
+                    span,
+                    value_category: ValueCategory::RValue,
+                })
+            }
+            BinaryOp::Equal | BinaryOp::NotEqual => {
+                let lhs = self.analyze_expr(lhs, diagnostics)?;
+                let rhs = self.analyze_expr(rhs, diagnostics)?;
+                self.analyze_equality_expr(op, lhs, rhs, span, diagnostics)
+            }
+            BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => {
+                let lhs = self.analyze_expr(lhs, diagnostics)?;
+                let rhs = self.analyze_expr(rhs, diagnostics)?;
+                if lhs.ty.is_pointer() || rhs.ty.is_pointer() {
+                    diagnostics.error(
+                        "semantic",
+                        Some(span),
+                        "relational comparisons on pointers are not supported in phase 3",
+                        Some("use `==` or `!=` for supported pointer comparisons".to_string()),
+                    );
+                    return None;
+                }
+                let (lhs, rhs, _) =
+                    self.balance_integer_operands(op, lhs, rhs, diagnostics, span);
+                Some(TypedExpr {
+                    kind: TypedExprKind::Binary {
+                        op,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    },
+                    ty: Type::new(ScalarType::U8),
+                    span,
+                    value_category: ValueCategory::RValue,
+                })
+            }
+            BinaryOp::Add | BinaryOp::Sub => {
+                let lhs = self.analyze_expr(lhs, diagnostics)?;
+                let rhs = self.analyze_expr(rhs, diagnostics)?;
+                self.analyze_add_sub_expr(op, lhs, rhs, span, diagnostics)
+            }
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Multiply
+            | BinaryOp::Divide
+            | BinaryOp::Modulo => {
+                let lhs = self.analyze_expr(lhs, diagnostics)?;
+                let rhs = self.analyze_expr(rhs, diagnostics)?;
+                let (lhs, rhs, result_ty) =
+                    self.balance_integer_operands(op, lhs, rhs, diagnostics, span);
+                Some(TypedExpr {
+                    kind: TypedExprKind::Binary {
+                        op,
                         lhs: Box::new(lhs),
                         rhs: Box::new(rhs),
                     },
                     ty: result_ty,
-                    span: expr.span,
-                }
+                    span,
+                    value_category: ValueCategory::RValue,
+                })
             }
-            ExprKind::Assign { target, value } => {
-                let target = self.analyze_expr(target, diagnostics)?;
-                let TypedExprKind::Symbol(target_symbol) = target.kind else {
-                    diagnostics.error(
-                        "semantic",
-                        Some(target.span),
-                        "left side of assignment must be an lvalue name",
-                        None,
-                    );
-                    return None;
-                };
-                let value = self.analyze_expr(value, diagnostics)?;
-                let coerced = self.coerce_expr(
-                    value,
-                    self.symbols[target_symbol].ty,
-                    diagnostics,
-                    "assignment",
-                    true,
-                );
-                TypedExpr {
-                    kind: TypedExprKind::Assign {
-                        target: target_symbol,
-                        value: Box::new(coerced),
-                    },
-                    ty: self.symbols[target_symbol].ty,
-                    span: expr.span,
-                }
-            }
-            ExprKind::Call { callee, args } => {
-                let Some(function) = self.globals_by_name.get(callee).copied() else {
-                    diagnostics.error(
-                        "semantic",
-                        Some(expr.span),
-                        format!("undefined function `{callee}`"),
-                        None,
-                    );
-                    return None;
-                };
-                if self.symbols[function].kind != SymbolKind::Function {
-                    diagnostics.error(
-                        "semantic",
-                        Some(expr.span),
-                        format!("symbol `{callee}` is not callable"),
-                        None,
-                    );
-                    return None;
-                }
-                self.symbols[function].is_referenced = true;
-
-                let parameter_types = self.symbols[function].parameter_types.clone();
-                if args.len() != parameter_types.len() {
-                    diagnostics.error(
-                        "semantic",
-                        Some(expr.span),
-                        format!(
-                            "function `{callee}` expects {} argument(s), got {}",
-                            parameter_types.len(),
-                            args.len()
-                        ),
-                        None,
-                    );
-                }
-
-                let mut typed_args = Vec::new();
-                for (index, argument) in args.iter().enumerate() {
-                    let Some(arg) = self.analyze_expr(argument, diagnostics) else {
-                        continue;
-                    };
-                    let Some(param_ty) = parameter_types.get(index).copied() else {
-                        typed_args.push(arg);
-                        continue;
-                    };
-                    typed_args.push(self.coerce_expr(arg, param_ty, diagnostics, "function argument", true));
-                }
-                TypedExpr {
-                    kind: TypedExprKind::Call {
-                        function,
-                        args: typed_args,
-                    },
-                    ty: self.symbols[function].ty,
-                    span: expr.span,
-                }
-            }
-        };
-        Some(typed)
+        }
     }
 
-    /// Harmonizes binary operand widths and signedness before typed expression construction.
-    fn balance_binary_operands(
+    /// Analyzes equality and inequality across integers, matching pointers, and null.
+    fn analyze_equality_expr(
+        &mut self,
+        op: BinaryOp,
+        lhs: TypedExpr,
+        rhs: TypedExpr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        if lhs.ty.is_pointer() || rhs.ty.is_pointer() {
+            let (lhs, rhs) = self.balance_pointer_operands(lhs, rhs, diagnostics, span)?;
+            return Some(TypedExpr {
+                kind: TypedExprKind::Binary {
+                    op,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+                ty: Type::new(ScalarType::U8),
+                span,
+                value_category: ValueCategory::RValue,
+            });
+        }
+
+        let (lhs, rhs, _) = self.balance_integer_operands(op, lhs, rhs, diagnostics, span);
+        Some(TypedExpr {
+            kind: TypedExprKind::Binary {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            },
+            ty: Type::new(ScalarType::U8),
+            span,
+            value_category: ValueCategory::RValue,
+        })
+    }
+
+    /// Analyzes integer arithmetic plus constrained pointer-plus-or-minus-integer forms.
+    fn analyze_add_sub_expr(
+        &mut self,
+        op: BinaryOp,
+        lhs: TypedExpr,
+        rhs: TypedExpr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        if lhs.ty.is_pointer() || rhs.ty.is_pointer() {
+            match op {
+                BinaryOp::Add => {
+                    if lhs.ty.is_pointer() && rhs.ty.is_integer() {
+                        return Some(self.build_pointer_offset_expr(op, lhs, rhs, span, diagnostics));
+                    }
+                    if lhs.ty.is_integer() && rhs.ty.is_pointer() {
+                        return Some(self.build_pointer_offset_expr(op, rhs, lhs, span, diagnostics));
+                    }
+                }
+                BinaryOp::Sub => {
+                    if lhs.ty.is_pointer() && rhs.ty.is_integer() {
+                        return Some(self.build_pointer_offset_expr(op, lhs, rhs, span, diagnostics));
+                    }
+                }
+                _ => {}
+            }
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "unsupported pointer arithmetic form in phase 3",
+                Some("use pointer +/- integer only".to_string()),
+            );
+            return None;
+        }
+
+        let (lhs, rhs, result_ty) = self.balance_integer_operands(op, lhs, rhs, diagnostics, span);
+        Some(TypedExpr {
+            kind: TypedExprKind::Binary {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            },
+            ty: result_ty,
+            span,
+            value_category: ValueCategory::RValue,
+        })
+    }
+
+    /// Lowers one indexing expression into pointer arithmetic followed by dereference.
+    fn analyze_index_expr(
+        &mut self,
+        base: &Expr,
+        index: &Expr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        let base = self.analyze_expr(base, diagnostics)?;
+        let index = self.analyze_expr(index, diagnostics)?;
+        if !base.ty.is_pointer() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "indexing requires an array or supported data pointer",
+                None,
+            );
+            return None;
+        }
+        if !index.ty.is_integer() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "array and pointer indices must be integers",
+                None,
+            );
+            return None;
+        }
+
+        let element_ty = base.ty.element_type();
+        if !element_ty.is_supported_pointer_target() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("indexed element type `{}` is not supported in phase 3", element_ty),
+                None,
+            );
+            return None;
+        }
+
+        let scaled = self.scale_index_expr(index, element_ty, diagnostics);
+        let address = TypedExpr {
+            kind: TypedExprKind::Binary {
+                op: BinaryOp::Add,
+                lhs: Box::new(base.clone()),
+                rhs: Box::new(scaled),
+            },
+            ty: base.ty,
+            span,
+            value_category: ValueCategory::RValue,
+        };
+        Some(TypedExpr {
+            kind: TypedExprKind::Deref(Box::new(address)),
+            ty: element_ty,
+            span,
+            value_category: ValueCategory::LValue,
+        })
+    }
+
+    /// Analyzes one assignment and preserves the target place for later lowering.
+    fn analyze_assign_expr(
+        &mut self,
+        target: &Expr,
+        value: &Expr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        let target = self.analyze_expr_with_decay(target, diagnostics, false)?;
+        if !self.is_assignable_lvalue(&target) {
+            diagnostics.error(
+                "semantic",
+                Some(target.span),
+                "left side of assignment must be an assignable lvalue",
+                None,
+            );
+            return None;
+        }
+        let value = self.analyze_expr(value, diagnostics)?;
+        let target_ty = target.ty;
+        let value = self.coerce_expr(value, target_ty, diagnostics, "assignment", true);
+        Some(TypedExpr {
+            kind: TypedExprKind::Assign {
+                target: Box::new(target),
+                value: Box::new(value),
+            },
+            ty: target_ty,
+            span,
+            value_category: ValueCategory::RValue,
+        })
+    }
+
+    /// Analyzes one direct function call within the current fixed-argument ABI.
+    fn analyze_call_expr(
+        &mut self,
+        callee: &str,
+        args: &[Expr],
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        let Some(function) = self.globals_by_name.get(callee).copied() else {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("undefined function `{callee}`"),
+                None,
+            );
+            return None;
+        };
+        if self.symbols[function].kind != SymbolKind::Function {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("symbol `{callee}` is not callable"),
+                None,
+            );
+            return None;
+        }
+        self.symbols[function].is_referenced = true;
+
+        let parameter_types = self.symbols[function].parameter_types.clone();
+        if args.len() != parameter_types.len() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!(
+                    "function `{callee}` expects {} argument(s), got {}",
+                    parameter_types.len(),
+                    args.len()
+                ),
+                None,
+            );
+        }
+
+        let mut typed_args = Vec::new();
+        for (index, argument) in args.iter().enumerate() {
+            let Some(arg) = self.analyze_expr(argument, diagnostics) else {
+                continue;
+            };
+            let Some(param_ty) = parameter_types.get(index).copied() else {
+                typed_args.push(arg);
+                continue;
+            };
+            typed_args.push(self.coerce_expr(arg, param_ty, diagnostics, "function argument", true));
+        }
+        Some(TypedExpr {
+            kind: TypedExprKind::Call {
+                function,
+                args: typed_args,
+            },
+            ty: self.symbols[function].ty,
+            span,
+            value_category: ValueCategory::RValue,
+        })
+    }
+
+    /// Analyzes `sizeof(expr)` without triggering array decay on the operand.
+    fn analyze_sizeof_expr(
+        &mut self,
+        expr: &Expr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        let value = self.analyze_expr_with_decay(expr, diagnostics, false)?;
+        self.build_sizeof_value(value.ty, span, diagnostics)
+    }
+
+    /// Analyzes `sizeof(type)` over the constrained Phase 3 type model.
+    fn analyze_sizeof_type(
+        &mut self,
+        ty: Type,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        self.build_sizeof_value(ty, span, diagnostics)
+    }
+
+    /// Materializes a compile-time `sizeof` result as an unsigned 16-bit literal.
+    fn build_sizeof_value(
+        &mut self,
+        ty: Type,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        if !ty.has_size() || !ty.is_supported_object_type() && !ty.is_supported_value_type() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("`sizeof` does not support incomplete or unsupported type `{}`", ty),
+                None,
+            );
+            return None;
+        }
+        Some(TypedExpr {
+            kind: TypedExprKind::IntLiteral(ty.byte_width() as i64),
+            ty: Type::new(ScalarType::U16),
+            span,
+            value_category: ValueCategory::RValue,
+        })
+    }
+
+    /// Applies C-style array decay from an lvalue array object to a data pointer value.
+    fn decay_array_expr(&mut self, expr: TypedExpr, span: Span) -> TypedExpr {
+        TypedExpr {
+            ty: expr.ty.decay(),
+            span,
+            kind: TypedExprKind::ArrayDecay(Box::new(expr)),
+            value_category: ValueCategory::RValue,
+        }
+    }
+
+    /// Harmonizes integer operand widths and signedness before arithmetic or compare lowering.
+    fn balance_integer_operands(
         &mut self,
         op: BinaryOp,
         lhs: TypedExpr,
@@ -744,7 +1201,7 @@ impl<'a> SemanticAnalyzer<'a> {
             diagnostics.error(
                 "semantic",
                 Some(span),
-                "binary operator requires integer operands",
+                format!("`{op:?}` requires integer operands"),
                 None,
             );
             return (lhs, rhs, Type::new(ScalarType::U8));
@@ -781,13 +1238,115 @@ impl<'a> SemanticAnalyzer<'a> {
             "semantic",
             Some(span),
             format!(
-                "mixed signedness for `{op:?}` with equal-width operands is not supported in phase 2"
+                "mixed signedness for `{op:?}` with equal-width operands is not supported in phase 3"
             ),
-            Some("use matching signedness or add an explicit narrowing/widening step".to_string()),
+            Some("use matching signedness or add an explicit cast".to_string()),
         );
         let result_ty = lhs.ty;
         let rhs = self.coerce_expr(rhs, lhs.ty, diagnostics, "binary operand", false);
         (lhs, rhs, result_ty)
+    }
+
+    /// Harmonizes supported pointer comparisons, including explicit null pointer constants.
+    fn balance_pointer_operands(
+        &mut self,
+        lhs: TypedExpr,
+        rhs: TypedExpr,
+        diagnostics: &mut DiagnosticBag,
+        span: Span,
+    ) -> Option<(TypedExpr, TypedExpr)> {
+        if lhs.ty.is_pointer() && rhs.ty.is_pointer() {
+            if lhs.ty.same_pointer_target(rhs.ty) {
+                return Some((lhs, rhs));
+            }
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!(
+                    "pointer comparison requires matching pointee types, got `{}` and `{}`",
+                    lhs.ty, rhs.ty
+                ),
+                None,
+            );
+            return None;
+        }
+
+        if lhs.ty.is_pointer() && self.is_null_pointer_constant(&rhs) {
+            let rhs = self.coerce_expr(rhs, lhs.ty, diagnostics, "pointer comparison", false);
+            return Some((lhs, rhs));
+        }
+        if rhs.ty.is_pointer() && self.is_null_pointer_constant(&lhs) {
+            let lhs = self.coerce_expr(lhs, rhs.ty, diagnostics, "pointer comparison", false);
+            return Some((lhs, rhs));
+        }
+
+        diagnostics.error(
+            "semantic",
+            Some(span),
+            "unsupported pointer comparison operands",
+            Some("compare matching pointer types or compare against literal zero".to_string()),
+        );
+        None
+    }
+
+    /// Builds one pointer-plus-or-minus-integer expression with element-size-aware scaling.
+    fn build_pointer_offset_expr(
+        &mut self,
+        op: BinaryOp,
+        pointer: TypedExpr,
+        offset: TypedExpr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> TypedExpr {
+        let scaled = self.scale_index_expr(offset, pointer.ty.element_type(), diagnostics);
+        TypedExpr {
+            kind: TypedExprKind::Binary {
+                op,
+                lhs: Box::new(pointer.clone()),
+                rhs: Box::new(scaled),
+            },
+            ty: pointer.ty,
+            span,
+            value_category: ValueCategory::RValue,
+        }
+    }
+
+    /// Scales one integer index by the pointee size used by array and pointer indexing.
+    fn scale_index_expr(
+        &mut self,
+        expr: TypedExpr,
+        element_ty: Type,
+        diagnostics: &mut DiagnosticBag,
+    ) -> TypedExpr {
+        let span = expr.span;
+        let expr = self.coerce_expr(
+            expr,
+            Type::new(ScalarType::U16),
+            diagnostics,
+            "index expression",
+            true,
+        );
+        if element_ty.byte_width() == 1 {
+            return expr;
+        }
+        if let TypedExprKind::IntLiteral(value) = expr.kind {
+            return TypedExpr {
+                kind: TypedExprKind::IntLiteral(value * element_ty.byte_width() as i64),
+                ty: Type::new(ScalarType::U16),
+                span,
+                value_category: ValueCategory::RValue,
+            };
+        }
+        TypedExpr {
+            kind: TypedExprKind::Binary {
+                op: BinaryOp::Add,
+                lhs: Box::new(expr.clone()),
+                rhs: Box::new(expr),
+            },
+            ty: Type::new(ScalarType::U16),
+            span,
+            value_category: ValueCategory::RValue,
+        }
     }
 
     /// Inserts an explicit semantic cast or literal retagging to reach a target type.
@@ -800,6 +1359,35 @@ impl<'a> SemanticAnalyzer<'a> {
         warn_on_truncate: bool,
     ) -> TypedExpr {
         if expr.ty == target_ty {
+            return expr;
+        }
+        if target_ty.is_pointer() {
+            if expr.ty.is_pointer() && expr.ty.same_pointer_target(target_ty) {
+                let span = expr.span;
+                return TypedExpr {
+                    kind: TypedExprKind::Cast {
+                        kind: CastKind::Bitcast,
+                        expr: Box::new(expr),
+                    },
+                    ty: target_ty,
+                    span,
+                    value_category: ValueCategory::RValue,
+                };
+            }
+            if self.is_null_pointer_constant(&expr) {
+                return TypedExpr {
+                    kind: TypedExprKind::IntLiteral(0),
+                    ty: target_ty,
+                    span: expr.span,
+                    value_category: ValueCategory::RValue,
+                };
+            }
+            diagnostics.error(
+                "semantic",
+                Some(expr.span),
+                format!("cannot coerce `{}` to `{}` in {context}", expr.ty, target_ty),
+                Some("only matching pointer types and literal zero are supported".to_string()),
+            );
             return expr;
         }
         if !expr.ty.is_integer() || !target_ty.is_integer() {
@@ -826,6 +1414,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 kind: expr.kind,
                 ty: target_ty,
                 span: expr.span,
+                value_category: ValueCategory::RValue,
             };
         }
 
@@ -849,6 +1438,90 @@ impl<'a> SemanticAnalyzer<'a> {
             },
             ty: target_ty,
             span,
+            value_category: ValueCategory::RValue,
+        }
+    }
+
+    /// Returns true when one typed expression is the literal zero null-pointer constant.
+    fn is_null_pointer_constant(&self, expr: &TypedExpr) -> bool {
+        matches!(expr.kind, TypedExprKind::IntLiteral(0))
+    }
+
+    /// Returns true when one expression can appear on the left side of assignment.
+    fn is_assignable_lvalue(&self, expr: &TypedExpr) -> bool {
+        expr.value_category == ValueCategory::LValue
+            && !expr.ty.is_array()
+            && !expr.ty.qualifiers.is_const
+            && matches!(expr.kind, TypedExprKind::Symbol(_) | TypedExprKind::Deref(_))
+    }
+
+    /// Validates one return type against the constrained Phase 3 ABI.
+    fn validate_return_type(
+        &mut self,
+        ty: Type,
+        span: Span,
+        name: &str,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        if ty.is_void() {
+            return;
+        }
+        if !ty.is_supported_value_type() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("function `{name}` uses unsupported return type `{ty}`"),
+                None,
+            );
+        }
+    }
+
+    /// Validates one parameter type against the fixed Phase 3 call ABI.
+    fn validate_param_type(
+        &mut self,
+        ty: Type,
+        span: Span,
+        name: &str,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        if ty.is_void() || !ty.is_supported_value_type() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("parameter `{name}` uses unsupported type `{ty}`"),
+                None,
+            );
+        }
+    }
+
+    /// Validates one declared object type against the supported array and pointer model.
+    fn validate_object_type(
+        &mut self,
+        ty: Type,
+        span: Span,
+        name: &str,
+        context: &str,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        if ty.is_void() || !ty.is_supported_object_type() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("{context} `{name}` uses unsupported type `{ty}`"),
+                Some(
+                    "phase 3 supports char, unsigned char, int, unsigned int, pointers to them, and one-dimensional arrays of them"
+                        .to_string(),
+                ),
+            );
+        }
+    }
+
+    /// Applies the C parameter-array decay rule to one declared parameter type.
+    fn normalize_param_type(&self, ty: Type) -> Type {
+        if ty.is_array() {
+            ty.decay()
+        } else {
+            ty
         }
     }
 
@@ -981,6 +1654,9 @@ fn is_constant_expression(expr: &TypedExpr) -> bool {
         TypedExprKind::Cast { expr, .. } => is_constant_expression(expr),
         TypedExprKind::Assign { .. }
         | TypedExprKind::Call { .. }
+        | TypedExprKind::ArrayDecay(_)
+        | TypedExprKind::AddressOf(_)
+        | TypedExprKind::Deref(_)
         | TypedExprKind::Symbol(_) => false,
     }
 }
@@ -991,5 +1667,63 @@ fn zero_expr(span: Span) -> TypedExpr {
         kind: TypedExprKind::IntLiteral(0),
         ty: Type::new(ScalarType::I16),
         span,
+        value_category: ValueCategory::RValue,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_constant_expression, ValueCategory};
+    use crate::common::source::Span;
+    use crate::frontend::semantic::{TypedExpr, TypedExprKind};
+    use crate::frontend::types::{ScalarType, Type};
+
+    #[test]
+    /// Verifies `sizeof`-compatible array and pointer types report the expected byte widths.
+    fn phase_three_type_sizes_cover_arrays_and_pointers() {
+        assert_eq!(Type::new(ScalarType::U8).byte_width(), 1);
+        assert_eq!(Type::new(ScalarType::U16).pointer_to().byte_width(), 2);
+        assert_eq!(Type::new(ScalarType::I16).array_of(4).byte_width(), 8);
+    }
+
+    #[test]
+    /// Verifies scalar and array expressions keep distinct value categories.
+    fn phase_three_value_categories_distinguish_places_from_values() {
+        let span = Span::new(0, 0);
+        let lvalue = TypedExpr {
+            kind: TypedExprKind::Symbol(1),
+            ty: Type::new(ScalarType::U8),
+            span,
+            value_category: ValueCategory::LValue,
+        };
+        let rvalue = TypedExpr {
+            kind: TypedExprKind::IntLiteral(3),
+            ty: Type::new(ScalarType::U16),
+            span,
+            value_category: ValueCategory::RValue,
+        };
+
+        assert_eq!(lvalue.value_category, ValueCategory::LValue);
+        assert_eq!(rvalue.value_category, ValueCategory::RValue);
+    }
+
+    #[test]
+    /// Verifies address and decay forms stay out of constant-expression classification.
+    fn phase_three_constant_expr_rejects_memory_address_forms() {
+        let span = Span::new(0, 0);
+        let symbol = TypedExpr {
+            kind: TypedExprKind::Symbol(0),
+            ty: Type::new(ScalarType::U8),
+            span,
+            value_category: ValueCategory::LValue,
+        };
+        let decay = TypedExpr {
+            kind: TypedExprKind::ArrayDecay(Box::new(symbol)),
+            ty: Type::new(ScalarType::U8).pointer_to(),
+            span,
+            value_category: ValueCategory::RValue,
+        };
+
+        assert!(!is_constant_expression(&decay));
     }
 }

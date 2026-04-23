@@ -233,7 +233,16 @@ impl FunctionBuilder {
     fn lower_expr(&mut self, expr: &TypedExpr) -> Operand {
         match &expr.kind {
             TypedExprKind::IntLiteral(value) => Operand::Constant(*value),
-            TypedExprKind::Symbol(symbol) => Operand::Symbol(*symbol),
+            TypedExprKind::Symbol(symbol) => {
+                if expr.ty.is_array() {
+                    self.lower_lvalue_address(expr)
+                } else {
+                    Operand::Symbol(*symbol)
+                }
+            }
+            TypedExprKind::ArrayDecay(value) | TypedExprKind::AddressOf(value) => {
+                self.lower_lvalue_address(value)
+            }
             TypedExprKind::Cast { kind, expr: value } => {
                 let src = self.lower_expr(value);
                 match kind {
@@ -262,6 +271,12 @@ impl FunctionBuilder {
                 });
                 Operand::Temp(dst)
             }
+            TypedExprKind::Deref(pointer) => {
+                let ptr = self.lower_expr(pointer);
+                let dst = self.new_temp(expr.ty);
+                self.emit(IrInstr::LoadIndirect { dst, ptr });
+                Operand::Temp(dst)
+            }
             TypedExprKind::Binary { op, lhs, rhs } => {
                 if is_boolean_like(*op) {
                     return self.lower_boolean_to_value(expr);
@@ -279,10 +294,21 @@ impl FunctionBuilder {
             }
             TypedExprKind::Assign { target, value } => {
                 let value_operand = self.lower_expr(value);
-                self.emit(IrInstr::Store {
-                    target: *target,
-                    value: value_operand,
-                });
+                match &target.kind {
+                    TypedExprKind::Symbol(symbol) => self.emit(IrInstr::Store {
+                        target: *symbol,
+                        value: value_operand,
+                    }),
+                    TypedExprKind::Deref(pointer) => {
+                        let ptr = self.lower_expr(pointer);
+                        self.emit(IrInstr::StoreIndirect {
+                            ptr,
+                            value: value_operand,
+                            ty: target.ty,
+                        });
+                    }
+                    _ => unreachable!("semantic only lowers assignable places here"),
+                }
                 value_operand
             }
             TypedExprKind::Call { function, args } => {
@@ -304,6 +330,30 @@ impl FunctionBuilder {
                     Operand::Temp(dst)
                 }
             }
+        }
+    }
+
+    /// Lowers one lvalue expression into a pointer-valued IR operand.
+    fn lower_lvalue_address(&mut self, expr: &TypedExpr) -> Operand {
+        match &expr.kind {
+            TypedExprKind::Symbol(symbol) => {
+                let ptr_ty = if expr.ty.is_array() {
+                    expr.ty.decay()
+                } else {
+                    expr.ty.pointer_to()
+                };
+                let dst = self.new_temp(ptr_ty);
+                self.emit(IrInstr::AddrOf {
+                    dst,
+                    symbol: *symbol,
+                });
+                Operand::Temp(dst)
+            }
+            TypedExprKind::Deref(pointer) => self.lower_expr(pointer),
+            TypedExprKind::ArrayDecay(value) | TypedExprKind::AddressOf(value) => {
+                self.lower_lvalue_address(value)
+            }
+            _ => unreachable!("semantic only forms addressable lvalues here"),
         }
     }
 
@@ -458,6 +508,7 @@ mod tests {
     use crate::frontend::ast::BinaryOp;
     use crate::frontend::semantic::{
         Symbol, SymbolKind, TypedExpr, TypedExprKind, TypedFunction, TypedProgram, TypedStmt,
+        ValueCategory,
     };
     use crate::frontend::types::{ScalarType, StorageClass, Type};
     use crate::ir::model::{IrCondition, IrInstr, IrTerminator, Operand};
@@ -490,15 +541,18 @@ mod tests {
                                 kind: TypedExprKind::Symbol(1),
                                 ty: u16_ty,
                                 span,
+                                value_category: ValueCategory::LValue,
                             }),
                             rhs: Box::new(TypedExpr {
                                 kind: TypedExprKind::Symbol(2),
                                 ty: u16_ty,
                                 span,
+                                value_category: ValueCategory::LValue,
                             }),
                         },
                         ty: u8_ty,
                         span,
+                        value_category: ValueCategory::RValue,
                     }),
                     span,
                 )),

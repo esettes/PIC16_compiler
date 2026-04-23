@@ -46,6 +46,10 @@ pub enum IrInstr {
         dst: TempId,
         src: Operand,
     },
+    AddrOf {
+        dst: TempId,
+        symbol: SymbolId,
+    },
     Cast {
         dst: TempId,
         kind: CastKind,
@@ -65,6 +69,15 @@ pub enum IrInstr {
     Store {
         target: SymbolId,
         value: Operand,
+    },
+    LoadIndirect {
+        dst: TempId,
+        ptr: Operand,
+    },
+    StoreIndirect {
+        ptr: Operand,
+        value: Operand,
+        ty: Type,
     },
     Call {
         dst: Option<TempId>,
@@ -147,6 +160,7 @@ impl IrFunction {
 fn render_instr(instr: &IrInstr) -> String {
     match instr {
         IrInstr::Copy { dst, src } => format!("t{dst} = {}", render_operand(*src)),
+        IrInstr::AddrOf { dst, symbol } => format!("t{dst} = &s{symbol}"),
         IrInstr::Cast { dst, kind, src } => {
             format!("t{dst} = {kind:?} {}", render_operand(*src))
         }
@@ -159,6 +173,12 @@ fn render_instr(instr: &IrInstr) -> String {
             render_operand(*rhs)
         ),
         IrInstr::Store { target, value } => format!("s{target} = {}", render_operand(*value)),
+        IrInstr::LoadIndirect { dst, ptr } => {
+            format!("t{dst} = *{}", render_operand(*ptr))
+        }
+        IrInstr::StoreIndirect { ptr, value, .. } => {
+            format!("*{} = {}", render_operand(*ptr), render_operand(*value))
+        }
         IrInstr::Call {
             dst,
             function,
