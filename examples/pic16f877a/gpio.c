@@ -1,5 +1,6 @@
 #include <pic16/pic16f877a.h>
 
+/** Toggles the lowest PORTB bit in a tight loop after disabling analog input. */
 void main(void) {
     ADCON1 = 0x06;
     TRISB = 0x00;
@@ -8,4 +9,3 @@ void main(void) {
         PORTB = PORTB ^ 0x01;
     }
 }
-

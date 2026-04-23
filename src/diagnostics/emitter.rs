@@ -8,6 +8,7 @@ pub struct DiagnosticEmitter<'a> {
 }
 
 impl<'a> DiagnosticEmitter<'a> {
+    /// Builds an emitter that can map diagnostic spans back to source lines.
     pub fn new(sources: &'a SourceManager, preprocessed: &'a PreprocessedSource) -> Self {
         Self {
             sources,
@@ -15,6 +16,7 @@ impl<'a> DiagnosticEmitter<'a> {
         }
     }
 
+    /// Prints diagnostics with source context when span information is available.
     pub fn print(&self, bag: &DiagnosticBag) {
         for diagnostic in &bag.diagnostics {
             if let Some(span) = diagnostic.span

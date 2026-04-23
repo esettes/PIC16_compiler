@@ -3,7 +3,7 @@ use std::fmt::Write;
 
 use crate::frontend::ast::{BinaryOp, UnaryOp};
 use crate::frontend::semantic::SymbolId;
-use crate::frontend::types::Type;
+use crate::frontend::types::{CastKind, Type};
 
 pub type TempId = usize;
 pub type BlockId = usize;
@@ -46,6 +46,11 @@ pub enum IrInstr {
         dst: TempId,
         src: Operand,
     },
+    Cast {
+        dst: TempId,
+        kind: CastKind,
+        src: Operand,
+    },
     Unary {
         dst: TempId,
         op: UnaryOp,
@@ -82,25 +87,20 @@ pub enum IrTerminator {
 
 #[derive(Clone, Debug)]
 pub enum IrCondition {
-    NonZero(Operand),
+    NonZero {
+        value: Operand,
+        ty: Type,
+    },
     Compare {
-        op: CompareOp,
+        op: BinaryOp,
         lhs: Operand,
         rhs: Operand,
+        ty: Type,
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CompareOp {
-    Equal,
-    NotEqual,
-    Less,
-    LessEqual,
-    Greater,
-    GreaterEqual,
-}
-
 impl IrProgram {
+    /// Renders the IR program into the textual dump used for debugging artifacts.
     pub fn render(&self) -> String {
         let mut output = String::new();
         for function in &self.functions {
@@ -118,6 +118,7 @@ impl IrProgram {
 }
 
 impl IrFunction {
+    /// Returns the CFG blocks reachable from the function entry block.
     pub fn reachable_blocks(&self) -> BTreeSet<BlockId> {
         let mut visited = BTreeSet::new();
         let mut work = vec![self.entry];
@@ -142,9 +143,13 @@ impl IrFunction {
     }
 }
 
+/// Formats one IR instruction for human-readable dumps.
 fn render_instr(instr: &IrInstr) -> String {
     match instr {
         IrInstr::Copy { dst, src } => format!("t{dst} = {}", render_operand(*src)),
+        IrInstr::Cast { dst, kind, src } => {
+            format!("t{dst} = {kind:?} {}", render_operand(*src))
+        }
         IrInstr::Unary { dst, op, src } => {
             format!("t{dst} = {op:?} {}", render_operand(*src))
         }
@@ -173,6 +178,7 @@ fn render_instr(instr: &IrInstr) -> String {
     }
 }
 
+/// Formats one IR terminator for human-readable dumps.
 fn render_terminator(term: &IrTerminator) -> String {
     match term {
         IrTerminator::Return(value) => format!(
@@ -196,15 +202,17 @@ fn render_terminator(term: &IrTerminator) -> String {
     }
 }
 
+/// Formats one IR branch condition for human-readable dumps.
 fn render_condition(condition: &IrCondition) -> String {
     match condition {
-        IrCondition::NonZero(value) => format!("{} != 0", render_operand(*value)),
-        IrCondition::Compare { op, lhs, rhs } => {
+        IrCondition::NonZero { value, .. } => format!("{} != 0", render_operand(*value)),
+        IrCondition::Compare { op, lhs, rhs, .. } => {
             format!("{} {op:?} {}", render_operand(*lhs), render_operand(*rhs))
         }
     }
 }
 
+/// Formats an IR operand using symbolic temp and symbol ids.
 pub fn render_operand(operand: Operand) -> String {
     match operand {
         Operand::Constant(value) => value.to_string(),

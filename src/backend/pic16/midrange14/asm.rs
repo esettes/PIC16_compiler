@@ -48,14 +48,17 @@ pub enum AsmInstr {
 }
 
 impl AsmProgram {
+    /// Creates an empty assembly program buffer.
     pub fn new() -> Self {
         Self { lines: Vec::new() }
     }
 
+    /// Appends one assembly line without altering label or address state.
     pub fn push(&mut self, line: AsmLine) {
         self.lines.push(line);
     }
 
+    /// Renders assembly lines into the textual `.asm` artifact format.
     pub fn render(&self) -> String {
         let mut output = String::new();
         for line in &self.lines {
@@ -79,12 +82,14 @@ impl AsmProgram {
 }
 
 impl Default for AsmProgram {
+    /// Creates an empty assembly program.
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl AsmInstr {
+    /// Returns the encoded word count for an assembly instruction or pseudo-op.
     pub const fn word_len(&self) -> u16 {
         match self {
             Self::SetPage(_) => 4,
@@ -93,6 +98,7 @@ impl AsmInstr {
     }
 }
 
+/// Formats one assembly instruction using the listing/assembly artifact syntax.
 pub fn render_instr(instr: &AsmInstr) -> String {
     match instr {
         AsmInstr::Nop => "nop".to_string(),
@@ -122,6 +128,7 @@ pub fn render_instr(instr: &AsmInstr) -> String {
     }
 }
 
+/// Formats a destination selector as the PIC16 assembler expects.
 fn render_dest(dest: Dest) -> &'static str {
     match dest {
         Dest::W => "w",

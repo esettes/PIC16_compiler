@@ -75,6 +75,7 @@ pub struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
+    /// Creates a lexer over preprocessed source text and a shared diagnostic bag.
     pub fn new(source: &'a PreprocessedSource, diagnostics: &'a mut DiagnosticBag) -> Self {
         Self {
             source,
@@ -83,6 +84,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Tokenizes the full input stream and appends an explicit EOF token.
     pub fn tokenize(&mut self) -> Vec<Token> {
         let mut tokens = Vec::new();
         loop {
@@ -96,6 +98,7 @@ impl<'a> Lexer<'a> {
         tokens
     }
 
+    /// Tokenizes the input and renders token kinds for debug artifact output.
     pub fn collect_debug(mut self) -> String {
         let mut output = String::new();
         for token in self.tokenize() {
@@ -104,6 +107,7 @@ impl<'a> Lexer<'a> {
         output
     }
 
+    /// Scans the next token while updating the current byte index.
     fn next_token(&mut self) -> Token {
         self.skip_whitespace_and_comments();
         if self.index >= self.source.text.len() {
@@ -204,6 +208,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Recognizes multi-character punctuation before single-character token fallback.
     fn try_double_symbol(&mut self) -> Option<Symbol> {
         let rest = &self.source.text[self.index..];
         let table = [
@@ -223,6 +228,7 @@ impl<'a> Lexer<'a> {
         None
     }
 
+    /// Skips whitespace plus line and block comments before token scanning continues.
     fn skip_whitespace_and_comments(&mut self) {
         let bytes = self.source.text.as_bytes();
         while self.index < bytes.len() {
@@ -259,6 +265,7 @@ impl<'a> Lexer<'a> {
     }
 }
 
+/// Reclassifies an identifier as a keyword when it matches the supported C subset.
 fn keyword_or_ident(text: &str) -> TokenKind {
     let keyword = match text {
         "char" => Some(Keyword::Char),

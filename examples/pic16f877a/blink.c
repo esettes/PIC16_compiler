@@ -1,5 +1,6 @@
 #include <pic16/pic16f877a.h>
 
+/** Provides a small software delay for visible LED blinking on PORTC. */
 void delay_tick(void) {
     unsigned char i = 16;
     while (i != 0) {
@@ -7,6 +8,7 @@ void delay_tick(void) {
     }
 }
 
+/** Configures digital I/O on PIC16F877A and blinks a PORTC bit forever. */
 void main(void) {
     ADCON1 = 0x06;
     TRISC = 0x00;
@@ -18,4 +20,3 @@ void main(void) {
         delay_tick();
     }
 }
-

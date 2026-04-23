@@ -27,6 +27,7 @@ pub struct Preprocessor<'a> {
 }
 
 impl<'a> Preprocessor<'a> {
+    /// Creates a preprocessor with target macros, user defines, and include search paths.
     pub fn new(
         target: &'a TargetDevice,
         include_dirs: Vec<PathBuf>,
@@ -46,6 +47,7 @@ impl<'a> Preprocessor<'a> {
         }
     }
 
+    /// Expands one translation unit into preprocessed text with source-origin tracking.
     pub fn process(
         &mut self,
         main_source: SourceId,
@@ -69,6 +71,7 @@ impl<'a> Preprocessor<'a> {
         }
     }
 
+    /// Processes one source file, recursively handling nested includes and directives.
     fn process_file(
         &mut self,
         source_id: SourceId,
@@ -113,6 +116,7 @@ impl<'a> Preprocessor<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Handles one preprocessor directive line in the context of the current condition stack.
     fn handle_directive(
         &mut self,
         current_path: &Path,
@@ -182,7 +186,7 @@ impl<'a> Preprocessor<'a> {
                     diagnostics.error(
                         "preprocessor",
                         None,
-                        format!("function-like macro `{name}` unsupported in v0.1"),
+                        format!("function-like macro `{name}` is not implemented"),
                         None,
                     );
                     return;
@@ -237,7 +241,7 @@ impl<'a> Preprocessor<'a> {
                     None,
                     format!("unsupported preprocessor directive `#{directive}`"),
                     Some(
-                        "v0.1 supports #include, #define, #undef, #if, #ifdef, #ifndef, #else, #endif"
+                        "supported directives: #include, #define, #undef, #if, #ifdef, #ifndef, #else, #endif"
                             .to_string(),
                     ),
                 );
@@ -249,6 +253,7 @@ impl<'a> Preprocessor<'a> {
         }
     }
 
+    /// Resolves an include path against the current file, user paths, and builtin include dir.
     fn resolve_include(&self, current_path: &Path, include: &str) -> Option<PathBuf> {
         let current_dir = current_path.parent().unwrap_or_else(|| Path::new("."));
         let local_candidate = current_dir.join(include);
@@ -268,6 +273,7 @@ impl<'a> Preprocessor<'a> {
         None
     }
 
+    /// Expands object-like macros in a line and guards against runaway recursion.
     fn expand_line(
         &self,
         line: &str,
@@ -292,6 +298,7 @@ impl<'a> Preprocessor<'a> {
         current
     }
 
+    /// Evaluates the limited `#if` expression syntax supported by the current preprocessor.
     fn evaluate_if_expression(&self, expression: &str) -> bool {
         let trimmed = expression.trim();
         if trimmed.starts_with("defined(") && trimmed.ends_with(')') {
@@ -308,6 +315,7 @@ impl<'a> Preprocessor<'a> {
     }
 }
 
+/// Splits a directive line into its directive keyword and trailing payload.
 fn split_directive(content: &str) -> (&str, &str) {
     if let Some(index) = content.find(char::is_whitespace) {
         (&content[..index], content[index..].trim())
@@ -316,6 +324,7 @@ fn split_directive(content: &str) -> (&str, &str) {
     }
 }
 
+/// Parses `#include` syntax and returns the raw path between quotes or angle brackets.
 fn parse_include(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.starts_with('"') && trimmed.ends_with('"') {
@@ -327,6 +336,7 @@ fn parse_include(raw: &str) -> Option<String> {
     None
 }
 
+/// Pushes a new conditional-compilation frame derived from the current parent state.
 fn push_condition(conditions: &mut Vec<ConditionFrame>, active_branch: bool) {
     let parent_active = is_active(conditions);
     conditions.push(ConditionFrame {
@@ -336,10 +346,12 @@ fn push_condition(conditions: &mut Vec<ConditionFrame>, active_branch: bool) {
     });
 }
 
+/// Returns true when all active preprocessor condition frames allow emission.
 fn is_active(conditions: &[ConditionFrame]) -> bool {
     conditions.iter().all(|frame| frame.current_active)
 }
 
+/// Expands identifiers using object-like macro definitions while preserving strings.
 fn expand_identifiers(line: &str, macros: &BTreeMap<String, MacroDef>) -> String {
     let mut output = String::new();
     let chars: Vec<char> = line.chars().collect();
@@ -382,4 +394,3 @@ fn expand_identifiers(line: &str, macros: &BTreeMap<String, MacroDef>) -> String
     }
     output
 }
-

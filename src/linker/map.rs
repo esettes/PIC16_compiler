@@ -6,6 +6,7 @@ pub struct MapFile {
     pub data_symbols: Vec<(String, u16)>,
 }
 
+/// Renders the linker map with code and data symbol addresses.
 pub fn render_map(map: &MapFile) -> String {
     let mut output = String::new();
     let _ = writeln!(output, "Code Symbols");

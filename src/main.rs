@@ -1,5 +1,6 @@
 use pic16cc::{cli::CliOptions, execute};
 
+/// Runs the CLI compiler entrypoint and reports fatal parse or compile failures.
 fn main() {
     let options = match CliOptions::parse(std::env::args().collect()) {
         Ok(options) => options,
@@ -17,4 +18,3 @@ fn main() {
         }
     }
 }
-

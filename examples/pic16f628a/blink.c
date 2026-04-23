@@ -1,5 +1,6 @@
 #include <pic16/pic16f628a.h>
 
+/** Provides a small software delay for visible LED blinking on PORTB. */
 void delay_tick(void) {
     unsigned char i = 8;
     while (i != 0) {
@@ -7,6 +8,7 @@ void delay_tick(void) {
     }
 }
 
+/** Configures PORTB as output and blinks a single bit forever. */
 void main(void) {
     TRISB = 0x00;
     PORTB = 0x00;
@@ -17,4 +19,3 @@ void main(void) {
         delay_tick();
     }
 }
-

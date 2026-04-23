@@ -1,5 +1,6 @@
 #include <pic16/pic16f628a.h>
 
+/** Polls TMR0 and toggles PORTB whenever the timer advances from zero. */
 void main(void) {
     TRISB = 0x00;
     TMR0 = 0x00;
@@ -10,4 +11,3 @@ void main(void) {
         }
     }
 }
-

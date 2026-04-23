@@ -1,5 +1,6 @@
 #include <pic16/pic16f877a.h>
 
+/** Polls TMR0 and toggles PORTD whenever the timer advances from zero. */
 void main(void) {
     ADCON1 = 0x06;
     TRISD = 0x00;
@@ -11,4 +12,3 @@ void main(void) {
         }
     }
 }
-

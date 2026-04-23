@@ -49,6 +49,7 @@ pub struct CompileCommand {
 }
 
 impl CliOptions {
+    /// Parses command-line arguments into a compile, help, version, or target-list command.
     pub fn parse(args: Vec<String>) -> Result<Self, String> {
         let mut iter = args.into_iter();
         let _program = iter.next();
@@ -115,7 +116,10 @@ impl CliOptions {
                     if input.is_none() {
                         input = Some(PathBuf::from(argument));
                     } else {
-                        return Err("only one input source file is supported in v0.1".to_string());
+                        return Err(
+                            "only one input source file is supported in current single-file mode"
+                                .to_string(),
+                        );
                     }
                 }
             }
@@ -147,6 +151,7 @@ impl CliOptions {
     }
 }
 
+/// Parses one `-D` argument and rejects unsupported function-like macro syntax.
 fn parse_define(raw: &str, defines: &mut BTreeMap<String, String>) -> Result<(), String> {
     if raw.is_empty() {
         return Err("empty -D value".to_string());
@@ -158,13 +163,14 @@ fn parse_define(raw: &str, defines: &mut BTreeMap<String, String>) -> Result<(),
     };
     if name.contains('(') {
         return Err(format!(
-            "function-like macro `{name}` unsupported in v0.1; only object-like #define/-D macros"
+            "function-like macro `{name}` unsupported; only object-like #define/-D macros are implemented"
         ));
     }
     defines.insert(name.to_string(), value.to_string());
     Ok(())
 }
 
+/// Returns the static CLI help text shown for `--help` and argument errors.
 pub fn help_text() -> &'static str {
     "\
 pic16cc 0.1.0
@@ -194,6 +200,7 @@ Options:
 }
 
 impl Display for OptimizationLevel {
+    /// Formats an optimization level using CLI-compatible flag text.
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         let text = match self {
             Self::O0 => "O0",

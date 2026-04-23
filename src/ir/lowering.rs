@@ -2,12 +2,11 @@ use crate::frontend::ast::{BinaryOp, UnaryOp};
 use crate::frontend::semantic::{
     SymbolId, TypedExpr, TypedExprKind, TypedFunction, TypedProgram, TypedStmt,
 };
-use crate::frontend::types::{ScalarType, Type};
+use crate::frontend::types::{CastKind, ScalarType, Type};
 use crate::diagnostics::DiagnosticBag;
 
 use super::model::{
-    BlockId, CompareOp, IrBlock, IrCondition, IrFunction, IrInstr, IrProgram, IrTerminator,
-    Operand, TempId,
+    BlockId, IrBlock, IrCondition, IrFunction, IrInstr, IrProgram, IrTerminator, Operand, TempId,
 };
 
 pub struct IrLowerer<'a> {
@@ -15,10 +14,12 @@ pub struct IrLowerer<'a> {
 }
 
 impl<'a> IrLowerer<'a> {
+    /// Creates an IR lowerer bound to one target descriptor.
     pub fn new(target: &'a crate::backend::pic16::devices::TargetDevice) -> Self {
         Self { _target: target }
     }
 
+    /// Lowers a fully typed program into CFG-based IR for optimization and backend codegen.
     pub fn lower(&self, program: &TypedProgram, diagnostics: &mut DiagnosticBag) -> IrProgram {
         let globals = program.globals.iter().map(|global| global.symbol).collect();
         let mut functions = Vec::new();
@@ -45,6 +46,7 @@ struct FunctionBuilder {
 }
 
 impl FunctionBuilder {
+    /// Initializes a function-level builder around a typed function body.
     fn new(symbol: SymbolId, function: &TypedFunction, body: TypedStmt) -> Self {
         Self {
             symbol,
@@ -64,6 +66,7 @@ impl FunctionBuilder {
         }
     }
 
+    /// Lowers the stored typed body and finalizes a complete IR function.
     fn lower(&mut self, _diagnostics: &mut DiagnosticBag) -> IrFunction {
         let body = self.body.clone();
         self.lower_stmt(&body);
@@ -85,6 +88,7 @@ impl FunctionBuilder {
         }
     }
 
+    /// Lowers one typed statement into the current IR block graph.
     fn lower_stmt(&mut self, stmt: &TypedStmt) {
         match stmt {
             TypedStmt::Block(statements, _) => {
@@ -225,12 +229,31 @@ impl FunctionBuilder {
         }
     }
 
+    /// Lowers one typed expression into an IR operand, creating temps as needed.
     fn lower_expr(&mut self, expr: &TypedExpr) -> Operand {
         match &expr.kind {
             TypedExprKind::IntLiteral(value) => Operand::Constant(*value),
             TypedExprKind::Symbol(symbol) => Operand::Symbol(*symbol),
-            TypedExprKind::Unary { op, expr } => {
-                let src = self.lower_expr(expr);
+            TypedExprKind::Cast { kind, expr: value } => {
+                let src = self.lower_expr(value);
+                match kind {
+                    CastKind::Bitcast if value.ty.bit_width() == expr.ty.bit_width() => src,
+                    _ => {
+                        let dst = self.new_temp(expr.ty);
+                        self.emit(IrInstr::Cast {
+                            dst,
+                            kind: *kind,
+                            src,
+                        });
+                        Operand::Temp(dst)
+                    }
+                }
+            }
+            TypedExprKind::Unary { op, expr: operand } => {
+                if *op == UnaryOp::LogicalNot {
+                    return self.lower_boolean_to_value(expr);
+                }
+                let src = self.lower_expr(operand);
                 let dst = self.new_temp(expr.ty);
                 self.emit(IrInstr::Unary {
                     dst,
@@ -284,6 +307,7 @@ impl FunctionBuilder {
         }
     }
 
+    /// Materializes a boolean-like expression as a normalized `0` or `1` temp.
     fn lower_boolean_to_value(&mut self, expr: &TypedExpr) -> Operand {
         let result = self.new_temp(Type::new(ScalarType::U8));
         let true_block = self.new_block("bool.true");
@@ -309,6 +333,7 @@ impl FunctionBuilder {
         Operand::Temp(result)
     }
 
+    /// Lowers a typed expression in branch position into an IR condition terminator.
     fn lower_condition(&mut self, expr: &TypedExpr, then_block: BlockId, else_block: BlockId) {
         match &expr.kind {
             TypedExprKind::Unary {
@@ -336,13 +361,15 @@ impl FunctionBuilder {
                 self.lower_condition(rhs, then_block, else_block);
             }
             TypedExprKind::Binary { op, lhs, rhs } if is_comparison(*op) => {
+                let compare_ty = lhs.ty;
                 let lhs = self.lower_expr(lhs);
                 let rhs = self.lower_expr(rhs);
                 self.blocks[self.current].terminator = IrTerminator::Branch {
                     condition: IrCondition::Compare {
-                        op: compare_op(*op),
+                        op: *op,
                         lhs,
                         rhs,
+                        ty: compare_ty,
                     },
                     then_block,
                     else_block,
@@ -351,7 +378,10 @@ impl FunctionBuilder {
             _ => {
                 let value = self.lower_expr(expr);
                 self.blocks[self.current].terminator = IrTerminator::Branch {
-                    condition: IrCondition::NonZero(value),
+                    condition: IrCondition::NonZero {
+                        value,
+                        ty: expr.ty,
+                    },
                     then_block,
                     else_block,
                 };
@@ -359,16 +389,19 @@ impl FunctionBuilder {
         }
     }
 
+    /// Appends one instruction to the current IR block.
     fn emit(&mut self, instr: IrInstr) {
         self.blocks[self.current].instructions.push(instr);
     }
 
+    /// Allocates a new temp id and records its type for later passes and codegen.
     fn new_temp(&mut self, ty: Type) -> TempId {
         let id = self.temp_types.len();
         self.temp_types.push(ty);
         id
     }
 
+    /// Creates a new CFG block and returns its block id.
     fn new_block(&mut self, name: &str) -> BlockId {
         let id = self.blocks.len();
         self.blocks.push(IrBlock {
@@ -380,6 +413,7 @@ impl FunctionBuilder {
         id
     }
 
+    /// Inserts a jump only when the current block has no terminator yet.
     fn ensure_jump(&mut self, target: BlockId) {
         if matches!(self.blocks[self.current].terminator, IrTerminator::Unreachable) {
             self.blocks[self.current].terminator = IrTerminator::Jump(target);
@@ -387,6 +421,7 @@ impl FunctionBuilder {
     }
 }
 
+/// Returns true when an operator lowers through boolean branch materialization.
 fn is_boolean_like(op: BinaryOp) -> bool {
     matches!(
         op,
@@ -401,6 +436,7 @@ fn is_boolean_like(op: BinaryOp) -> bool {
     )
 }
 
+/// Returns true when an operator should lower into a typed compare condition.
 fn is_comparison(op: BinaryOp) -> bool {
     matches!(
         op,
@@ -413,14 +449,112 @@ fn is_comparison(op: BinaryOp) -> bool {
     )
 }
 
-fn compare_op(op: BinaryOp) -> CompareOp {
-    match op {
-        BinaryOp::Equal => CompareOp::Equal,
-        BinaryOp::NotEqual => CompareOp::NotEqual,
-        BinaryOp::Less => CompareOp::Less,
-        BinaryOp::LessEqual => CompareOp::LessEqual,
-        BinaryOp::Greater => CompareOp::Greater,
-        BinaryOp::GreaterEqual => CompareOp::GreaterEqual,
-        _ => unreachable!("comparison op"),
+#[cfg(test)]
+mod tests {
+    use super::IrLowerer;
+    use crate::backend::pic16::devices::DeviceRegistry;
+    use crate::common::source::Span;
+    use crate::diagnostics::{DiagnosticBag, WarningProfile};
+    use crate::frontend::ast::BinaryOp;
+    use crate::frontend::semantic::{
+        Symbol, SymbolKind, TypedExpr, TypedExprKind, TypedFunction, TypedProgram, TypedStmt,
+    };
+    use crate::frontend::types::{ScalarType, StorageClass, Type};
+    use crate::ir::model::{IrCondition, IrInstr, IrTerminator, Operand};
+
+    #[test]
+    /// Verifies relational expressions used as values lower through compare branches.
+    fn lowers_relational_value_expr_through_compare_branch() {
+        let registry = DeviceRegistry::new();
+        let target = registry.device("pic16f628a").expect("device");
+        let span = Span::new(0, 0);
+        let u16_ty = Type::new(ScalarType::U16);
+        let u8_ty = Type::new(ScalarType::U8);
+
+        let program = TypedProgram {
+            symbols: vec![
+                symbol(0, "cmp", u8_ty, SymbolKind::Function),
+                symbol(1, "lhs", u16_ty, SymbolKind::Param),
+                symbol(2, "rhs", u16_ty, SymbolKind::Param),
+            ],
+            globals: Vec::new(),
+            functions: vec![TypedFunction {
+                symbol: 0,
+                params: vec![1, 2],
+                locals: Vec::new(),
+                body: Some(TypedStmt::Return(
+                    Some(TypedExpr {
+                        kind: TypedExprKind::Binary {
+                            op: BinaryOp::Less,
+                            lhs: Box::new(TypedExpr {
+                                kind: TypedExprKind::Symbol(1),
+                                ty: u16_ty,
+                                span,
+                            }),
+                            rhs: Box::new(TypedExpr {
+                                kind: TypedExprKind::Symbol(2),
+                                ty: u16_ty,
+                                span,
+                            }),
+                        },
+                        ty: u8_ty,
+                        span,
+                    }),
+                    span,
+                )),
+                return_type: u8_ty,
+                span,
+            }],
+        };
+
+        let mut diagnostics = DiagnosticBag::new(WarningProfile::default());
+        let ir = IrLowerer::new(target).lower(&program, &mut diagnostics);
+        assert!(!diagnostics.has_errors());
+
+        let function = &ir.functions[0];
+        assert_eq!(function.temp_types, vec![u8_ty]);
+        match &function.blocks[0].terminator {
+            IrTerminator::Branch {
+                condition:
+                    IrCondition::Compare {
+                        op: BinaryOp::Less,
+                        lhs: Operand::Symbol(1),
+                        rhs: Operand::Symbol(2),
+                        ty,
+                    },
+                ..
+            } => assert_eq!(*ty, u16_ty),
+            other => panic!("expected compare branch, got {other:?}"),
+        }
+        let copies = function
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter())
+            .filter_map(|instr| match instr {
+                IrInstr::Copy {
+                    dst: 0,
+                    src: Operand::Constant(value),
+                } => Some(*value),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(copies.contains(&0));
+        assert!(copies.contains(&1));
+    }
+
+    /// Builds a minimal symbol used by the IR lowering regression test.
+    fn symbol(id: usize, name: &str, ty: Type, kind: SymbolKind) -> Symbol {
+        Symbol {
+            id,
+            name: name.to_string(),
+            ty,
+            storage_class: StorageClass::Auto,
+            kind,
+            span: Span::new(0, 0),
+            fixed_address: None,
+            is_defined: true,
+            is_referenced: true,
+            parameter_types: Vec::new(),
+        }
     }
 }

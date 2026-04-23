@@ -36,6 +36,7 @@ pub struct DiagnosticBag {
 }
 
 impl DiagnosticBag {
+    /// Creates an empty diagnostic bag with the requested warning profile.
     pub fn new(warning_profile: WarningProfile) -> Self {
         Self {
             diagnostics: Vec::new(),
@@ -43,6 +44,7 @@ impl DiagnosticBag {
         }
     }
 
+    /// Builds a bag containing one diagnostic, typically for top-level failures.
     pub fn single(severity: Severity, stage: &'static str, message: String) -> Self {
         let mut bag = Self::new(WarningProfile::default());
         bag.push(Diagnostic {
@@ -57,6 +59,7 @@ impl DiagnosticBag {
         bag
     }
 
+    /// Adds one diagnostic and upgrades warnings to errors when `-Werror` is active.
     pub fn push(&mut self, diagnostic: Diagnostic) {
         self.diagnostics.push(if diagnostic.severity == Severity::Warning && self.warning_profile.werror {
             Diagnostic {
@@ -68,6 +71,7 @@ impl DiagnosticBag {
         });
     }
 
+    /// Records an error diagnostic with optional source span and fix hint.
     pub fn error(
         &mut self,
         stage: &'static str,
@@ -86,6 +90,7 @@ impl DiagnosticBag {
         });
     }
 
+    /// Records a `-Wall` warning when that warning group is enabled.
     pub fn warning(
         &mut self,
         stage: &'static str,
@@ -107,6 +112,7 @@ impl DiagnosticBag {
         });
     }
 
+    /// Records a `-Wextra` warning when that warning group is enabled.
     pub fn extra_warning(
         &mut self,
         stage: &'static str,
@@ -128,6 +134,7 @@ impl DiagnosticBag {
         });
     }
 
+    /// Adds an informational note diagnostic without changing error state.
     pub fn note(&mut self, stage: &'static str, span: Option<Span>, message: impl Into<String>) {
         self.push(Diagnostic {
             severity: Severity::Note,
@@ -140,6 +147,7 @@ impl DiagnosticBag {
         });
     }
 
+    /// Returns true when the bag contains at least one error-level diagnostic.
     pub fn has_errors(&self) -> bool {
         self.diagnostics
             .iter()
@@ -148,12 +156,14 @@ impl DiagnosticBag {
 }
 
 impl Default for DiagnosticBag {
+    /// Creates a bag with the default warning profile.
     fn default() -> Self {
         Self::new(WarningProfile::default())
     }
 }
 
 impl Display for DiagnosticBag {
+    /// Formats diagnostics in a compact stage-prefixed form.
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         for diagnostic in &self.diagnostics {
             writeln!(formatter, "[{:?}] {}: {}", diagnostic.severity, diagnostic.stage, diagnostic.message)?;
@@ -163,6 +173,7 @@ impl Display for DiagnosticBag {
 }
 
 impl Severity {
+    /// Returns the lowercase severity label used in human-readable output.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Error => "error",
@@ -173,7 +184,7 @@ impl Severity {
 }
 
 #[allow(dead_code)]
+/// Renders a source point as `line:column` for debug-friendly output.
 pub fn render_point(point: SourcePoint) -> String {
     format!("{}:{}", point.line, point.column)
 }
-

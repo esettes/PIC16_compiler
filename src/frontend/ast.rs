@@ -125,6 +125,7 @@ pub enum BinaryOp {
 }
 
 impl TranslationUnit {
+    /// Renders a compact textual view of the parsed AST for debugging artifacts.
     pub fn render(&self) -> String {
         let mut output = String::new();
         for item in &self.items {
@@ -155,6 +156,7 @@ impl TranslationUnit {
     }
 }
 
+/// Renders one statement subtree with indentation that matches AST depth.
 fn render_stmt(stmt: &Stmt, indent: usize, output: &mut String) {
     let prefix = "  ".repeat(indent);
     match stmt {
@@ -229,6 +231,7 @@ fn render_stmt(stmt: &Stmt, indent: usize, output: &mut String) {
     }
 }
 
+/// Renders one expression subtree into a compact single-line form.
 fn render_expr(expr: &Expr) -> String {
     match &expr.kind {
         ExprKind::IntLiteral(value) => value.to_string(),

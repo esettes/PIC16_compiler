@@ -9,6 +9,7 @@ pub struct EncoderOutput {
     pub labels: BTreeMap<String, u16>,
 }
 
+/// Resolves labels and encodes the assembly program into 14-bit PIC16 words.
 pub fn encode_program(program: &AsmProgram, diagnostics: &mut DiagnosticBag) -> Option<EncoderOutput> {
     let labels = collect_labels(program, diagnostics)?;
     let mut words = BTreeMap::new();
@@ -89,6 +90,7 @@ pub fn encode_program(program: &AsmProgram, diagnostics: &mut DiagnosticBag) -> 
     Some(EncoderOutput { words, labels })
 }
 
+/// Collects final program-counter addresses for every declared assembly label.
 fn collect_labels(
     program: &AsmProgram,
     diagnostics: &mut DiagnosticBag,
@@ -116,6 +118,7 @@ fn collect_labels(
     Some(labels)
 }
 
+/// Encodes one concrete PIC16 instruction into its 14-bit machine-word form.
 fn encode_instr(instr: &AsmInstr) -> u16 {
     match instr {
         AsmInstr::Nop => 0x0000,
@@ -143,10 +146,12 @@ fn encode_instr(instr: &AsmInstr) -> u16 {
     }
 }
 
+/// Stores one encoded instruction word while masking it to the 14-bit width.
 fn insert_word(words: &mut BTreeMap<u16, u16>, addr: u16, word: u16) {
     words.insert(addr, word & 0x3FFF);
 }
 
+/// Converts an instruction destination selector into the encoded destination bit.
 const fn dest_bit(dest: Dest) -> u16 {
     match dest {
         Dest::W => 0x0000,

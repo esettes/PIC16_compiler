@@ -7,6 +7,7 @@ pub struct MemoryRange {
 }
 
 impl MemoryRange {
+    /// Returns the inclusive size of a RAM range in bytes.
     pub const fn size(self) -> u16 {
         self.end - self.start + 1
     }
@@ -42,6 +43,7 @@ pub struct TargetDevice {
 }
 
 impl TargetDevice {
+    /// Looks up the absolute address of a named special-function register.
     pub fn sfr_address(&self, name: &str) -> Option<u16> {
         self.sfrs
             .iter()
@@ -49,6 +51,7 @@ impl TargetDevice {
             .map(|register| register.address)
     }
 
+    /// Builds a name-to-address map for the device SFR table.
     pub fn sfr_map(&self) -> BTreeMap<String, u16> {
         self.sfrs
             .iter()
@@ -62,24 +65,28 @@ pub struct DeviceRegistry {
 }
 
 impl Default for DeviceRegistry {
+    /// Creates the default registry containing all built-in target descriptors.
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl DeviceRegistry {
+    /// Creates a registry with the built-in PIC16 target descriptors.
     pub fn new() -> Self {
         Self {
             devices: vec![pic16f628a(), pic16f877a()],
         }
     }
 
+    /// Finds a device descriptor by case-insensitive target name.
     pub fn device(&self, name: &str) -> Option<&TargetDevice> {
         self.devices
             .iter()
             .find(|device| device.name.eq_ignore_ascii_case(name))
     }
 
+    /// Returns all registered device descriptors.
     pub fn devices(&self) -> &[TargetDevice] {
         &self.devices
     }
@@ -129,6 +136,7 @@ const F877A_SFRS: [DeviceRegister; 18] = [
     DeviceRegister { name: "ADCON1", address: 0x9F },
 ];
 
+/// Builds the descriptor for the PIC16F628A target.
 fn pic16f628a() -> TargetDevice {
     TargetDevice {
         name: "pic16f628a",
@@ -157,6 +165,7 @@ fn pic16f628a() -> TargetDevice {
     }
 }
 
+/// Builds the descriptor for the PIC16F877A target.
 fn pic16f877a() -> TargetDevice {
     TargetDevice {
         name: "pic16f877a",

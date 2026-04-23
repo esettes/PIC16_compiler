@@ -1,13 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::backend::pic16::devices::TargetDevice;
+use crate::common::integer::infer_integer_literal_type;
 use crate::common::source::Span;
 use crate::diagnostics::DiagnosticBag;
 
 use super::ast::{
     BinaryOp, Expr, ExprKind, FunctionDecl, Item, Stmt, TranslationUnit, UnaryOp, VarDecl,
 };
-use super::types::{ScalarType, StorageClass, Type};
+use super::types::{CastKind, ScalarType, StorageClass, Type};
 
 pub type SymbolId = usize;
 
@@ -29,6 +30,7 @@ pub struct Symbol {
     pub fixed_address: Option<u16>,
     pub is_defined: bool,
     pub is_referenced: bool,
+    pub parameter_types: Vec<Type>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -118,6 +120,10 @@ pub enum TypedExprKind {
         function: SymbolId,
         args: Vec<TypedExpr>,
     },
+    Cast {
+        kind: CastKind,
+        expr: Box<TypedExpr>,
+    },
 }
 
 pub struct SemanticAnalyzer<'a> {
@@ -132,6 +138,7 @@ pub struct SemanticAnalyzer<'a> {
 }
 
 impl<'a> SemanticAnalyzer<'a> {
+    /// Creates a semantic analyzer primed with target-specific device registers.
     pub fn new(target: &'a TargetDevice) -> Self {
         let mut analyzer = Self {
             target,
@@ -147,6 +154,7 @@ impl<'a> SemanticAnalyzer<'a> {
         analyzer
     }
 
+    /// Performs declaration checking, typing, and symbol resolution for one translation unit.
     pub fn analyze(
         mut self,
         unit: TranslationUnit,
@@ -178,29 +186,32 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
+    /// Seeds the global symbol table with volatile device-register symbols from the target.
     fn seed_device_registers(&mut self) {
         for register in self.target.sfrs {
-            let symbol = self.insert_symbol(
-                register.name.to_string(),
-                Type::new(ScalarType::U8).with_qualifiers(super::types::Qualifiers {
+            let symbol = self.insert_symbol(Symbol {
+                id: self.symbols.len(),
+                name: register.name.to_string(),
+                ty: Type::new(ScalarType::U8).with_qualifiers(super::types::Qualifiers {
                     is_const: false,
                     is_volatile: true,
                 }),
-                StorageClass::Extern,
-                SymbolKind::DeviceRegister,
-                Span::new(0, 0),
-                Some(register.address),
-                true,
-            );
+                storage_class: StorageClass::Extern,
+                kind: SymbolKind::DeviceRegister,
+                span: Span::new(0, 0),
+                fixed_address: Some(register.address),
+                is_defined: true,
+                is_referenced: false,
+                parameter_types: Vec::new(),
+            });
             self.globals_by_name.insert(register.name.to_string(), symbol);
         }
     }
 
+    /// Registers a top-level declaration before bodies and initializers are analyzed.
     fn declare_item(&mut self, item: &Item, diagnostics: &mut DiagnosticBag) {
         match item {
-            Item::Function(function) => {
-                self.declare_function_signature(function, diagnostics);
-            }
+            Item::Function(function) => self.declare_function_signature(function, diagnostics),
             Item::Global(global) => {
                 if self.globals_by_name.contains_key(&global.name) {
                     if let Some(existing) = self.globals_by_name.get(&global.name).copied()
@@ -217,28 +228,32 @@ impl<'a> SemanticAnalyzer<'a> {
                     );
                     return;
                 }
-                if !global.ty.is_supported_codegen_scalar() {
+                if !global.ty.is_supported_codegen_scalar() || global.ty.is_void() {
                     diagnostics.error(
                         "semantic",
                         Some(global.span),
-                        format!("type `{}` not yet lowered in v0.1", global.ty),
-                        Some("use `char`, `unsigned char`, or `void` in v0.1".to_string()),
+                        format!("type `{}` is not lowered in phase 2", global.ty),
+                        None,
                     );
                 }
-                let symbol = self.insert_symbol(
-                    global.name.clone(),
-                    global.ty,
-                    global.storage_class,
-                    SymbolKind::Global,
-                    global.span,
-                    None,
-                    global.initializer.is_none(),
-                );
+                let symbol = self.insert_symbol(Symbol {
+                    id: self.symbols.len(),
+                    name: global.name.clone(),
+                    ty: global.ty,
+                    storage_class: global.storage_class,
+                    kind: SymbolKind::Global,
+                    span: global.span,
+                    fixed_address: None,
+                    is_defined: global.initializer.is_none(),
+                    is_referenced: false,
+                    parameter_types: Vec::new(),
+                });
                 self.globals_by_name.insert(global.name.clone(), symbol);
             }
         }
     }
 
+    /// Adds a function signature to the global symbol table and validates ABI limits.
     fn declare_function_signature(
         &mut self,
         function: &FunctionDecl,
@@ -253,7 +268,6 @@ impl<'a> SemanticAnalyzer<'a> {
                     format!("symbol `{}` already declared as non-function", function.name),
                     None,
                 );
-                return;
             }
             return;
         }
@@ -262,31 +276,36 @@ impl<'a> SemanticAnalyzer<'a> {
             diagnostics.error(
                 "semantic",
                 Some(function.span),
-                format!("return type `{}` not yet lowered in v0.1", function.return_type),
-                Some("use `void`, `char`, or `unsigned char`".to_string()),
+                format!("return type `{}` is not lowered in phase 2", function.return_type),
+                None,
             );
         }
         if function.params.len() > 2 {
             diagnostics.error(
                 "semantic",
                 Some(function.span),
-                "v0.1 supports at most two 8-bit parameters per function",
+                "phase 2 ABI supports at most two parameters",
                 None,
             );
         }
 
-        let symbol = self.insert_symbol(
-            function.name.clone(),
-            function.return_type,
-            function.storage_class,
-            SymbolKind::Function,
-            function.span,
-            None,
-            function.body.is_none(),
-        );
+        let parameter_types = function.params.iter().map(|param| param.ty).collect::<Vec<_>>();
+        let symbol = self.insert_symbol(Symbol {
+            id: self.symbols.len(),
+            name: function.name.clone(),
+            ty: function.return_type,
+            storage_class: function.storage_class,
+            kind: SymbolKind::Function,
+            span: function.span,
+            fixed_address: None,
+            is_defined: function.body.is_none(),
+            is_referenced: false,
+            parameter_types,
+        });
         self.globals_by_name.insert(function.name.clone(), symbol);
     }
 
+    /// Analyzes and records one global variable definition and its optional initializer.
     fn define_global(&mut self, global: VarDecl, diagnostics: &mut DiagnosticBag) {
         let Some(symbol) = self.globals_by_name.get(&global.name).copied() else {
             return;
@@ -294,27 +313,37 @@ impl<'a> SemanticAnalyzer<'a> {
         if self.symbols[symbol].kind == SymbolKind::DeviceRegister {
             return;
         }
+
         self.symbols[symbol].is_defined = true;
-        let initializer = global
-            .initializer
-            .as_ref()
-            .and_then(|expr| self.analyze_expr(expr, diagnostics));
+        let initializer = global.initializer.as_ref().and_then(|expr| {
+            let expr = self.analyze_expr(expr, diagnostics)?;
+            let coerced = self.coerce_expr(
+                expr,
+                global.ty,
+                diagnostics,
+                "global initializer",
+                false,
+            );
+            Some(coerced)
+        });
         if let Some(initializer) = initializer.as_ref()
             && !is_constant_expression(initializer)
         {
             diagnostics.error(
                 "semantic",
                 Some(initializer.span),
-                "global initializer must be a constant expression in v0.1",
+                "global initializer must be a constant expression",
                 None,
             );
         }
+
         self.globals.push(TypedGlobal {
             symbol,
             initializer,
         });
     }
 
+    /// Analyzes one function body, parameters, and scoped local symbols.
     fn define_function(&mut self, function: FunctionDecl, diagnostics: &mut DiagnosticBag) {
         let Some(symbol) = self.globals_by_name.get(&function.name).copied() else {
             return;
@@ -342,13 +371,22 @@ impl<'a> SemanticAnalyzer<'a> {
                     None,
                 );
             }
-            let param_id = self.insert_scoped_symbol(
-                param.name.clone(),
-                param.ty,
-                param.storage_class,
-                SymbolKind::Param,
-                param.span,
-            );
+            let param_id = self.insert_symbol(Symbol {
+                id: self.symbols.len(),
+                name: param.name.clone(),
+                ty: param.ty,
+                storage_class: param.storage_class,
+                kind: SymbolKind::Param,
+                span: param.span,
+                fixed_address: None,
+                is_defined: true,
+                is_referenced: false,
+                parameter_types: Vec::new(),
+            });
+            self.scopes
+                .last_mut()
+                .expect("scope exists")
+                .insert(param.name, param_id);
             params.push(param_id);
         }
 
@@ -372,6 +410,7 @@ impl<'a> SemanticAnalyzer<'a> {
         });
     }
 
+    /// Analyzes one statement and all nested expressions using the current scope state.
     fn analyze_stmt(&mut self, stmt: &Stmt, diagnostics: &mut DiagnosticBag) -> TypedStmt {
         match stmt {
             Stmt::Block(statements, span) => {
@@ -399,10 +438,10 @@ impl<'a> SemanticAnalyzer<'a> {
                     SymbolKind::Local,
                     decl.span,
                 );
-                let initializer = decl
-                    .initializer
-                    .as_ref()
-                    .and_then(|expr| self.analyze_expr(expr, diagnostics));
+                let initializer = decl.initializer.as_ref().and_then(|expr| {
+                    let expr = self.analyze_expr(expr, diagnostics)?;
+                    Some(self.coerce_expr(expr, decl.ty, diagnostics, "local initializer", true))
+                });
                 TypedStmt::VarDecl(symbol, initializer, decl.span)
             }
             Stmt::Expr(expr, span) => TypedStmt::Expr(
@@ -482,10 +521,8 @@ impl<'a> SemanticAnalyzer<'a> {
                 typed
             }
             Stmt::Return(expr, span) => {
-                let typed = expr
-                    .as_ref()
-                    .and_then(|value| self.analyze_expr(value, diagnostics));
-                if let Some(current_function) = self.current_function {
+                let typed = expr.as_ref().and_then(|value| self.analyze_expr(value, diagnostics));
+                let typed = if let Some(current_function) = self.current_function {
                     let return_type = self.symbols[current_function].ty;
                     if return_type.is_void() && typed.is_some() {
                         diagnostics.error(
@@ -494,16 +531,23 @@ impl<'a> SemanticAnalyzer<'a> {
                             "void function cannot return a value",
                             None,
                         );
-                    }
-                    if !return_type.is_void() && typed.is_none() {
+                        None
+                    } else if !return_type.is_void() && typed.is_none() {
                         diagnostics.error(
                             "semantic",
                             Some(*span),
                             "non-void function must return a value",
                             None,
                         );
+                        None
+                    } else {
+                        typed.map(|expr| {
+                            self.coerce_expr(expr, return_type, diagnostics, "return value", true)
+                        })
                     }
-                }
+                } else {
+                    typed
+                };
                 TypedStmt::Return(typed, *span)
             }
             Stmt::Break(span) => {
@@ -522,15 +566,18 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
+    /// Analyzes one expression into a typed form suitable for IR lowering.
     fn analyze_expr(&mut self, expr: &Expr, diagnostics: &mut DiagnosticBag) -> Option<TypedExpr> {
         let typed = match &expr.kind {
             ExprKind::IntLiteral(value) => TypedExpr {
                 kind: TypedExprKind::IntLiteral(*value),
-                ty: Type::new(ScalarType::U8),
+                ty: infer_integer_literal_type(*value),
                 span: expr.span,
             },
             ExprKind::Name(name) => {
-                let symbol = self.resolve_name(name).or_else(|| self.globals_by_name.get(name).copied());
+                let symbol = self
+                    .resolve_name(name)
+                    .or_else(|| self.globals_by_name.get(name).copied());
                 let Some(symbol) = symbol else {
                     diagnostics.error(
                         "semantic",
@@ -549,27 +596,34 @@ impl<'a> SemanticAnalyzer<'a> {
             }
             ExprKind::Unary { op, expr: value } => {
                 let value = self.analyze_expr(value, diagnostics)?;
+                if !value.ty.is_integer() {
+                    diagnostics.error(
+                        "semantic",
+                        Some(expr.span),
+                        "unary operator requires an integer operand",
+                        None,
+                    );
+                    return None;
+                }
+                let result_ty = match op {
+                    UnaryOp::LogicalNot => Type::new(ScalarType::U8),
+                    UnaryOp::Negate | UnaryOp::BitwiseNot => value.ty,
+                };
                 TypedExpr {
                     kind: TypedExprKind::Unary {
                         op: *op,
-                        expr: Box::new(value.clone()),
+                        expr: Box::new(value),
                     },
-                    ty: value.ty,
+                    ty: result_ty,
                     span: expr.span,
                 }
             }
             ExprKind::Binary { op, lhs, rhs } => {
                 let lhs = self.analyze_expr(lhs, diagnostics)?;
                 let rhs = self.analyze_expr(rhs, diagnostics)?;
-                if lhs.ty.bit_width() != rhs.ty.bit_width() {
-                    diagnostics.error(
-                        "semantic",
-                        Some(expr.span),
-                        "operands must have matching widths in v0.1",
-                        None,
-                    );
-                }
-                let result_type = match op {
+                let (lhs, rhs, operand_ty) =
+                    self.balance_binary_operands(*op, lhs, rhs, diagnostics, expr.span);
+                let result_ty = match op {
                     BinaryOp::Equal
                     | BinaryOp::NotEqual
                     | BinaryOp::Less
@@ -578,7 +632,7 @@ impl<'a> SemanticAnalyzer<'a> {
                     | BinaryOp::GreaterEqual
                     | BinaryOp::LogicalAnd
                     | BinaryOp::LogicalOr => Type::new(ScalarType::U8),
-                    _ => lhs.ty,
+                    _ => operand_ty,
                 };
                 TypedExpr {
                     kind: TypedExprKind::Binary {
@@ -586,7 +640,7 @@ impl<'a> SemanticAnalyzer<'a> {
                         lhs: Box::new(lhs),
                         rhs: Box::new(rhs),
                     },
-                    ty: result_type,
+                    ty: result_ty,
                     span: expr.span,
                 }
             }
@@ -602,18 +656,17 @@ impl<'a> SemanticAnalyzer<'a> {
                     return None;
                 };
                 let value = self.analyze_expr(value, diagnostics)?;
-                if self.symbols[target_symbol].ty.bit_width() != value.ty.bit_width() {
-                    diagnostics.warning(
-                        "semantic",
-                        Some(expr.span),
-                        "assignment truncates or widens value in v0.1",
-                        "W1001",
-                    );
-                }
+                let coerced = self.coerce_expr(
+                    value,
+                    self.symbols[target_symbol].ty,
+                    diagnostics,
+                    "assignment",
+                    true,
+                );
                 TypedExpr {
                     kind: TypedExprKind::Assign {
                         target: target_symbol,
-                        value: Box::new(value),
+                        value: Box::new(coerced),
                     },
                     ty: self.symbols[target_symbol].ty,
                     span: expr.span,
@@ -639,10 +692,32 @@ impl<'a> SemanticAnalyzer<'a> {
                     return None;
                 }
                 self.symbols[function].is_referenced = true;
-                let typed_args = args
-                    .iter()
-                    .filter_map(|argument| self.analyze_expr(argument, diagnostics))
-                    .collect::<Vec<_>>();
+
+                let parameter_types = self.symbols[function].parameter_types.clone();
+                if args.len() != parameter_types.len() {
+                    diagnostics.error(
+                        "semantic",
+                        Some(expr.span),
+                        format!(
+                            "function `{callee}` expects {} argument(s), got {}",
+                            parameter_types.len(),
+                            args.len()
+                        ),
+                        None,
+                    );
+                }
+
+                let mut typed_args = Vec::new();
+                for (index, argument) in args.iter().enumerate() {
+                    let Some(arg) = self.analyze_expr(argument, diagnostics) else {
+                        continue;
+                    };
+                    let Some(param_ty) = parameter_types.get(index).copied() else {
+                        typed_args.push(arg);
+                        continue;
+                    };
+                    typed_args.push(self.coerce_expr(arg, param_ty, diagnostics, "function argument", true));
+                }
                 TypedExpr {
                     kind: TypedExprKind::Call {
                         function,
@@ -656,32 +731,136 @@ impl<'a> SemanticAnalyzer<'a> {
         Some(typed)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn insert_symbol(
+    /// Harmonizes binary operand widths and signedness before typed expression construction.
+    fn balance_binary_operands(
         &mut self,
-        name: String,
-        ty: Type,
-        storage_class: StorageClass,
-        kind: SymbolKind,
+        op: BinaryOp,
+        lhs: TypedExpr,
+        rhs: TypedExpr,
+        diagnostics: &mut DiagnosticBag,
         span: Span,
-        fixed_address: Option<u16>,
-        is_defined: bool,
-    ) -> SymbolId {
-        let id = self.symbols.len();
-        self.symbols.push(Symbol {
-            id,
-            name,
-            ty,
-            storage_class,
-            kind,
+    ) -> (TypedExpr, TypedExpr, Type) {
+        if !lhs.ty.is_integer() || !rhs.ty.is_integer() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "binary operator requires integer operands",
+                None,
+            );
+            return (lhs, rhs, Type::new(ScalarType::U8));
+        }
+
+        if lhs.ty == rhs.ty {
+            let result_ty = lhs.ty;
+            return (lhs, rhs, result_ty);
+        }
+
+        if matches!(lhs.kind, TypedExprKind::IntLiteral(_)) {
+            let result_ty = rhs.ty;
+            let lhs = self.coerce_expr(lhs, rhs.ty, diagnostics, "integer literal", false);
+            return (lhs, rhs, result_ty);
+        }
+        if matches!(rhs.kind, TypedExprKind::IntLiteral(_)) {
+            let result_ty = lhs.ty;
+            let rhs = self.coerce_expr(rhs, lhs.ty, diagnostics, "integer literal", false);
+            return (lhs, rhs, result_ty);
+        }
+
+        if lhs.ty.bit_width() != rhs.ty.bit_width() {
+            let target_ty = if lhs.ty.bit_width() > rhs.ty.bit_width() {
+                lhs.ty
+            } else {
+                rhs.ty
+            };
+            let lhs = self.coerce_expr(lhs, target_ty, diagnostics, "binary operand", false);
+            let rhs = self.coerce_expr(rhs, target_ty, diagnostics, "binary operand", false);
+            return (lhs, rhs, target_ty);
+        }
+
+        diagnostics.error(
+            "semantic",
+            Some(span),
+            format!(
+                "mixed signedness for `{op:?}` with equal-width operands is not supported in phase 2"
+            ),
+            Some("use matching signedness or add an explicit narrowing/widening step".to_string()),
+        );
+        let result_ty = lhs.ty;
+        let rhs = self.coerce_expr(rhs, lhs.ty, diagnostics, "binary operand", false);
+        (lhs, rhs, result_ty)
+    }
+
+    /// Inserts an explicit semantic cast or literal retagging to reach a target type.
+    fn coerce_expr(
+        &mut self,
+        expr: TypedExpr,
+        target_ty: Type,
+        diagnostics: &mut DiagnosticBag,
+        context: &str,
+        warn_on_truncate: bool,
+    ) -> TypedExpr {
+        if expr.ty == target_ty {
+            return expr;
+        }
+        if !expr.ty.is_integer() || !target_ty.is_integer() {
+            diagnostics.error(
+                "semantic",
+                Some(expr.span),
+                format!("cannot coerce `{}` to `{}` in {context}", expr.ty, target_ty),
+                None,
+            );
+            return expr;
+        }
+
+        if warn_on_truncate && expr.ty.bit_width() > target_ty.bit_width() {
+            diagnostics.warning(
+                "semantic",
+                Some(expr.span),
+                format!("conversion from `{}` to `{}` truncates", expr.ty, target_ty),
+                "W1001",
+            );
+        }
+
+        if matches!(expr.kind, TypedExprKind::IntLiteral(_)) {
+            return TypedExpr {
+                kind: expr.kind,
+                ty: target_ty,
+                span: expr.span,
+            };
+        }
+
+        let kind = if expr.ty.bit_width() < target_ty.bit_width() {
+            if expr.ty.is_signed() {
+                CastKind::SignExtend
+            } else {
+                CastKind::ZeroExtend
+            }
+        } else if expr.ty.bit_width() > target_ty.bit_width() {
+            CastKind::Truncate
+        } else {
+            CastKind::Bitcast
+        };
+
+        let span = expr.span;
+        TypedExpr {
+            kind: TypedExprKind::Cast {
+                kind,
+                expr: Box::new(expr),
+            },
+            ty: target_ty,
             span,
-            fixed_address,
-            is_defined,
-            is_referenced: false,
-        });
+        }
+    }
+
+    /// Assigns a stable symbol id and stores a symbol in the global table.
+    fn insert_symbol(&mut self, mut symbol: Symbol) -> SymbolId {
+        let id = self.symbols.len();
+        symbol.id = id;
+        self.symbols.push(symbol);
         id
     }
 
+    /// Inserts a symbol into the current lexical scope and backing symbol table.
     fn insert_scoped_symbol(
         &mut self,
         name: String,
@@ -703,9 +882,22 @@ impl<'a> SemanticAnalyzer<'a> {
                 fixed_address: None,
                 is_defined: true,
                 is_referenced: false,
+                parameter_types: Vec::new(),
             });
         }
-        let id = self.insert_symbol(name.clone(), ty, storage_class, kind, span, None, true);
+
+        let id = self.insert_symbol(Symbol {
+            id: self.symbols.len(),
+            name: name.clone(),
+            ty,
+            storage_class,
+            kind,
+            span,
+            fixed_address: None,
+            is_defined: true,
+            is_referenced: false,
+            parameter_types: Vec::new(),
+        });
         self.scopes
             .last_mut()
             .expect("scope exists")
@@ -713,6 +905,7 @@ impl<'a> SemanticAnalyzer<'a> {
         id
     }
 
+    /// Resolves a name starting from the innermost local scope outward.
     fn resolve_name(&self, name: &str) -> Option<SymbolId> {
         self.scopes
             .iter()
@@ -720,14 +913,17 @@ impl<'a> SemanticAnalyzer<'a> {
             .find_map(|scope| scope.get(name).copied())
     }
 
+    /// Pushes a new lexical scope for nested statements or function bodies.
     fn push_scope(&mut self) {
         self.scopes.push(BTreeMap::new());
     }
 
+    /// Pops the current lexical scope after its declarations go out of visibility.
     fn pop_scope(&mut self) {
         self.scopes.pop();
     }
 
+    /// Collects the symbol ids currently visible across all active lexical scopes.
     fn current_scope_symbols(&self) -> Vec<SymbolId> {
         let mut locals = BTreeSet::new();
         for scope in &self.scopes {
@@ -736,12 +932,14 @@ impl<'a> SemanticAnalyzer<'a> {
         locals.into_iter().collect()
     }
 
+    /// Returns true when the named function already has an analyzed body.
     fn has_body(&self, symbol: SymbolId) -> bool {
         self.functions
             .iter()
             .any(|function| function.symbol == symbol && function.body.is_some())
     }
 
+    /// Emits post-analysis warnings for unused locals, params, and static functions.
     fn emit_warnings(&self, diagnostics: &mut DiagnosticBag) {
         for function in &self.functions {
             let symbol = &self.symbols[function.symbol];
@@ -772,6 +970,7 @@ impl<'a> SemanticAnalyzer<'a> {
     }
 }
 
+/// Returns true when an expression is valid for static initialization in this subset.
 fn is_constant_expression(expr: &TypedExpr) -> bool {
     match &expr.kind {
         TypedExprKind::IntLiteral(_) => true,
@@ -779,14 +978,18 @@ fn is_constant_expression(expr: &TypedExpr) -> bool {
         TypedExprKind::Binary { lhs, rhs, .. } => {
             is_constant_expression(lhs) && is_constant_expression(rhs)
         }
-        _ => false,
+        TypedExprKind::Cast { expr, .. } => is_constant_expression(expr),
+        TypedExprKind::Assign { .. }
+        | TypedExprKind::Call { .. }
+        | TypedExprKind::Symbol(_) => false,
     }
 }
 
+/// Synthesizes a typed zero literal for semantic error recovery paths.
 fn zero_expr(span: Span) -> TypedExpr {
     TypedExpr {
         kind: TypedExprKind::IntLiteral(0),
-        ty: Type::new(ScalarType::U8),
+        ty: Type::new(ScalarType::I16),
         span,
     }
 }

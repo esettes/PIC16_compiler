@@ -36,6 +36,7 @@ pub struct CompilationOutput {
     pub generated_files: Vec<PathBuf>,
 }
 
+/// Executes the selected CLI command and returns generated output paths on success.
 pub fn execute(options: CliOptions) -> StageResult<CompilationOutput> {
     match options.command.clone() {
         CliCommand::Compile(command) => compile_command(command),
@@ -75,6 +76,7 @@ pub fn execute(options: CliOptions) -> StageResult<CompilationOutput> {
     }
 }
 
+/// Runs the full single-file compilation pipeline from source to Intel HEX.
 fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutput> {
     let registry = DeviceRegistry::new();
     let target = registry.device(&command.target).ok_or_else(|| {
@@ -231,6 +233,7 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
     })
 }
 
+/// Writes an auxiliary compiler artifact next to the main output path.
 fn write_artifact(output: &Path, extension: &str, contents: &str) -> StageResult<()> {
     let path = change_extension(output, extension);
     if let Some(parent) = path.parent() {
@@ -251,10 +254,12 @@ fn write_artifact(output: &Path, extension: &str, contents: &str) -> StageResult
     })
 }
 
+/// Replaces the output path extension while preserving the parent directory.
 fn change_extension(path: &Path, extension: &str) -> PathBuf {
     path.with_extension(extension)
 }
 
+/// Returns predefined macros that describe the compiler and active target.
 pub fn default_predefined_macros(device: &TargetDevice) -> BTreeMap<String, String> {
     let mut macros = BTreeMap::new();
     macros.insert("__pic16cc__".to_string(), "1".to_string());

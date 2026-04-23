@@ -3,6 +3,7 @@ use std::fmt::Write;
 
 use crate::backend::pic16::midrange14::asm::AsmProgram;
 
+/// Renders a simple listing that combines encoded words with assembly text.
 pub fn render_listing(program: &AsmProgram, words: &BTreeMap<u16, u16>) -> String {
     let mut output = String::new();
     let _ = writeln!(output, "Address  Word");

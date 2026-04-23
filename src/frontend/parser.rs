@@ -15,6 +15,7 @@ pub struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
+    /// Creates a parser over tokenized preprocessed source and a shared diagnostic sink.
     pub fn new(
         tokens: Vec<Token>,
         source: &'a PreprocessedSource,
@@ -28,6 +29,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parses a full translation unit until the EOF token is reached.
     pub fn parse_translation_unit(&mut self) -> TranslationUnit {
         let mut items = Vec::new();
         while !self.is_eof() {
@@ -36,6 +38,7 @@ impl<'a> Parser<'a> {
         TranslationUnit { items }
     }
 
+    /// Parses one top-level declaration or function definition.
     fn parse_item(&mut self) -> Item {
         let start = self.current_span().start;
         let (storage_class, ty) = self.parse_decl_specifiers();
@@ -81,6 +84,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parses a function parameter list, including the special `void)` case.
     fn parse_params(&mut self) -> Vec<VarDecl> {
         if self.match_symbol(Symbol::RParen) {
             return Vec::new();
@@ -112,6 +116,7 @@ impl<'a> Parser<'a> {
         params
     }
 
+    /// Parses a block body after the opening brace has already been consumed.
     fn parse_block_after_open(&mut self, start: usize) -> Stmt {
         let mut statements = Vec::new();
         while !self.check_symbol(Symbol::RBrace) && !self.is_eof() {
@@ -121,6 +126,7 @@ impl<'a> Parser<'a> {
         Stmt::Block(statements, Span::new(start, self.previous_span().end))
     }
 
+    /// Parses one statement in the supported C subset.
     fn parse_statement(&mut self) -> Stmt {
         let start = self.current_span().start;
         if self.match_symbol(Symbol::LBrace) {
@@ -231,7 +237,7 @@ impl<'a> Parser<'a> {
             self.diagnostics.error(
                 "parser",
                 Some(self.previous_span()),
-                "`switch` is planned but not implemented in v0.1",
+                "`switch` is not implemented yet",
                 Some("rewrite the construct using `if`/`else if` for now".to_string()),
             );
             self.synchronize_statement();
@@ -246,6 +252,7 @@ impl<'a> Parser<'a> {
         Stmt::Expr(expr, Span::new(start, self.previous_span().end))
     }
 
+    /// Parses a local variable declaration terminated by a semicolon.
     fn parse_local_decl(&mut self) -> VarDecl {
         let start = self.current_span().start;
         let (storage_class, ty) = self.parse_decl_specifiers();
@@ -265,10 +272,12 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parses the highest-level expression grammar entrypoint.
     fn parse_expression(&mut self) -> Expr {
         self.parse_assignment()
     }
 
+    /// Parses right-associative assignment expressions.
     fn parse_assignment(&mut self) -> Expr {
         let start = self.current_span().start;
         let lhs = self.parse_logical_or();
@@ -285,26 +294,32 @@ impl<'a> Parser<'a> {
         lhs
     }
 
+    /// Parses `||` expressions with left associativity.
     fn parse_logical_or(&mut self) -> Expr {
         self.parse_left_assoc(Self::parse_logical_and, &[(Symbol::OrOr, BinaryOp::LogicalOr)])
     }
 
+    /// Parses `&&` expressions with left associativity.
     fn parse_logical_and(&mut self) -> Expr {
         self.parse_left_assoc(Self::parse_bit_or, &[(Symbol::AndAnd, BinaryOp::LogicalAnd)])
     }
 
+    /// Parses bitwise OR expressions with left associativity.
     fn parse_bit_or(&mut self) -> Expr {
         self.parse_left_assoc(Self::parse_bit_xor, &[(Symbol::Pipe, BinaryOp::BitOr)])
     }
 
+    /// Parses bitwise XOR expressions with left associativity.
     fn parse_bit_xor(&mut self) -> Expr {
         self.parse_left_assoc(Self::parse_bit_and, &[(Symbol::Caret, BinaryOp::BitXor)])
     }
 
+    /// Parses bitwise AND expressions with left associativity.
     fn parse_bit_and(&mut self) -> Expr {
         self.parse_left_assoc(Self::parse_equality, &[(Symbol::Ampersand, BinaryOp::BitAnd)])
     }
 
+    /// Parses equality and inequality comparisons.
     fn parse_equality(&mut self) -> Expr {
         self.parse_left_assoc(
             Self::parse_relational,
@@ -315,6 +330,7 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// Parses relational comparisons such as `<` and `>=`.
     fn parse_relational(&mut self) -> Expr {
         self.parse_left_assoc(
             Self::parse_additive,
@@ -327,6 +343,7 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// Parses additive expressions over `+` and `-`.
     fn parse_additive(&mut self) -> Expr {
         self.parse_left_assoc(
             Self::parse_multiplicative,
@@ -334,6 +351,7 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// Parses multiplicative expressions over `*`, `/`, and `%`.
     fn parse_multiplicative(&mut self) -> Expr {
         self.parse_left_assoc(
             Self::parse_unary,
@@ -345,6 +363,7 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// Parses a left-associative operator chain for one precedence level.
     fn parse_left_assoc(
         &mut self,
         next: fn(&mut Self) -> Expr,
@@ -376,6 +395,7 @@ impl<'a> Parser<'a> {
         expr
     }
 
+    /// Parses prefix unary operators before delegating to primary expressions.
     fn parse_unary(&mut self) -> Expr {
         let start = self.current_span().start;
         if self.match_symbol(Symbol::Minus) {
@@ -411,6 +431,7 @@ impl<'a> Parser<'a> {
         self.parse_primary()
     }
 
+    /// Parses literals, names, calls, and parenthesized expressions.
     fn parse_primary(&mut self) -> Expr {
         let start = self.current_span().start;
         if self.match_symbol(Symbol::LParen) {
@@ -463,6 +484,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parses storage, qualifier, and scalar type specifiers for a declaration.
     fn parse_decl_specifiers(&mut self) -> (StorageClass, Type) {
         let mut storage = StorageClass::Auto;
         let mut qualifiers = Qualifiers::default();
@@ -522,6 +544,7 @@ impl<'a> Parser<'a> {
         (storage, Type::new(scalar).with_qualifiers(qualifiers))
     }
 
+    /// Skips tokens until a likely statement boundary after a parse error.
     fn synchronize_statement(&mut self) {
         while !self.is_eof() {
             if self.match_symbol(Symbol::Semicolon) || self.match_symbol(Symbol::RBrace) {
@@ -531,6 +554,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Returns true when the current token can start a declaration.
     fn is_decl_start(&self) -> bool {
         matches!(
             self.current().kind,
@@ -545,6 +569,7 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// Consumes an identifier token or reports a parser error and synthesizes one.
     fn expect_identifier(&mut self) -> (String, Span) {
         let span = self.current_span();
         if let TokenKind::Identifier(name) = self.current().kind.clone() {
@@ -555,6 +580,7 @@ impl<'a> Parser<'a> {
         ("__error".to_string(), span)
     }
 
+    /// Consumes the expected symbol or records an error at the current token.
     fn expect_symbol(&mut self, symbol: Symbol) {
         if !self.match_symbol(symbol) {
             self.diagnostics.error(
@@ -566,6 +592,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Consumes the expected keyword or records an error at the current token.
     fn expect_keyword(&mut self, keyword: Keyword) {
         if !self.match_keyword(keyword) {
             self.diagnostics.error(
@@ -577,6 +604,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Consumes a symbol token when it matches the requested variant.
     fn match_symbol(&mut self, symbol: Symbol) -> bool {
         if self.check_symbol(symbol) {
             self.advance();
@@ -586,6 +614,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Consumes a keyword token when it matches the requested variant.
     fn match_keyword(&mut self, keyword: Keyword) -> bool {
         if self.check_keyword(keyword) {
             self.advance();
@@ -595,28 +624,34 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Checks whether the current token is the requested symbol.
     fn check_symbol(&self, symbol: Symbol) -> bool {
         matches!(self.current().kind, TokenKind::Symbol(current) if current == symbol)
     }
 
+    /// Checks whether the current token is the requested keyword.
     fn check_keyword(&self, keyword: Keyword) -> bool {
         matches!(self.current().kind, TokenKind::Keyword(current) if current == keyword)
     }
 
+    /// Peeks ahead for a symbol without consuming any tokens.
     fn peek_symbol(&self, offset: usize, symbol: Symbol) -> bool {
         self.tokens
             .get(self.index + offset)
             .is_some_and(|token| matches!(token.kind, TokenKind::Symbol(current) if current == symbol))
     }
 
+    /// Returns the current token, clamping safely at EOF.
     fn current(&self) -> &Token {
         &self.tokens[self.index.min(self.tokens.len().saturating_sub(1))]
     }
 
+    /// Returns the span of the current token.
     fn current_span(&self) -> Span {
         self.current().span
     }
 
+    /// Returns the span of the previously consumed token, or an empty span at start.
     fn previous_span(&self) -> Span {
         if self.index == 0 {
             Span::new(0, 0)
@@ -625,12 +660,14 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Advances to the next token unless the parser is already at EOF.
     fn advance(&mut self) {
         if !self.is_eof() {
             self.index += 1;
         }
     }
 
+    /// Returns true when the parser is positioned on the EOF token.
     fn is_eof(&self) -> bool {
         self.current().kind == TokenKind::Eof
     }
