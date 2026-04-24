@@ -1,21 +1,49 @@
 # PIC16 `midrange14` Backend
 
-Shared responsibilities:
+Shared backend responsibilities:
 
 - instruction selection
-- banking
+- direct-bank selection
+- indirect-bank selection
 - paging
 - startup
-- lowering IR -> asm PIC16
-- encoding 14-bit
+- IR -> PIC16 asm lowering
+- 14-bit word encoding
 
-Phase 3 additions:
+Current backend phase: **Phase 4 Stack-first ABI**
 
-- 16-bit load/store/cast lowering from Phase 2
-- signed and unsigned relational compare lowering
-- fixed helper-slot ABI for 16-bit args, returns, and pointers
-- address materialization for symbols
-- indirect scalar access through `FSR/INDF`
-- element-size-aware indexing for 8-bit and 16-bit objects
+Backend owns:
 
-Detail: [phase2-abi.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase2-abi.md:1) and [phase3-memory-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase3-memory-model.md:1)
+- software stack helper slots: `stack_ptr`, `frame_ptr`
+- return helper slot: `return_high`
+- short-lived scratch slots: `scratch0`, `scratch1`
+- caller-pushed stack argument lowering
+- per-call frame lowering for locals and IR temps
+- `FSR/INDF` indirect access for pointers and frame storage
+
+Current call contract:
+
+- caller pushes args left-to-right
+- callee saves caller `FP`
+- callee sets `FP` to callee arg base
+- callee allocates locals + temps above saved `FP`
+- callee restores `SP` to caller arg top
+- callee restores caller `FP`
+- caller subtracts argument bytes after return
+
+Current return contract:
+
+- 8-bit: `W`
+- 16-bit: `W` low + `return_high` high
+- pointer: same as 16-bit integer
+
+Current backend docs:
+
+- [phase4-stack-first-abi.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-first-abi.md:1)
+- [phase4-stack-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-model.md:1)
+- [../ir/phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
+
+Historical docs:
+
+- [phase2-abi.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase2-abi.md:1)
+- [phase3-memory-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase3-memory-model.md:1)

@@ -5,15 +5,21 @@
 - C frontend
 - internal IR
 - shared PIC16 backend
-- device layer
+- device descriptor layer
 - final `.hex` emission
 
-The target backend is the classic 14-bit PIC16 mid-range family. It is not a generic 8-bit CPU model.
+Target backend is classic 14-bit PIC16 mid-range family, not a generic 8-bit CPU model.
 
-Phase 3 keeps that split intact while extending:
+Current Phase 4 keeps that split intact while extending:
 
-- 16-bit integer lowering from Phase 2
-- lvalue/rvalue-aware semantic analysis
-- typed IR address, indirect-load, and indirect-store nodes
-- constrained data pointers and one-dimensional arrays
-- PIC16 `FSR/INDF` indirect access without backend duplication per device
+- stack-first caller-pushed ABI
+- per-call frame storage for locals and IR temps
+- typed IR call lowering for arbitrary argument counts
+- explicit pointer and frame access through `FSR/INDF`
+- PIC16 banking/paging without backend duplication per device
+
+See:
+
+- [../../DESIGN.md](/home/settes/cursus/PIC16_compiler/DESIGN.md:1)
+- [../backend/overview.md](/home/settes/cursus/PIC16_compiler/docs/backend/overview.md:1)
+- [../ir/overview.md](/home/settes/cursus/PIC16_compiler/docs/ir/overview.md:1)

@@ -76,6 +76,26 @@ fn read_artifact(output: &Path, extension: &str) -> String {
     fs::read_to_string(output.with_extension(extension)).expect("artifact")
 }
 
+/// Counts non-overlapping substring matches in one artifact string.
+fn count_occurrences(haystack: &str, needle: &str) -> usize {
+    haystack.match_indices(needle).count()
+}
+
+/// Verifies Phase 4 artifacts include stack metadata in asm/map/listing outputs.
+fn assert_phase4_stack_metadata(output: &Path) {
+    let asm = read_artifact(output, "asm");
+    let map = read_artifact(output, "map");
+    let listing = read_artifact(output, "lst");
+
+    assert!(asm.contains("frame args="));
+    assert!(asm.contains("stack base="));
+    assert!(map.contains("__abi.stack_ptr.lo"));
+    assert!(map.contains("__abi.frame_ptr.lo"));
+    assert!(map.contains("__stack.base"));
+    assert!(map.contains("__stack.end"));
+    assert!(listing.contains("frame args="));
+}
+
 #[test]
 /// Verifies the original PIC16F628A blink example still compiles successfully.
 fn compiles_pic16f628a_blink() {
@@ -176,6 +196,7 @@ fn compiles_phase4_stack_abi_example() {
     let map = read_artifact(&output, "map");
 
     assert_hex_is_programmable(&output);
+    assert_phase4_stack_metadata(&output);
     assert!(asm.contains("stack base="));
     assert!(asm.contains("call fn_sum4"));
     assert!(asm.contains("call fn_build_local"));
@@ -191,6 +212,7 @@ fn compiles_phase4_call_chain_example() {
     let map = read_artifact(&output, "map");
 
     assert_hex_is_programmable(&output);
+    assert_phase4_stack_metadata(&output);
     assert!(asm.contains("stack base="));
     assert!(asm.contains("call fn_top_sum"));
     assert!(asm.contains("call fn_middle_sum"));
@@ -259,8 +281,129 @@ void main(void) {
 
     let asm = read_artifact(&output, "asm");
     assert_hex_is_programmable(&output);
+    assert_phase4_stack_metadata(&output);
     assert!(asm.contains("call fn_sum5"));
     assert!(asm.contains("stack base="));
+}
+
+#[test]
+/// Verifies two sequential calls in one caller preserve a coherent Phase 4 stack contract.
+fn compiles_phase4_sequential_call_regression_fixture() {
+    let output = compile_source(
+        "pic16f628a",
+        "sequential-calls.c",
+        "\
+#include <pic16/pic16f628a.h>
+int add2(int a, int b) {
+    return a + b;
+}
+int top_sum(void) {
+    int x;
+    int y;
+    x = add2(1, 2);
+    y = add2(3, 4);
+    return x + y;
+}
+void main(void) {
+    int total = top_sum();
+    TRISB = 0x00;
+    PORTB = total;
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    assert_hex_is_programmable(&output);
+    assert_phase4_stack_metadata(&output);
+    assert_eq!(count_occurrences(&asm, "call fn_add2"), 2);
+    assert!(asm.contains("call fn_top_sum"));
+    assert!(asm.contains("frame args=4 saved_fp=4"));
+}
+
+#[test]
+/// Verifies nested call chains emit consistent stack metadata and call lowering.
+fn compiles_phase4_nested_call_regression_fixture() {
+    let output = compile_source(
+        "pic16f628a",
+        "nested-calls.c",
+        "\
+#include <pic16/pic16f628a.h>
+int f(int x) { return x + 1; }
+int g(int y) { return f(y) + 2; }
+int h(int z) { return g(z) + 3; }
+void main(void) {
+    int total = h(5);
+    TRISB = 0x00;
+    PORTB = total;
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    assert_hex_is_programmable(&output);
+    assert_phase4_stack_metadata(&output);
+    assert!(asm.contains("call fn_f"));
+    assert!(asm.contains("call fn_g"));
+    assert!(asm.contains("call fn_h"));
+}
+
+#[test]
+/// Verifies temps survive nested calls when one subexpression is lowered before a call.
+fn compiles_phase4_temp_liveness_nested_call_fixture() {
+    let output = compile_source(
+        "pic16f628a",
+        "temp-nested.c",
+        "\
+#include <pic16/pic16f628a.h>
+int inc(int x) {
+    return x + 1;
+}
+int combine(int a, int b, int c, int d) {
+    return (a + b) + inc(c + d);
+}
+void main(void) {
+    int total = combine(1, 2, 3, 4);
+    TRISB = 0x00;
+    PORTB = total;
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    assert_hex_is_programmable(&output);
+    assert_phase4_stack_metadata(&output);
+    assert!(asm.contains("call fn_inc"));
+    assert!(asm.contains("call fn_combine"));
+}
+
+#[test]
+/// Verifies sibling call expressions keep caller temps live across two independent calls.
+fn compiles_phase4_temp_liveness_sibling_calls_fixture() {
+    let output = compile_source(
+        "pic16f628a",
+        "temp-siblings.c",
+        "\
+#include <pic16/pic16f628a.h>
+int f(int x) {
+    return x + 1;
+}
+void main(void) {
+    int a;
+    int b;
+    int total;
+    a = 10;
+    b = 20;
+    total = f(a + b) + f(a - b);
+    TRISB = 0x00;
+    PORTB = total;
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    assert_hex_is_programmable(&output);
+    assert_phase4_stack_metadata(&output);
+    assert_eq!(count_occurrences(&asm, "call fn_f"), 2);
 }
 
 #[test]
@@ -514,6 +657,48 @@ void main(void) {
                 input
             },
             output: temp_file("return-local.hex"),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O0,
+            artifacts: OutputArtifacts::default(),
+            verbose: false,
+            warning_profile: WarningProfile::default(),
+        }),
+    })
+    .expect_err("must fail");
+
+    assert!(format!("{error}").contains("stack local"));
+}
+
+#[test]
+/// Verifies obvious local-pointer alias chains are rejected before lowering.
+fn reports_returning_stack_local_pointer_alias() {
+    let error = execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: "pic16f628a".to_string(),
+            input: {
+                let input = temp_file("return-local-alias.c");
+                fs::write(
+                    &input,
+                    "\
+#include <pic16/pic16f628a.h>
+unsigned int *bad_ptr(void) {
+    unsigned int local;
+    unsigned int *p;
+    p = &local;
+    return p;
+}
+void main(void) {
+    unsigned int *ptr = bad_ptr();
+    TRISB = 0x00;
+    PORTB = 0x00;
+}
+",
+                )
+                .expect("fixture");
+                input
+            },
+            output: temp_file("return-local-alias.hex"),
             include_dirs: vec![repo("include")],
             defines: BTreeMap::new(),
             optimization: OptimizationLevel::O0,

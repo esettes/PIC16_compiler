@@ -409,6 +409,9 @@ impl<'a> SemanticAnalyzer<'a> {
             .body
             .as_ref()
             .map(|stmt| self.analyze_stmt(stmt, diagnostics));
+        if let Some(body) = body.as_ref() {
+            self.reject_stack_local_pointer_returns(body, diagnostics);
+        }
 
         let locals = self.function_symbols_since(function_symbol_start);
         self.pop_scope();
@@ -1539,7 +1542,7 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
-    /// Rejects direct or mutual recursion because Phase 4 still uses non-reentrant temp storage.
+    /// Rejects direct or mutual recursion because Phase 4 stack sizing is static and non-cyclic.
     fn reject_recursive_calls(&self, diagnostics: &mut DiagnosticBag) {
         let mut state = BTreeMap::<SymbolId, VisitState>::new();
         for function in &self.functions {
@@ -1563,7 +1566,7 @@ impl<'a> SemanticAnalyzer<'a> {
                     "semantic",
                     Some(self.symbols[symbol].span),
                     format!("recursive call cycle involving `{name}` is not supported in phase 4"),
-                    Some("rewrite the call graph to be acyclic for now".to_string()),
+                    Some("phase 4 computes software-stack usage statically; keep the call graph acyclic".to_string()),
                 );
                 return;
             }
@@ -1589,7 +1592,7 @@ impl<'a> SemanticAnalyzer<'a> {
                         "semantic",
                         Some(self.symbols[callee].span),
                         format!("recursive call cycle `{cycle}` is not supported in phase 4"),
-                        Some("rewrite the call graph to be acyclic for now".to_string()),
+                        Some("phase 4 computes software-stack usage statically; keep the call graph acyclic".to_string()),
                     );
                     continue;
                 }
@@ -1617,6 +1620,165 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
+    /// Rejects obvious local-pointer alias chains that can return stack storage indirectly.
+    fn reject_stack_local_pointer_returns(&self, body: &TypedStmt, diagnostics: &mut DiagnosticBag) {
+        let mut tainted_locals = BTreeSet::new();
+        self.walk_stmt_for_stack_pointer_returns(body, &mut tainted_locals, diagnostics);
+    }
+
+    /// Walks statements in source order and propagates conservative stack-pointer taint.
+    fn walk_stmt_for_stack_pointer_returns(
+        &self,
+        stmt: &TypedStmt,
+        tainted_locals: &mut BTreeSet<SymbolId>,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        match stmt {
+            TypedStmt::Block(statements, _) => {
+                for statement in statements {
+                    self.walk_stmt_for_stack_pointer_returns(statement, tainted_locals, diagnostics);
+                }
+            }
+            TypedStmt::VarDecl(symbol, initializer, _) => {
+                if let Some(initializer) = initializer {
+                    let may_point_to_stack =
+                        self.track_stack_pointer_expr(initializer, tainted_locals);
+                    if may_point_to_stack && self.is_local_pointer_symbol(*symbol) {
+                        tainted_locals.insert(*symbol);
+                    }
+                }
+            }
+            TypedStmt::Expr(expr, _) => {
+                let _ = self.track_stack_pointer_expr(expr, tainted_locals);
+            }
+            TypedStmt::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let mut branch_seed = tainted_locals.clone();
+                let _ = self.track_stack_pointer_expr(condition, &mut branch_seed);
+
+                let mut then_taint = branch_seed.clone();
+                self.walk_stmt_for_stack_pointer_returns(then_branch, &mut then_taint, diagnostics);
+
+                let mut merged = then_taint;
+                if let Some(else_branch) = else_branch {
+                    let mut else_taint = branch_seed;
+                    self.walk_stmt_for_stack_pointer_returns(else_branch, &mut else_taint, diagnostics);
+                    merged.extend(else_taint);
+                } else {
+                    merged.extend(branch_seed);
+                }
+                *tainted_locals = merged;
+            }
+            TypedStmt::While {
+                condition, body, ..
+            } => {
+                let _ = self.track_stack_pointer_expr(condition, tainted_locals);
+                let mut loop_taint = tainted_locals.clone();
+                self.walk_stmt_for_stack_pointer_returns(body, &mut loop_taint, diagnostics);
+                let _ = self.track_stack_pointer_expr(condition, &mut loop_taint);
+                tainted_locals.extend(loop_taint);
+            }
+            TypedStmt::DoWhile {
+                body,
+                condition,
+                ..
+            } => {
+                let mut loop_taint = tainted_locals.clone();
+                self.walk_stmt_for_stack_pointer_returns(body, &mut loop_taint, diagnostics);
+                let _ = self.track_stack_pointer_expr(condition, &mut loop_taint);
+                tainted_locals.extend(loop_taint);
+            }
+            TypedStmt::For {
+                init,
+                condition,
+                step,
+                body,
+                ..
+            } => {
+                if let Some(init) = init {
+                    self.walk_stmt_for_stack_pointer_returns(init, tainted_locals, diagnostics);
+                }
+                let mut loop_taint = tainted_locals.clone();
+                if let Some(condition) = condition {
+                    let _ = self.track_stack_pointer_expr(condition, &mut loop_taint);
+                }
+                self.walk_stmt_for_stack_pointer_returns(body, &mut loop_taint, diagnostics);
+                if let Some(step) = step {
+                    let _ = self.track_stack_pointer_expr(step, &mut loop_taint);
+                }
+                tainted_locals.extend(loop_taint);
+            }
+            TypedStmt::Return(expr, _) => {
+                if let Some(expr) = expr {
+                    let may_point_to_stack = self.track_stack_pointer_expr(expr, tainted_locals);
+                    if expr.ty.is_pointer()
+                        && may_point_to_stack
+                        && !self.returns_stack_local_address(expr)
+                    {
+                        diagnostics.error(
+                            "semantic",
+                            Some(expr.span),
+                            "returning a pointer that may refer to a stack local is not supported",
+                            Some(
+                                "return a global/static object address or write through an output parameter"
+                                    .to_string(),
+                            ),
+                        );
+                    }
+                }
+            }
+            TypedStmt::Break(_) | TypedStmt::Continue(_) | TypedStmt::Empty(_) => {}
+        }
+    }
+
+    /// Tracks whether one expression may evaluate to a pointer into stack local storage.
+    fn track_stack_pointer_expr(
+        &self,
+        expr: &TypedExpr,
+        tainted_locals: &mut BTreeSet<SymbolId>,
+    ) -> bool {
+        match &expr.kind {
+            TypedExprKind::IntLiteral(_) => false,
+            TypedExprKind::Symbol(symbol) => {
+                expr.ty.is_pointer() && self.is_local_pointer_symbol(*symbol) && tainted_locals.contains(symbol)
+            }
+            TypedExprKind::Unary { expr, .. } => self.track_stack_pointer_expr(expr, tainted_locals),
+            TypedExprKind::Binary { lhs, rhs, .. } => {
+                let lhs_tainted = self.track_stack_pointer_expr(lhs, tainted_locals);
+                let rhs_tainted = self.track_stack_pointer_expr(rhs, tainted_locals);
+                expr.ty.is_pointer() && (lhs_tainted || rhs_tainted)
+            }
+            TypedExprKind::ArrayDecay(value) | TypedExprKind::AddressOf(value) => self.is_stack_lvalue(value),
+            TypedExprKind::Deref(value) => {
+                let _ = self.track_stack_pointer_expr(value, tainted_locals);
+                false
+            }
+            TypedExprKind::Assign { target, value } => {
+                let value_tainted = self.track_stack_pointer_expr(value, tainted_locals);
+                if let TypedExprKind::Symbol(symbol) = target.kind
+                    && self.is_local_pointer_symbol(symbol)
+                    && value_tainted
+                {
+                    tainted_locals.insert(symbol);
+                } else {
+                    let _ = self.track_stack_pointer_expr(target, tainted_locals);
+                }
+                expr.ty.is_pointer() && value_tainted
+            }
+            TypedExprKind::Call { args, .. } => {
+                let arg_tainted = args
+                    .iter()
+                    .fold(false, |acc, arg| self.track_stack_pointer_expr(arg, tainted_locals) || acc);
+                expr.ty.is_pointer() && arg_tainted
+            }
+            TypedExprKind::Cast { expr, .. } => self.track_stack_pointer_expr(expr, tainted_locals),
+        }
+    }
+
     /// Returns true when the lvalue names a non-static local object allocated in the call frame.
     fn is_stack_lvalue(&self, expr: &TypedExpr) -> bool {
         match &expr.kind {
@@ -1627,6 +1789,14 @@ impl<'a> SemanticAnalyzer<'a> {
             TypedExprKind::Deref(_) => false,
             _ => false,
         }
+    }
+
+    /// Returns true when one symbol is a non-static local pointer variable.
+    fn is_local_pointer_symbol(&self, symbol: SymbolId) -> bool {
+        let symbol = &self.symbols[symbol];
+        symbol.kind == SymbolKind::Local
+            && symbol.storage_class != StorageClass::Static
+            && symbol.ty.is_pointer()
     }
 
     /// Assigns a stable symbol id and stores a symbol in the global table.

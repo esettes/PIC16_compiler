@@ -4,10 +4,23 @@ Custom CFG-based IR.
 
 Motivation:
 
-- separate the AST from the backend
+- separate AST from backend
 - enable validation and optimization passes
-- avoid rewriting the frontend as the backend grows
+- keep call and memory lowering explicit
 
-Phase 3 adds typed casts, typed compare conditions, explicit address materialization, and explicit indirect memory operations so pointer and array lowering stays explicit.
+Current Phase 4 IR carries:
 
-Detail: [phase2-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase2-lowering.md:1) and [phase3-memory.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase3-memory.md:1)
+- typed casts
+- typed compare conditions
+- explicit address materialization
+- explicit indirect load/store
+- direct-call instructions with arbitrary argument lists
+
+Phase 4 detail:
+
+- [phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
+
+Historical detail:
+
+- [phase2-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase2-lowering.md:1)
+- [phase3-memory.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase3-memory.md:1)
