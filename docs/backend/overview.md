@@ -12,6 +12,11 @@ Shared backend responsibilities:
 
 Current backend phase: **Phase 6 interrupts on top of Phase 5 arithmetic helpers and the Phase 4 Stack-first ABI**
 
+Phase status:
+
+- Phase 6 is the final stabilization phase in this branch
+- no Phase 7 backend scope is active here
+
 Backend owns:
 
 - software stack helper slots: `stack_ptr`, `frame_ptr`

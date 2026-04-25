@@ -2,6 +2,8 @@
 
 `pic16cc` is an experimental Rust compiler for classic 14-bit PIC16 mid-range MCUs. The pipeline is native end to end:
 
+Installed CLI executable name: `picc`.
+
 1. preprocessing
 2. lexing
 3. parsing
@@ -27,6 +29,12 @@ Outputs:
 ## Current Status
 
 Current implementation is **Phase 6: ISR support on top of the Phase 4 Stack-first ABI and Phase 5 arithmetic helpers**.
+
+Phase freeze policy:
+
+- Phase 6 is the final supported phase for this repository state
+- no Phase 7 work is planned in this branch
+- current work is stabilization, validation, and documentation consistency only
 
 What changed from Phase 3:
 
@@ -218,6 +226,17 @@ Current constraints:
 - ISR code cannot call normal functions or Phase 5 runtime helpers
 - no emulator or hardware execution runs in CI; validation is compile/listing/map/HEX shape based
 
+## Known Limitations (Phase 6 Freeze)
+
+- recursion is unsupported
+- no runtime software-stack overflow detection is implemented
+- ISR restrictions remain conservative: one ISR, no normal calls, no runtime-helper-requiring expressions
+- C type-system support is partial (no `struct`, `union`, `enum`, `float`)
+- source-level function pointers are unsupported
+- dynamic division/modulo by zero returns `0` (constant zero divisors are diagnostics)
+- pointers are data-space only; code pointers are unsupported
+- pointer-to-pointer types and multidimensional arrays are unsupported
+
 ## Build
 
 Requirements:
@@ -243,7 +262,14 @@ cargo build --release
 cargo install --path .
 picc --version
 picc --help
+
+# Verify PATH precedence to avoid stale binary confusion
+which -a picc
+command -v picc
 ```
+
+If multiple `picc` paths are listed, the first one in `which -a picc` is the binary the shell executes.
+After `cargo install --path .`, the expected installed path is typically `$HOME/.cargo/bin/picc`.
 
 ## Compiling to HEX
 
@@ -286,6 +312,36 @@ Commands:
 - `make`
 - `make clean`
 - `make flash`
+
+Override `PIC` to force a specific binary (useful when validating a local release build):
+
+```bash
+cd examples/pic16f628a
+make clean
+make PIC=../../target/release/picc
+```
+
+## Narrowing Conversion Diagnostics
+
+Current narrowing policy in semantic analysis:
+
+- representable integer constant expressions may narrow without truncation diagnostics
+- representable constants assigned to volatile byte SFRs do not warn
+- out-of-range constants still trigger truncation diagnostics (`W1001`)
+- non-constant narrowing conversions that may truncate still trigger diagnostics
+- with `-Wall -Wextra -Werror`, these diagnostics become hard errors
+
+Examples that are accepted under `-Werror` when values fit:
+
+- `unsigned char i = 8;`
+- `TRISB = 0x00;`
+- `PORTB = 0x01;`
+
+Examples that are rejected under `-Werror`:
+
+- `unsigned char x = 300;`
+- `PORTB = 300;`
+- `int x; unsigned char y = x;`
 
 ## Usage
 
@@ -376,11 +432,7 @@ picc --list-targets
 - [docs/migration/phase3-to-phase4-abi.md](/home/settes/cursus/PIC16_compiler/docs/migration/phase3-to-phase4-abi.md:1)
 - [docs/developer-guide/adding-device.md](/home/settes/cursus/PIC16_compiler/docs/developer-guide/adding-device.md:1)
 
-## Next Work
+## Phase Freeze
 
-Planned after Phase 5:
-
-1. richer pointer compatibility and initializer support
-2. interrupts / ISR support
-3. stronger PIC16 banking/page optimization
-4. more PIC16 mid-range targets
+This repository is intentionally frozen at **Phase 6** for stabilization and production hardening.
+Future feature phases are out of scope for this freeze cycle.

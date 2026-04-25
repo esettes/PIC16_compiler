@@ -1,5 +1,10 @@
 # Phase 6 Interrupts
 
+Phase status:
+
+- Phase 6 is the final feature phase in this branch
+- this interrupt model is frozen for stabilization and validation
+
 Targets:
 
 - `PIC16F628A`
@@ -50,6 +55,8 @@ Phase 6 policy for calls/helpers:
 - no normal calls inside ISR
 - no Phase 5 helper calls inside ISR
 - helper-requiring `*`, `/`, `%`, and dynamic shifts are rejected in semantic analysis
+
+The above restrictions are intentional in this freeze to prioritize predictable ISR safety.
 
 Output expectations:
 

@@ -1,10 +1,15 @@
 # Phase 4 Stack-first ABI
 
-This document describes current call ABI used by `pic16cc`.
+This document describes current call ABI used by the `picc` CLI compiler (`pic16cc` crate).
 
 ## Status
 
 Phase 4 ABI is active.
+
+Phase status:
+
+- retained as the active ABI foundation for Phase 6
+- frozen for stabilization in this branch
 
 - stack-first
 - caller-pushed

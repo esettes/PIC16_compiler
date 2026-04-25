@@ -1,5 +1,10 @@
 # Phase 6 ISR Lowering
 
+Phase status:
+
+- ISR lowering is frozen at Phase 6 for stabilization
+- no Phase 7 ISR lowering scope exists in this branch
+
 Phase 6 keeps ISR bodies in the same CFG-based IR as normal functions.
 
 IR additions:

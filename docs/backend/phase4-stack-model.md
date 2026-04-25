@@ -2,6 +2,11 @@
 
 This document describes software stack shape used by Phase 4 backend.
 
+Phase status:
+
+- this stack model is the active baseline for Phase 6
+- frozen in this branch for stabilization work
+
 ## Runtime State
 
 Backend-managed helper slots:

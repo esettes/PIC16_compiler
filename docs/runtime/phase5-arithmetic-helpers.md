@@ -1,5 +1,10 @@
 # Phase 5 Arithmetic Helpers
 
+Phase status:
+
+- helper behavior is frozen under the Phase 6 stabilization baseline
+- no new arithmetic helper families are planned in this branch
+
 Phase 5 adds compiler-generated PIC16 runtime helpers for:
 
 - multiply: `*`

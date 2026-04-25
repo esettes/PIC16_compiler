@@ -18,6 +18,11 @@ Current Phase 6 IR carries:
 - typed arithmetic and shift instructions for helper-aware lowering
 - per-function interrupt metadata for backend vector/prologue selection
 
+Phase status:
+
+- this IR model is frozen at Phase 6 for stabilization
+- no Phase 7 IR extensions are planned in this branch
+
 Current detail:
 
 - [phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)

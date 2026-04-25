@@ -1,5 +1,10 @@
 # Phase 5 Arithmetic Lowering
 
+Phase status:
+
+- arithmetic lowering behavior is frozen under the Phase 6 stabilization baseline
+- no new arithmetic lowering feature scope is planned in this branch
+
 Phase 5 keeps Phase 4 call lowering and adds full typed lowering for:
 
 - `*`

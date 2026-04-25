@@ -1,5 +1,7 @@
 # `pic16cc` Design
 
+CLI binary name for end users: `picc`.
+
 ## Goal
 
 Build a real compiler foundation for classic PIC16 devices with strict separation between:
@@ -212,6 +214,9 @@ Not implemented:
 ### Frontend / Semantic
 
 - semantic analysis inserts widening/truncation casts
+- narrowing diagnostics are range-aware for integer constant expressions
+- representable constants may narrow without truncation diagnostics, including volatile byte SFR writes
+- non-constant narrowing conversions still diagnose potential truncation
 - equal-width mixed signedness compares are rejected
 - equal-width mixed signedness arithmetic is rejected unless user adds an explicit cast
 - expressions preserve lvalue/rvalue distinction
@@ -261,10 +266,7 @@ Backend lowers:
 
 Per-call IR temps now live in frame storage, not static absolute RAM.
 
-## Growth Plan
+## Phase Freeze
 
-After Phase 5:
-
-1. richer pointer compatibility and initializer support
-2. stronger PIC16 peephole/bank/page optimization
-3. more PIC16 mid-range targets
+This design is frozen at Phase 6 for stabilization and consistency work.
+No Phase 7 feature scope is defined in this branch.

@@ -1,5 +1,10 @@
 # Phase 6 ISR Syntax
 
+Phase status:
+
+- ISR syntax and restrictions are frozen at Phase 6 in this branch
+- no additional interrupt syntax variants are planned here
+
 Chosen syntax:
 
 ```c

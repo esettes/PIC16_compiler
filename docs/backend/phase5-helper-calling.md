@@ -2,6 +2,11 @@
 
 This document defines how backend-generated arithmetic helpers integrate with repaired Phase 4 stack ABI.
 
+Phase status:
+
+- helper calling behavior is frozen as part of Phase 6 stabilization
+- no new helper ABI variants are introduced in this branch
+
 ## Contract
 
 Caller:
@@ -78,6 +83,11 @@ Helper path:
 
 - most multiply/divide/modulo
 - dynamic shifts
+
+Division/modulo diagnostics and runtime behavior:
+
+- constant zero divisors are rejected during semantic analysis
+- dynamic zero divisors in helper paths return `0`
 
 ## Helper Labels
 
