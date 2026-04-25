@@ -91,6 +91,38 @@ Software stack is real backend state:
 
 Recursion stays unsupported because stack depth is not checked dynamically.
 
+### Phase 5 Arithmetic Runtime Helpers
+
+Phase 5 adds real lowering for:
+
+- `*`, `/`, `%`
+- `<<`, `>>`
+
+Rules:
+
+- helper calls use same caller-pushed stack ABI as normal functions
+- constant folds and tiny identities stay inline
+- constant shifts stay inline
+- dynamic shifts plus most multiply/divide/modulo paths lower through internal helper labels
+- helper code is emitted only when used
+- helper labels appear in map/listing output
+
+Current helper families:
+
+- multiply: shift-and-add loops
+- divide/modulo: loop-based restoring division
+- shifts: looped one-bit shifts with count clamp
+
+Behavior:
+
+- unsigned right shift is logical
+- signed right shift is arithmetic
+- constant shift count `>=` bit width is rejected
+- dynamic shift counts clamp to operand bit width
+- constant zero divisors are rejected
+- dynamic zero divisors return `0`
+- arithmetic is fixed-width and PIC16-oriented; overflow wraps/truncates
+
 ### Banking and Paging
 
 Backend explicitly models:
@@ -112,12 +144,10 @@ Supported:
 - direct calls
 - `&obj`, `*ptr`, `a[i]`, `p[i]`
 - `==`, `!=`, `<`, `<=`, `>`, `>=`
-- `+`, `-`, `&`, `|`, `^`, `!`, `~`
+- `+`, `-`, `*`, `/`, `%`, `<<`, `>>`, `&`, `|`, `^`, `!`, `~`
 - compile-time `sizeof`
 
 Deferred:
-
-- `*`, `/`, `%`
 - richer pointer compatibility
 - array initializers
 
@@ -148,9 +178,18 @@ Not implemented:
 
 - semantic analysis inserts widening/truncation casts
 - equal-width mixed signedness compares are rejected
+- equal-width mixed signedness arithmetic is rejected unless user adds an explicit cast
 - expressions preserve lvalue/rvalue distinction
 - array decay is explicit in typed tree
 - stack-local pointer returns are rejected directly and through obvious local alias chains
+- shift result type is left operand type; shift count is coerced to left operand type
+
+Integer promotion subset:
+
+- same integer type stays unchanged
+- integer literal adopts other operand type when possible
+- otherwise wider width wins
+- equal-width mixed signedness is rejected unless explicit cast is present
 
 ### IR
 
@@ -171,6 +210,8 @@ Backend lowers:
 
 - 8-bit and 16-bit copy/store/load
 - 8-bit and 16-bit add/sub
+- 8-bit and 16-bit multiply/divide/modulo through runtime helpers
+- constant and dynamic shifts
 - byte-wise bitwise ops
 - signed and unsigned compares
 - address materialization for globals, params, locals, SFRs
@@ -181,10 +222,9 @@ Per-call IR temps now live in frame storage, not static absolute RAM.
 
 ## Growth Plan
 
-After Phase 4 repair:
+After Phase 5:
 
-1. runtime helpers for multiply/divide/modulo
-2. richer pointer compatibility and initializer support
-3. interrupts
-4. stronger PIC16 peephole/bank/page optimization
-5. more PIC16 mid-range targets
+1. richer pointer compatibility and initializer support
+2. interrupts
+3. stronger PIC16 peephole/bank/page optimization
+4. more PIC16 mid-range targets

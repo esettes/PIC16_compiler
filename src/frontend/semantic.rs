@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::backend::pic16::devices::TargetDevice;
-use crate::common::integer::infer_integer_literal_type;
+use crate::common::integer::{eval_binary, eval_unary, infer_integer_literal_type, normalize_value, signed_value};
 use crate::common::source::Span;
 use crate::diagnostics::DiagnosticBag;
 
@@ -887,6 +887,11 @@ impl<'a> SemanticAnalyzer<'a> {
                 let rhs = self.analyze_expr(rhs, diagnostics)?;
                 self.analyze_add_sub_expr(op, lhs, rhs, span, diagnostics)
             }
+            BinaryOp::ShiftLeft | BinaryOp::ShiftRight => {
+                let lhs = self.analyze_expr(lhs, diagnostics)?;
+                let rhs = self.analyze_expr(rhs, diagnostics)?;
+                self.analyze_shift_expr(op, lhs, rhs, span, diagnostics)
+            }
             BinaryOp::BitAnd
             | BinaryOp::BitOr
             | BinaryOp::BitXor
@@ -897,6 +902,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 let rhs = self.analyze_expr(rhs, diagnostics)?;
                 let (lhs, rhs, result_ty) =
                     self.balance_integer_operands(op, lhs, rhs, diagnostics, span);
+                self.diagnose_division_rhs(op, &rhs, span, diagnostics);
                 Some(TypedExpr {
                     kind: TypedExprKind::Binary {
                         op,
@@ -1205,6 +1211,48 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
+    /// Analyzes integer shifts with result type tied to the left operand in Phase 5.
+    fn analyze_shift_expr(
+        &mut self,
+        op: BinaryOp,
+        lhs: TypedExpr,
+        rhs: TypedExpr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        if !lhs.ty.is_integer() || !rhs.ty.is_integer() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("`{op:?}` requires integer operands"),
+                Some("shift operators do not support pointers".to_string()),
+            );
+            return None;
+        }
+
+        let rhs = self.coerce_expr(rhs, lhs.ty, diagnostics, "shift count", false);
+        self.diagnose_shift_rhs(op, lhs.ty, &rhs, diagnostics);
+        if op == BinaryOp::ShiftRight && lhs.ty.is_signed() {
+            diagnostics.extra_warning(
+                "semantic",
+                Some(span),
+                format!("signed `{op:?}` uses arithmetic right shift in phase 5"),
+                "W5003",
+            );
+        }
+
+        Some(TypedExpr {
+            kind: TypedExprKind::Binary {
+                op,
+                lhs: Box::new(lhs.clone()),
+                rhs: Box::new(rhs),
+            },
+            ty: lhs.ty,
+            span,
+            value_category: ValueCategory::RValue,
+        })
+    }
+
     /// Harmonizes integer operand widths and signedness before arithmetic or compare lowering.
     fn balance_integer_operands(
         &mut self,
@@ -1255,13 +1303,77 @@ impl<'a> SemanticAnalyzer<'a> {
             "semantic",
             Some(span),
             format!(
-                "mixed signedness for `{op:?}` with equal-width operands is not supported in phase 3"
+                "mixed signedness for `{op:?}` with equal-width operands is not supported in phase 5"
             ),
             Some("use matching signedness or add an explicit cast".to_string()),
         );
         let result_ty = lhs.ty;
         let rhs = self.coerce_expr(rhs, lhs.ty, diagnostics, "binary operand", false);
         (lhs, rhs, result_ty)
+    }
+
+    /// Emits constant diagnostics for division or modulo by zero when statically provable.
+    fn diagnose_division_rhs(
+        &self,
+        op: BinaryOp,
+        rhs: &TypedExpr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        if !matches!(op, BinaryOp::Divide | BinaryOp::Modulo) {
+            return;
+        }
+        if let Some(value) = eval_integer_constant_expr(rhs)
+            && normalize_value(value, rhs.ty) == 0
+        {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                match op {
+                    BinaryOp::Divide => "division by constant zero",
+                    BinaryOp::Modulo => "modulo by constant zero",
+                    _ => unreachable!("division-like operator"),
+                },
+                Some("guard the divisor or change the constant expression".to_string()),
+            );
+        }
+    }
+
+    /// Emits constant diagnostics for unsupported shift counts in the current Phase 5 model.
+    fn diagnose_shift_rhs(
+        &self,
+        op: BinaryOp,
+        lhs_ty: Type,
+        rhs: &TypedExpr,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        let Some(value) = eval_integer_constant_expr(rhs) else {
+            return;
+        };
+
+        let signed = signed_value(value, rhs.ty);
+        if signed < 0 {
+            diagnostics.error(
+                "semantic",
+                Some(rhs.span),
+                format!("`{op:?}` shift count must be non-negative"),
+                None,
+            );
+            return;
+        }
+
+        let count = normalize_value(value, rhs.ty) as usize;
+        if count >= lhs_ty.bit_width() {
+            diagnostics.error(
+                "semantic",
+                Some(rhs.span),
+                format!(
+                    "`{op:?}` constant shift count {count} exceeds {}-bit value width",
+                    lhs_ty.bit_width()
+                ),
+                Some("use a smaller constant shift count or an explicit cast".to_string()),
+            );
+        }
     }
 
     /// Harmonizes supported pointer comparisons, including explicit null pointer constants.
@@ -1935,6 +2047,43 @@ fn is_constant_expression(expr: &TypedExpr) -> bool {
     }
 }
 
+/// Evaluates one typed integer constant expression under the compiler's fixed-width rules.
+fn eval_integer_constant_expr(expr: &TypedExpr) -> Option<i64> {
+    if !expr.ty.is_integer() {
+        return None;
+    }
+
+    let value = match &expr.kind {
+        TypedExprKind::IntLiteral(value) => *value,
+        TypedExprKind::Unary { op, expr } => eval_unary(*op, eval_integer_constant_expr(expr)?, expr.ty, expr.ty),
+        TypedExprKind::Binary { op, lhs, rhs } => {
+            let lhs_value = eval_integer_constant_expr(lhs)?;
+            let rhs_value = eval_integer_constant_expr(rhs)?;
+            eval_binary(*op, lhs_value, rhs_value, lhs.ty, expr.ty)
+        }
+        TypedExprKind::Cast {
+            kind,
+            expr: value_expr,
+        } => {
+            let value = eval_integer_constant_expr(value_expr)?;
+            match kind {
+                CastKind::ZeroExtend | CastKind::Truncate | CastKind::Bitcast => {
+                    normalize_value(value, expr.ty)
+                }
+                CastKind::SignExtend => normalize_value(signed_value(value, value_expr.ty), expr.ty),
+            }
+        }
+        TypedExprKind::Assign { .. }
+        | TypedExprKind::Call { .. }
+        | TypedExprKind::ArrayDecay(_)
+        | TypedExprKind::AddressOf(_)
+        | TypedExprKind::Deref(_)
+        | TypedExprKind::Symbol(_) => return None,
+    };
+
+    Some(normalize_value(value, expr.ty))
+}
+
 /// Collects direct function-call targets that appear anywhere inside one typed statement tree.
 fn collect_stmt_calls(stmt: &TypedStmt, callees: &mut BTreeSet<SymbolId>) {
     match stmt {
@@ -2038,8 +2187,9 @@ fn zero_expr(span: Span) -> TypedExpr {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_constant_expression, ValueCategory};
+    use super::{eval_integer_constant_expr, is_constant_expression, ValueCategory};
     use crate::common::source::Span;
+    use crate::frontend::ast::BinaryOp;
     use crate::frontend::semantic::{TypedExpr, TypedExprKind};
     use crate::frontend::types::{ScalarType, Type};
 
@@ -2090,5 +2240,33 @@ mod tests {
         };
 
         assert!(!is_constant_expression(&decay));
+    }
+
+    #[test]
+    /// Verifies constant-expression evaluation covers the Phase 5 shift operators.
+    fn phase_five_constant_expr_evaluates_shifts() {
+        let span = Span::new(0, 0);
+        let expr = TypedExpr {
+            kind: TypedExprKind::Binary {
+                op: BinaryOp::ShiftRight,
+                lhs: Box::new(TypedExpr {
+                    kind: TypedExprKind::IntLiteral(-2),
+                    ty: Type::new(ScalarType::I16),
+                    span,
+                    value_category: ValueCategory::RValue,
+                }),
+                rhs: Box::new(TypedExpr {
+                    kind: TypedExprKind::IntLiteral(1),
+                    ty: Type::new(ScalarType::I16),
+                    span,
+                    value_category: ValueCategory::RValue,
+                }),
+            },
+            ty: Type::new(ScalarType::I16),
+            span,
+            value_category: ValueCategory::RValue,
+        };
+
+        assert_eq!(eval_integer_constant_expr(&expr), Some(0xFFFF));
     }
 }

@@ -96,6 +96,18 @@ fn assert_phase4_stack_metadata(output: &Path) {
     assert!(listing.contains("frame args="));
 }
 
+/// Verifies Phase 5 helper artifacts expose one runtime helper in asm/map/listing outputs.
+fn assert_phase5_helper_artifacts(output: &Path, helper: &str) {
+    let asm = read_artifact(output, "asm");
+    let map = read_artifact(output, "map");
+    let listing = read_artifact(output, "lst");
+
+    assert!(asm.contains(&format!("call {helper}")));
+    assert!(asm.contains(&format!("{helper}:")));
+    assert!(map.contains(helper));
+    assert!(listing.contains(helper));
+}
+
 #[test]
 /// Verifies the original PIC16F628A blink example still compiles successfully.
 fn compiles_pic16f628a_blink() {
@@ -218,6 +230,83 @@ fn compiles_phase4_call_chain_example() {
     assert!(asm.contains("call fn_middle_sum"));
     assert!(asm.contains("call fn_leaf_sum"));
     assert!(map.contains("latest"));
+}
+
+#[test]
+/// Verifies unsigned 8-bit multiplication lowers through the Phase 5 helper path.
+fn compiles_phase5_mul8_fixture() {
+    let output = compile_source(
+        "pic16f628a",
+        "mul8.c",
+        "\
+#include <pic16/pic16f628a.h>
+unsigned char mul8(unsigned char a, unsigned char b) {
+    return a * b;
+}
+void main(void) {
+    TRISB = 0x00;
+    PORTB = mul8(6, 7);
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+    assert_phase5_helper_artifacts(&output, "__rt_mul_u8");
+}
+
+#[test]
+/// Verifies unsigned 16-bit multiplication lowers end to end through runtime helpers.
+fn compiles_phase5_mul16_example() {
+    let output = compile_example("pic16f877a", "examples/pic16f877a/mul16.c");
+
+    assert_hex_is_programmable(&output);
+    assert_phase4_stack_metadata(&output);
+    assert_phase5_helper_artifacts(&output, "__rt_mul_u16");
+}
+
+#[test]
+/// Verifies signed 16-bit division lowers end to end through runtime helpers.
+fn compiles_phase5_div16_example() {
+    let output = compile_example("pic16f877a", "examples/pic16f877a/div16.c");
+
+    assert_hex_is_programmable(&output);
+    assert_phase4_stack_metadata(&output);
+    assert_phase5_helper_artifacts(&output, "__rt_div_i16");
+}
+
+#[test]
+/// Verifies unsigned 16-bit modulo lowers end to end through runtime helpers.
+fn compiles_phase5_mod16_example() {
+    let output = compile_example("pic16f877a", "examples/pic16f877a/mod16.c");
+
+    assert_hex_is_programmable(&output);
+    assert_phase4_stack_metadata(&output);
+    assert_phase5_helper_artifacts(&output, "__rt_mod_u16");
+}
+
+#[test]
+/// Verifies mixed inline/runtime shift lowering emits only the dynamic helper path.
+fn compiles_phase5_shift_mix_example() {
+    let output = compile_example("pic16f877a", "examples/pic16f877a/shift_mix.c");
+    let asm = read_artifact(&output, "asm");
+
+    assert_hex_is_programmable(&output);
+    assert_phase4_stack_metadata(&output);
+    assert_phase5_helper_artifacts(&output, "__rt_shr_u16");
+    assert!(!asm.contains("call __rt_shl16"));
+}
+
+#[test]
+/// Verifies one expression tree can combine multiple runtime helpers safely.
+fn compiles_phase5_expression_example() {
+    let output = compile_example("pic16f877a", "examples/pic16f877a/expression_test.c");
+    let asm = read_artifact(&output, "asm");
+
+    assert_hex_is_programmable(&output);
+    assert_phase4_stack_metadata(&output);
+    assert!(asm.contains("call __rt_mul_u16"));
+    assert!(asm.contains("call __rt_div_u16"));
+    assert!(asm.contains("call __rt_mod_u16"));
 }
 
 #[test]
@@ -518,29 +607,85 @@ void main(void) {
 }
 
 #[test]
-/// Verifies unsupported multiply operations fail with a clear Phase 2 diagnostic.
-fn reports_unsupported_multiply() {
-    let source = temp_file("unsupported.c");
-    fs::write(
-        &source,
+/// Verifies helper calls survive alongside nested function calls and temp lifetimes.
+fn compiles_phase5_helper_nested_expression_fixture() {
+    let output = compile_source(
+        "pic16f628a",
+        "helper-nested.c",
         "\
 #include <pic16/pic16f628a.h>
-unsigned int scale(unsigned int lhs, unsigned int rhs) {
-    return lhs * rhs;
+unsigned int inc(unsigned int x) {
+    return x + 1;
+}
+unsigned int combine(unsigned int a, unsigned int b, unsigned int c, unsigned int d) {
+    return (a + b) + inc(c * d);
 }
 void main(void) {
     TRISB = 0x00;
-    PORTB = scale(2, 3);
+    PORTB = combine(1, 2, 3, 4);
 }
 ",
-    )
-    .expect("fixture");
+    );
+    let asm = read_artifact(&output, "asm");
 
-    let options = CliOptions {
+    assert_hex_is_programmable(&output);
+    assert_phase4_stack_metadata(&output);
+    assert!(asm.contains("call __rt_mul_u16"));
+    assert!(asm.contains("call fn_inc"));
+}
+
+#[test]
+/// Verifies helper calls coexist with pointer and local-array lowering from earlier phases.
+fn compiles_phase5_pointer_array_helper_fixture() {
+    let output = compile_source(
+        "pic16f877a",
+        "pointer-shift.c",
+        "\
+#include <pic16/pic16f877a.h>
+unsigned int shift_first(unsigned int *ptr, unsigned char n) {
+    return ptr[0] >> n;
+}
+void main(void) {
+    unsigned int words[2];
+    words[0] = 0x0123;
+    words[1] = 0x0040;
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    PORTB = shift_first(words, 3);
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+    assert_phase4_stack_metadata(&output);
+    assert_phase5_helper_artifacts(&output, "__rt_shr_u16");
+}
+
+#[test]
+/// Verifies division by constant zero is rejected before lowering.
+fn reports_division_by_constant_zero() {
+    let error = execute(CliOptions {
         command: CliCommand::Compile(CompileCommand {
             target: "pic16f628a".to_string(),
-            input: source,
-            output: temp_file("unsupported.hex"),
+            input: {
+                let input = temp_file("div-zero.c");
+                fs::write(
+                    &input,
+                    "\
+#include <pic16/pic16f628a.h>
+unsigned int bad(unsigned int value) {
+    return value / 0;
+}
+void main(void) {
+    TRISB = 0x00;
+    PORTB = bad(7);
+}
+",
+                )
+                .expect("fixture");
+                input
+            },
+            output: temp_file("div-zero.hex"),
             include_dirs: vec![repo("include")],
             defines: BTreeMap::new(),
             optimization: OptimizationLevel::O0,
@@ -548,10 +693,86 @@ void main(void) {
             verbose: false,
             warning_profile: WarningProfile::default(),
         }),
-    };
+    })
+    .expect_err("must fail");
 
-    let error = execute(options).expect_err("must fail");
-    assert!(format!("{error}").contains("not implemented in phase 2"));
+    assert!(format!("{error}").contains("division by constant zero"));
+}
+
+#[test]
+/// Verifies modulo by constant zero is rejected before lowering.
+fn reports_modulo_by_constant_zero() {
+    let error = execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: "pic16f628a".to_string(),
+            input: {
+                let input = temp_file("mod-zero.c");
+                fs::write(
+                    &input,
+                    "\
+#include <pic16/pic16f628a.h>
+unsigned int bad(unsigned int value) {
+    return value % 0;
+}
+void main(void) {
+    TRISB = 0x00;
+    PORTB = bad(7);
+}
+",
+                )
+                .expect("fixture");
+                input
+            },
+            output: temp_file("mod-zero.hex"),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O0,
+            artifacts: OutputArtifacts::default(),
+            verbose: false,
+            warning_profile: WarningProfile::default(),
+        }),
+    })
+    .expect_err("must fail");
+
+    assert!(format!("{error}").contains("modulo by constant zero"));
+}
+
+#[test]
+/// Verifies constant shift counts wider than the operand are rejected explicitly.
+fn reports_constant_shift_count_too_wide() {
+    let error = execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: "pic16f628a".to_string(),
+            input: {
+                let input = temp_file("shift-wide.c");
+                fs::write(
+                    &input,
+                    "\
+#include <pic16/pic16f628a.h>
+unsigned char bad(unsigned char value) {
+    return value << 8;
+}
+void main(void) {
+    TRISB = 0x00;
+    PORTB = bad(1);
+}
+",
+                )
+                .expect("fixture");
+                input
+            },
+            output: temp_file("shift-wide.hex"),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O0,
+            artifacts: OutputArtifacts::default(),
+            verbose: false,
+            warning_profile: WarningProfile::default(),
+        }),
+    })
+    .expect_err("must fail");
+
+    assert!(format!("{error}").contains("constant shift count"));
 }
 
 #[test]

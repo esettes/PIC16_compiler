@@ -59,8 +59,10 @@ pub enum Symbol {
     BangEqual,
     Less,
     LessEqual,
+    LessLess,
     Greater,
     GreaterEqual,
+    GreaterGreater,
     AndAnd,
     OrOr,
 }
@@ -220,7 +222,9 @@ impl<'a> Lexer<'a> {
             ("==", Symbol::EqualEqual),
             ("!=", Symbol::BangEqual),
             ("<=", Symbol::LessEqual),
+            ("<<", Symbol::LessLess),
             (">=", Symbol::GreaterEqual),
+            (">>", Symbol::GreaterGreater),
             ("&&", Symbol::AndAnd),
             ("||", Symbol::OrOr),
         ];

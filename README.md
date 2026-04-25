@@ -26,7 +26,7 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 4: Stack-first ABI**.
+Current implementation is **Phase 5: arithmetic runtime helpers on top of Phase 4 Stack-first ABI**.
 
 What changed from Phase 3:
 
@@ -34,6 +34,8 @@ What changed from Phase 3:
 - locals, local arrays, and IR temps are per-call frame storage
 - 3+ argument calls are supported
 - nested non-recursive calls use one coherent caller-pushed ABI
+- `*`, `/`, `%`, `<<`, and `>>` now lower to real PIC16 code
+- compiler runtime helper labels appear in `.map` and `.lst` when helper lowering is used
 - active docs now describe stack-first behavior; old Phase 2/3 docs remain historical
 
 ## Phase 4 ABI Summary
@@ -62,8 +64,51 @@ More detail:
 - [docs/backend/overview.md](/home/settes/cursus/PIC16_compiler/docs/backend/overview.md:1)
 - [docs/backend/phase4-stack-first-abi.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-first-abi.md:1)
 - [docs/backend/phase4-stack-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-model.md:1)
+- [docs/backend/phase5-helper-calling.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase5-helper-calling.md:1)
 - [docs/ir/phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
+- [docs/ir/phase5-arithmetic-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase5-arithmetic-lowering.md:1)
+- [docs/runtime/phase5-arithmetic-helpers.md](/home/settes/cursus/PIC16_compiler/docs/runtime/phase5-arithmetic-helpers.md:1)
 - [docs/migration/phase3-to-phase4-abi.md](/home/settes/cursus/PIC16_compiler/docs/migration/phase3-to-phase4-abi.md:1)
+
+## Phase 5 Arithmetic Summary
+
+Supported integer operators:
+
+- `*`, `/`, `%`, `<<`, `>>`
+- `char`, `unsigned char`, `int`, `unsigned int`
+
+Lowering strategy:
+
+- constant folds and tiny identities stay inline
+- constant shifts lower inline
+- dynamic shifts and most multiply/divide/modulo paths lower through PIC16 runtime helpers
+- helper calls use same stack-first ABI as normal functions
+
+Current helper labels:
+
+- `__rt_mul_u8`, `__rt_mul_i8`, `__rt_mul_u16`, `__rt_mul_i16`
+- `__rt_div_u8`, `__rt_div_i8`, `__rt_div_u16`, `__rt_div_i16`
+- `__rt_mod_u8`, `__rt_mod_i8`, `__rt_mod_u16`, `__rt_mod_i16`
+- `__rt_shl8`, `__rt_shl16`, `__rt_shr_u8`, `__rt_shr_i8`, `__rt_shr_u16`, `__rt_shr_i16`
+
+Behavior notes:
+
+- unsigned right shift is logical
+- signed right shift is arithmetic
+- constant shift count `>=` bit width is rejected
+- dynamic shift counts clamp to operand bit width inside helper lowering
+- division or modulo by constant zero is rejected
+- dynamic division/modulo by zero returns `0`
+- arithmetic uses fixed-width PIC16-style wrap/truncation; 8-bit multiply returns low 8 bits
+
+Current integer-promotion subset:
+
+- `*`, `/`, `%`, `&`, `|`, `^` balance both operands to one integer type
+- same type stays unchanged
+- integer literal adopts other operand type when possible
+- otherwise wider width wins
+- equal-width mixed signedness is rejected unless user adds an explicit cast
+- shift result type is left operand type; right operand is coerced to left operand type
 
 ## Supported Subset
 
@@ -91,7 +136,7 @@ Supported:
 - `a[i]`
 - `p[i]`
 - unary `!`, `~`, unary `-`
-- `+`, `-`, `&`, `|`, `^`
+- `+`, `-`, `*`, `/`, `%`, `<<`, `>>`, `&`, `|`, `^`
 - `==`, `!=`, `<`, `<=`, `>`, `>=`
 - compile-time `sizeof` for supported scalars, pointers, and fixed arrays
 - indirect data access through `FSR/INDF`
@@ -110,7 +155,6 @@ Still unsupported:
 - pointer relational compares other than `==` / `!=`
 - `struct`, `union`, `enum`
 - `float`
-- multiplication, division, modulo
 - user ISR support
 - recursion
 
@@ -161,6 +205,18 @@ cargo run -- \
   examples/pic16f628a/stack_abi.c
 ```
 
+Phase 5 arithmetic-helper example:
+
+```bash
+cargo run -- \
+  --target pic16f877a \
+  -I include \
+  -O2 -Wall -Wextra \
+  --emit-ir --emit-asm --map --list-file \
+  -o build/expression-test.hex \
+  examples/pic16f877a/expression_test.c
+```
+
 List targets:
 
 ```bash
@@ -176,7 +232,12 @@ cargo run -- --list-targets
 - [examples/pic16f877a/blink.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/blink.c:1)
 - [examples/pic16f877a/call_chain.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/call_chain.c:1)
 - [examples/pic16f877a/compare16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/compare16.c:1)
+- [examples/pic16f877a/div16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/div16.c:1)
+- [examples/pic16f877a/expression_test.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/expression_test.c:1)
+- [examples/pic16f877a/mod16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/mod16.c:1)
+- [examples/pic16f877a/mul16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/mul16.c:1)
 - [examples/pic16f877a/pointer16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/pointer16.c:1)
+- [examples/pic16f877a/shift_mix.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/shift_mix.c:1)
 
 ## Documentation
 
@@ -187,15 +248,17 @@ cargo run -- --list-targets
 - [docs/backend/phase4-stack-first-abi.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-first-abi.md:1)
 - [docs/backend/phase4-stack-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-model.md:1)
 - [docs/ir/phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
+- [docs/backend/phase5-helper-calling.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase5-helper-calling.md:1)
+- [docs/ir/phase5-arithmetic-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase5-arithmetic-lowering.md:1)
+- [docs/runtime/phase5-arithmetic-helpers.md](/home/settes/cursus/PIC16_compiler/docs/runtime/phase5-arithmetic-helpers.md:1)
 - [docs/migration/phase3-to-phase4-abi.md](/home/settes/cursus/PIC16_compiler/docs/migration/phase3-to-phase4-abi.md:1)
 - [docs/developer-guide/adding-device.md](/home/settes/cursus/PIC16_compiler/docs/developer-guide/adding-device.md:1)
 
 ## Next Work
 
-Planned after Phase 4 repair:
+Planned after Phase 5:
 
-1. runtime helpers for multiply/divide/modulo
-2. richer pointer compatibility and initializer support
-3. interrupts
-4. stronger PIC16 banking/page optimization
-5. more PIC16 mid-range targets
+1. richer pointer compatibility and initializer support
+2. interrupts / ISR support
+3. stronger PIC16 banking/page optimization
+4. more PIC16 mid-range targets

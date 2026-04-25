@@ -333,12 +333,23 @@ impl<'a> Parser<'a> {
     /// Parses relational comparisons such as `<` and `>=`.
     fn parse_relational(&mut self) -> Expr {
         self.parse_left_assoc(
-            Self::parse_additive,
+            Self::parse_shift,
             &[
                 (Symbol::Less, BinaryOp::Less),
                 (Symbol::LessEqual, BinaryOp::LessEqual),
                 (Symbol::Greater, BinaryOp::Greater),
                 (Symbol::GreaterEqual, BinaryOp::GreaterEqual),
+            ],
+        )
+    }
+
+    /// Parses shift expressions over `<<` and `>>`.
+    fn parse_shift(&mut self) -> Expr {
+        self.parse_left_assoc(
+            Self::parse_additive,
+            &[
+                (Symbol::LessLess, BinaryOp::ShiftLeft),
+                (Symbol::GreaterGreater, BinaryOp::ShiftRight),
             ],
         )
     }

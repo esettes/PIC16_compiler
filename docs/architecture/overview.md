@@ -10,12 +10,13 @@
 
 Target backend is classic 14-bit PIC16 mid-range family, not a generic 8-bit CPU model.
 
-Current Phase 4 keeps that split intact while extending:
+Current Phase 5 keeps that split intact while extending:
 
 - stack-first caller-pushed ABI
 - per-call frame storage for locals and IR temps
 - typed IR call lowering for arbitrary argument counts
 - explicit pointer and frame access through `FSR/INDF`
+- arithmetic runtime helpers without replacing shared `midrange14` backend
 - PIC16 banking/paging without backend duplication per device
 
 See:

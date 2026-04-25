@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::backend::pic16::devices::{MemoryRange, TargetDevice};
 use crate::common::integer::{
@@ -13,6 +13,7 @@ use crate::linker::map::MapFile;
 
 use super::asm::{AsmInstr, AsmLine, AsmProgram, Dest};
 use super::encoder::encode_program;
+use super::runtime::{binary_helper, RuntimeHelper, RuntimeHelperInfo};
 
 const STATUS_ADDR: u16 = 0x03;
 const STATUS_C_BIT: u8 = 0;
@@ -323,6 +324,7 @@ struct CodegenContext<'a> {
     program: AsmProgram,
     current_bank: u8,
     label_counter: usize,
+    used_helpers: BTreeSet<RuntimeHelper>,
 }
 
 impl<'a> CodegenContext<'a> {
@@ -335,6 +337,7 @@ impl<'a> CodegenContext<'a> {
             program: AsmProgram::new(),
             current_bank: 0,
             label_counter: 0,
+            used_helpers: BTreeSet::new(),
         }
     }
 
@@ -345,6 +348,7 @@ impl<'a> CodegenContext<'a> {
         for function in &ir_program.functions {
             self.emit_function(function, diagnostics);
         }
+        self.emit_runtime_helpers();
     }
 
     /// Emits reset and interrupt vector stubs for the current target descriptor.
@@ -552,13 +556,10 @@ impl<'a> CodegenContext<'a> {
                         self.clear_temp(function.symbol, *dst, dst_ty);
                     }
                     BinaryOp::Multiply | BinaryOp::Divide | BinaryOp::Modulo => {
-                        diagnostics.error(
-                            "backend",
-                            None,
-                            format!("operation `{op:?}` is not implemented in phase 2"),
-                            Some("use +, -, &, |, ^, ==, !=, <, <=, >, >= in phase 2".to_string()),
-                        );
-                        self.clear_temp(function.symbol, *dst, dst_ty);
+                        self.emit_phase_five_binary(function.symbol, *op, *lhs, *rhs, dst_ty, *dst);
+                    }
+                    BinaryOp::ShiftLeft | BinaryOp::ShiftRight => {
+                        self.emit_phase_five_binary(function.symbol, *op, *lhs, *rhs, dst_ty, *dst);
                     }
                 }
             }
@@ -737,6 +738,8 @@ impl<'a> CodegenContext<'a> {
                     | BinaryOp::Multiply
                     | BinaryOp::Divide
                     | BinaryOp::Modulo
+                    | BinaryOp::ShiftLeft
+                    | BinaryOp::ShiftRight
                     | BinaryOp::BitAnd
                     | BinaryOp::BitOr
                     | BinaryOp::BitXor
@@ -1067,6 +1070,181 @@ impl<'a> CodegenContext<'a> {
         }
     }
 
+    /// Lowers Phase 5 arithmetic through inline fast paths or runtime helper calls.
+    fn emit_phase_five_binary(
+        &mut self,
+        function_symbol: SymbolId,
+        op: BinaryOp,
+        lhs: Operand,
+        rhs: Operand,
+        ty: Type,
+        dst_temp: usize,
+    ) {
+        let lhs_const = constant_operand_value(lhs, ty);
+        let rhs_const = constant_operand_value(rhs, ty);
+
+        match op {
+            BinaryOp::Multiply => {
+                if lhs_const == Some(0) || rhs_const == Some(0) {
+                    self.clear_temp(function_symbol, dst_temp, ty);
+                    return;
+                }
+                if lhs_const == Some(1) {
+                    self.copy_operand_to_temp(function_symbol, rhs, ty, dst_temp);
+                    return;
+                }
+                if rhs_const == Some(1) {
+                    self.copy_operand_to_temp(function_symbol, lhs, ty, dst_temp);
+                    return;
+                }
+                if let Some(shift) = normalized_power_of_two_shift(lhs_const, ty) {
+                    self.emit_constant_shift(function_symbol, rhs, ty, dst_temp, shift, false);
+                    return;
+                }
+                if let Some(shift) = normalized_power_of_two_shift(rhs_const, ty) {
+                    self.emit_constant_shift(function_symbol, lhs, ty, dst_temp, shift, false);
+                    return;
+                }
+            }
+            BinaryOp::Divide => {
+                if lhs_const == Some(0) {
+                    self.clear_temp(function_symbol, dst_temp, ty);
+                    return;
+                }
+                if rhs_const == Some(1) {
+                    self.copy_operand_to_temp(function_symbol, lhs, ty, dst_temp);
+                    return;
+                }
+            }
+            BinaryOp::Modulo => {
+                if lhs_const == Some(0) || rhs_const == Some(1) {
+                    self.clear_temp(function_symbol, dst_temp, ty);
+                    return;
+                }
+            }
+            BinaryOp::ShiftLeft | BinaryOp::ShiftRight => {
+                if let Some(count) = rhs_const.map(|value| normalize_value(value, ty) as usize) {
+                    if count == 0 {
+                        self.copy_operand_to_temp(function_symbol, lhs, ty, dst_temp);
+                        return;
+                    }
+                    self.emit_constant_shift(function_symbol, lhs, ty, dst_temp, count, op == BinaryOp::ShiftRight);
+                    return;
+                }
+            }
+            _ => unreachable!("phase five arithmetic op"),
+        }
+
+        self.emit_runtime_binary_call(function_symbol, op, lhs, rhs, ty, dst_temp);
+    }
+
+    /// Emits one constant-count shift directly in the caller frame without a helper call.
+    fn emit_constant_shift(
+        &mut self,
+        function_symbol: SymbolId,
+        src: Operand,
+        ty: Type,
+        dst_temp: usize,
+        count: usize,
+        shift_right: bool,
+    ) {
+        self.copy_operand_to_temp(function_symbol, src, ty, dst_temp);
+        let offset = self.temp_offset(function_symbol, dst_temp);
+        for _ in 0..count {
+            if shift_right {
+                self.shift_current_frame_value_right(offset, ty, ty.is_signed());
+            } else {
+                self.shift_current_frame_value_left(offset, ty);
+            }
+        }
+    }
+
+    /// Emits one helper call for a Phase 5 arithmetic operation under the stack-first ABI.
+    fn emit_runtime_binary_call(
+        &mut self,
+        function_symbol: SymbolId,
+        op: BinaryOp,
+        lhs: Operand,
+        rhs: Operand,
+        ty: Type,
+        dst_temp: usize,
+    ) {
+        let helper = binary_helper(op, ty).expect("phase five helper exists");
+        let info = helper.info();
+        self.used_helpers.insert(helper);
+        self.push_operand(function_symbol, lhs, info.operand_ty);
+        self.push_operand(function_symbol, rhs, info.operand_ty);
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage(info.label.to_string())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Call(info.label.to_string())));
+        self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(info.arg_bytes));
+        self.store_w_to_temp_byte(function_symbol, dst_temp, 0);
+        if ty.byte_width() == 2 {
+            self.load_addr_to_w(self.layout.helpers.return_high);
+            self.store_w_to_temp_byte(function_symbol, dst_temp, 1);
+        }
+    }
+
+    /// Shifts one frame-resident scalar left by one bit using PIC16 rotate-through-carry.
+    fn shift_current_frame_value_left(&mut self, offset: u16, ty: Type) {
+        self.program.push(AsmLine::Instr(AsmInstr::Bcf {
+            f: low7(STATUS_ADDR),
+            b: STATUS_C_BIT,
+        }));
+        for byte in 0..ty.byte_width() {
+            self.prepare_pointer_from_pair(self.layout.helpers.frame_ptr, offset + byte as u16);
+            self.select_bank(INDF_ADDR);
+            self.program.push(AsmLine::Instr(AsmInstr::Rlf {
+                f: low7(INDF_ADDR),
+                d: Dest::F,
+            }));
+        }
+    }
+
+    /// Rotates one frame-resident scalar left by one bit, preserving incoming carry.
+    fn rotate_current_frame_value_left(&mut self, offset: u16, ty: Type) {
+        for byte in 0..ty.byte_width() {
+            self.prepare_pointer_from_pair(self.layout.helpers.frame_ptr, offset + byte as u16);
+            self.select_bank(INDF_ADDR);
+            self.program.push(AsmLine::Instr(AsmInstr::Rlf {
+                f: low7(INDF_ADDR),
+                d: Dest::F,
+            }));
+        }
+    }
+
+    /// Shifts one frame-resident scalar right by one bit, arithmetic when requested.
+    fn shift_current_frame_value_right(&mut self, offset: u16, ty: Type, arithmetic: bool) {
+        self.program.push(AsmLine::Instr(AsmInstr::Bcf {
+            f: low7(STATUS_ADDR),
+            b: STATUS_C_BIT,
+        }));
+        if arithmetic {
+            self.prepare_pointer_from_pair(
+                self.layout.helpers.frame_ptr,
+                offset + (ty.byte_width() - 1) as u16,
+            );
+            self.select_bank(INDF_ADDR);
+            self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+                f: low7(INDF_ADDR),
+                b: 7,
+            }));
+            self.program.push(AsmLine::Instr(AsmInstr::Bsf {
+                f: low7(STATUS_ADDR),
+                b: STATUS_C_BIT,
+            }));
+        }
+        for byte in (0..ty.byte_width()).rev() {
+            self.prepare_pointer_from_pair(self.layout.helpers.frame_ptr, offset + byte as u16);
+            self.select_bank(INDF_ADDR);
+            self.program.push(AsmLine::Instr(AsmInstr::Rrf {
+                f: low7(INDF_ADDR),
+                d: Dest::F,
+            }));
+        }
+    }
+
     /// Applies a byte-wise binary instruction template across all bytes of a value.
     fn emit_per_byte_binary<F>(
         &mut self,
@@ -1316,14 +1494,251 @@ impl<'a> CodegenContext<'a> {
 
     /// Loads a stack-frame byte addressed by `FP + offset` into `W`.
     fn load_frame_byte_to_w(&mut self, _function_symbol: SymbolId, offset: u16) {
-        self.prepare_pointer_from_pair(self.layout.helpers.frame_ptr, offset);
-        self.load_indirect_to_w();
+        self.load_current_frame_byte_to_w(offset);
     }
 
     /// Stores `W` into a stack-frame byte addressed by `FP + offset`.
     fn store_w_to_frame_byte(&mut self, _function_symbol: SymbolId, offset: u16) {
+        self.store_w_to_current_frame_byte(offset);
+    }
+
+    /// Loads one byte from the active frame at `FP + offset` into `W`.
+    fn load_current_frame_byte_to_w(&mut self, offset: u16) {
+        self.prepare_pointer_from_pair(self.layout.helpers.frame_ptr, offset);
+        self.load_indirect_to_w();
+    }
+
+    /// Stores `W` into one byte of the active frame at `FP + offset`.
+    fn store_w_to_current_frame_byte(&mut self, offset: u16) {
         self.prepare_pointer_from_pair(self.layout.helpers.frame_ptr, offset);
         self.store_w_to_indirect();
+    }
+
+    /// Sets one bit in the active frame through `INDF`.
+    fn set_current_frame_bit(&mut self, offset: u16, bit: u8) {
+        self.prepare_pointer_from_pair(self.layout.helpers.frame_ptr, offset);
+        self.select_bank(INDF_ADDR);
+        self.program.push(AsmLine::Instr(AsmInstr::Bsf {
+            f: low7(INDF_ADDR),
+            b: bit,
+        }));
+    }
+
+    /// Branches on one active-frame bit using PIC16 skip semantics.
+    fn branch_on_current_frame_bit(
+        &mut self,
+        offset: u16,
+        bit: u8,
+        set_label: &str,
+        clear_label: &str,
+    ) {
+        self.prepare_pointer_from_pair(self.layout.helpers.frame_ptr, offset);
+        self.select_bank(INDF_ADDR);
+        self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+            f: low7(INDF_ADDR),
+            b: bit,
+        }));
+        self.branch_to_label(set_label);
+        self.branch_to_label(clear_label);
+    }
+
+    /// Clears one scalar slot that lives inside the active call frame.
+    fn clear_current_frame_slot(&mut self, offset: u16, ty: Type) {
+        for byte in 0..ty.byte_width() {
+            self.emit_const_to_w(0);
+            self.store_w_to_current_frame_byte(offset + byte as u16);
+        }
+    }
+
+    /// Branches on whether one active-frame scalar value is zero or non-zero.
+    fn emit_current_frame_nonzero_branch(&mut self, offset: u16, ty: Type, then_label: &str, else_label: &str) {
+        if ty.byte_width() == 1 {
+            self.load_current_frame_byte_to_w(offset);
+            self.branch_on_status_zero(false, then_label, else_label);
+            return;
+        }
+
+        self.load_current_frame_byte_to_w(offset);
+        self.program.push(AsmLine::Instr(AsmInstr::Btfss {
+            f: low7(STATUS_ADDR),
+            b: STATUS_Z_BIT,
+        }));
+        self.branch_to_label(then_label);
+        self.load_current_frame_byte_to_w(offset + 1);
+        self.program.push(AsmLine::Instr(AsmInstr::Btfss {
+            f: low7(STATUS_ADDR),
+            b: STATUS_Z_BIT,
+        }));
+        self.branch_to_label(then_label);
+        self.branch_to_label(else_label);
+    }
+
+    /// Subtracts one active-frame byte from another and leaves compare flags live.
+    fn compare_current_frame_byte(&mut self, lhs_offset: u16, rhs_offset: u16, byte_index: usize) {
+        self.load_current_frame_byte_to_w(lhs_offset + byte_index as u16);
+        self.store_w_to_addr(self.layout.helpers.scratch0);
+        self.load_current_frame_byte_to_w(rhs_offset + byte_index as u16);
+        self.select_bank(self.layout.helpers.scratch0);
+        self.program.push(AsmLine::Instr(AsmInstr::Subwf {
+            f: low7(self.layout.helpers.scratch0),
+            d: Dest::W,
+        }));
+    }
+
+    /// Branches when `lhs >= rhs` using unsigned compare semantics over the active frame.
+    fn emit_current_frame_unsigned_ge_branch(
+        &mut self,
+        lhs_offset: u16,
+        rhs_offset: u16,
+        ty: Type,
+        ge_label: &str,
+        lt_label: &str,
+    ) {
+        if ty.byte_width() == 1 {
+            self.compare_current_frame_byte(lhs_offset, rhs_offset, 0);
+            self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+                f: low7(STATUS_ADDR),
+                b: STATUS_C_BIT,
+            }));
+            self.branch_to_label(ge_label);
+            self.branch_to_label(lt_label);
+            return;
+        }
+
+        let low_label = self.unique_label("rt_cmp_low");
+        self.compare_current_frame_byte(lhs_offset, rhs_offset, 1);
+        self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+            f: low7(STATUS_ADDR),
+            b: STATUS_Z_BIT,
+        }));
+        self.branch_to_label(&low_label);
+        self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+            f: low7(STATUS_ADDR),
+            b: STATUS_C_BIT,
+        }));
+        self.branch_to_label(ge_label);
+        self.branch_to_label(lt_label);
+        self.program.push(AsmLine::Label(low_label));
+        self.compare_current_frame_byte(lhs_offset, rhs_offset, 0);
+        self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+            f: low7(STATUS_ADDR),
+            b: STATUS_C_BIT,
+        }));
+        self.branch_to_label(ge_label);
+        self.branch_to_label(lt_label);
+    }
+
+    /// Adds one active-frame scalar into another slot in place.
+    fn add_current_frame_value_into_slot(&mut self, src_offset: u16, dst_offset: u16, ty: Type) {
+        self.load_current_frame_byte_to_w(src_offset);
+        self.store_w_to_addr(self.layout.helpers.scratch0);
+        self.load_current_frame_byte_to_w(dst_offset);
+        self.select_bank(self.layout.helpers.scratch0);
+        self.program.push(AsmLine::Instr(AsmInstr::Addwf {
+            f: low7(self.layout.helpers.scratch0),
+            d: Dest::W,
+        }));
+        self.store_w_to_current_frame_byte(dst_offset);
+
+        if ty.byte_width() == 2 {
+            self.load_current_frame_byte_to_w(src_offset + 1);
+            self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+                f: low7(STATUS_ADDR),
+                b: STATUS_C_BIT,
+            }));
+            self.program.push(AsmLine::Instr(AsmInstr::Addlw(1)));
+            self.store_w_to_addr(self.layout.helpers.scratch0);
+            self.load_current_frame_byte_to_w(dst_offset + 1);
+            self.select_bank(self.layout.helpers.scratch0);
+            self.program.push(AsmLine::Instr(AsmInstr::Addwf {
+                f: low7(self.layout.helpers.scratch0),
+                d: Dest::W,
+            }));
+            self.store_w_to_current_frame_byte(dst_offset + 1);
+        }
+    }
+
+    /// Subtracts one active-frame scalar from another slot in place.
+    fn sub_current_frame_value_from_slot(&mut self, src_offset: u16, dst_offset: u16, ty: Type) {
+        self.load_current_frame_byte_to_w(dst_offset);
+        self.store_w_to_addr(self.layout.helpers.scratch0);
+        self.load_current_frame_byte_to_w(src_offset);
+        self.select_bank(self.layout.helpers.scratch0);
+        self.program.push(AsmLine::Instr(AsmInstr::Subwf {
+            f: low7(self.layout.helpers.scratch0),
+            d: Dest::W,
+        }));
+        self.store_w_to_current_frame_byte(dst_offset);
+
+        if ty.byte_width() == 2 {
+            self.load_current_frame_byte_to_w(dst_offset + 1);
+            self.program.push(AsmLine::Instr(AsmInstr::Btfss {
+                f: low7(STATUS_ADDR),
+                b: STATUS_C_BIT,
+            }));
+            self.program.push(AsmLine::Instr(AsmInstr::Addlw(0xFF)));
+            self.store_w_to_addr(self.layout.helpers.scratch0);
+            self.load_current_frame_byte_to_w(src_offset + 1);
+            self.select_bank(self.layout.helpers.scratch0);
+            self.program.push(AsmLine::Instr(AsmInstr::Subwf {
+                f: low7(self.layout.helpers.scratch0),
+                d: Dest::W,
+            }));
+            self.store_w_to_current_frame_byte(dst_offset + 1);
+        }
+    }
+
+    /// Negates one active-frame scalar in place with two's-complement wrap semantics.
+    fn negate_current_frame_value(&mut self, offset: u16, ty: Type) {
+        self.clear_addr(self.layout.helpers.scratch0);
+        self.load_current_frame_byte_to_w(offset);
+        self.select_bank(self.layout.helpers.scratch0);
+        self.program.push(AsmLine::Instr(AsmInstr::Subwf {
+            f: low7(self.layout.helpers.scratch0),
+            d: Dest::W,
+        }));
+        self.store_w_to_current_frame_byte(offset);
+
+        if ty.byte_width() == 2 {
+            self.clear_addr(self.layout.helpers.scratch0);
+            self.load_current_frame_byte_to_w(offset + 1);
+            self.program.push(AsmLine::Instr(AsmInstr::Btfss {
+                f: low7(STATUS_ADDR),
+                b: STATUS_C_BIT,
+            }));
+            self.program.push(AsmLine::Instr(AsmInstr::Addlw(1)));
+            self.select_bank(self.layout.helpers.scratch0);
+            self.program.push(AsmLine::Instr(AsmInstr::Subwf {
+                f: low7(self.layout.helpers.scratch0),
+                d: Dest::W,
+            }));
+            self.store_w_to_current_frame_byte(offset + 1);
+        }
+    }
+
+    /// Decrements one active-frame scalar in place.
+    fn decrement_current_frame_value(&mut self, offset: u16, ty: Type) {
+        self.load_current_frame_byte_to_w(offset);
+        self.program.push(AsmLine::Instr(AsmInstr::Addlw(0xFF)));
+        self.store_w_to_current_frame_byte(offset);
+        if ty.byte_width() == 2 {
+            self.load_current_frame_byte_to_w(offset + 1);
+            self.program.push(AsmLine::Instr(AsmInstr::Btfss {
+                f: low7(STATUS_ADDR),
+                b: STATUS_C_BIT,
+            }));
+            self.program.push(AsmLine::Instr(AsmInstr::Addlw(0xFF)));
+            self.store_w_to_current_frame_byte(offset + 1);
+        }
+    }
+
+    /// Places one active-frame scalar into the ABI return locations.
+    fn emit_return_current_frame_value(&mut self, offset: u16, ty: Type) {
+        if ty.byte_width() == 2 {
+            self.load_current_frame_byte_to_w(offset + 1);
+            self.store_w_to_addr(self.layout.helpers.return_high);
+        }
+        self.load_current_frame_byte_to_w(offset);
     }
 
     /// Programs `FSR/IRP` from one helper pair plus a constant byte offset.
@@ -1573,6 +1988,353 @@ impl<'a> CodegenContext<'a> {
         self.current_bank = bank;
     }
 
+    /// Emits every internal arithmetic helper that codegen marked as used.
+    fn emit_runtime_helpers(&mut self) {
+        let helpers = self.used_helpers.iter().copied().collect::<Vec<_>>();
+        for helper in helpers {
+            self.emit_runtime_helper(helper);
+        }
+    }
+
+    /// Emits one runtime helper body that obeys the repaired Phase 4 stack-first ABI.
+    fn emit_runtime_helper(&mut self, helper: RuntimeHelper) {
+        let info = helper.info();
+        let ty = info.operand_ty;
+        let width = ty.byte_width() as u16;
+        let arg0_offset = 0u16;
+        let arg1_offset = width;
+        let local_base = info.arg_bytes + 2;
+        let work_offset = local_base;
+        let count_offset = work_offset + width;
+        let flag_offset = count_offset + 1;
+
+        self.program.push(AsmLine::Label(info.label.to_string()));
+        self.program.push(AsmLine::Comment(format!(
+            "runtime helper {:?} args={} locals={} frame_bytes={}",
+            helper, info.arg_bytes, info.local_bytes, info.frame_bytes
+        )));
+        self.current_bank = 0;
+        self.emit_runtime_prologue(info);
+
+        match helper {
+            RuntimeHelper::MulU8 | RuntimeHelper::MulU16 => {
+                self.clear_current_frame_slot(work_offset, ty);
+                self.emit_const_to_w(ty.bit_width() as u8);
+                self.store_w_to_current_frame_byte(count_offset);
+                self.emit_unsigned_mul_core(arg0_offset, arg1_offset, work_offset, count_offset, ty);
+                self.emit_return_current_frame_value(work_offset, ty);
+            }
+            RuntimeHelper::MulI8 | RuntimeHelper::MulI16 => {
+                self.clear_current_frame_slot(flag_offset, Type::new(ScalarType::U8));
+                self.emit_runtime_negate_if_signed(arg0_offset, ty, flag_offset, 0x01);
+                self.emit_runtime_negate_if_signed(arg1_offset, ty, flag_offset, 0x01);
+                self.clear_current_frame_slot(work_offset, ty);
+                self.emit_const_to_w(ty.bit_width() as u8);
+                self.store_w_to_current_frame_byte(count_offset);
+                self.emit_unsigned_mul_core(arg0_offset, arg1_offset, work_offset, count_offset, ty);
+
+                let negate_label = self.unique_label("rt_mul_neg");
+                let done_label = self.unique_label("rt_mul_done");
+                self.branch_on_current_frame_bit(flag_offset, 0, &negate_label, &done_label);
+                self.program.push(AsmLine::Label(negate_label));
+                self.negate_current_frame_value(work_offset, ty);
+                self.program.push(AsmLine::Label(done_label));
+                self.emit_return_current_frame_value(work_offset, ty);
+            }
+            RuntimeHelper::DivU8
+            | RuntimeHelper::DivU16
+            | RuntimeHelper::ModU8
+            | RuntimeHelper::ModU16 => {
+                let core_label = self.unique_label("rt_udiv_core");
+                let zero_label = self.unique_label("rt_udiv_zero");
+                let finish_label = self.unique_label("rt_udiv_finish");
+                self.clear_current_frame_slot(work_offset, ty);
+                self.emit_const_to_w(ty.bit_width() as u8);
+                self.store_w_to_current_frame_byte(count_offset);
+                self.emit_current_frame_nonzero_branch(arg1_offset, ty, &core_label, &zero_label);
+                self.program.push(AsmLine::Label(core_label));
+                self.emit_unsigned_divmod_core(
+                    arg0_offset,
+                    arg1_offset,
+                    work_offset,
+                    count_offset,
+                    ty,
+                    &finish_label,
+                );
+                self.program.push(AsmLine::Label(zero_label));
+                self.clear_current_frame_slot(arg0_offset, ty);
+                self.clear_current_frame_slot(work_offset, ty);
+                self.branch_to_label(&finish_label);
+                self.program.push(AsmLine::Label(finish_label));
+                let result_offset = if matches!(helper, RuntimeHelper::DivU8 | RuntimeHelper::DivU16) {
+                    arg0_offset
+                } else {
+                    work_offset
+                };
+                self.emit_return_current_frame_value(result_offset, ty);
+            }
+            RuntimeHelper::DivI8
+            | RuntimeHelper::DivI16
+            | RuntimeHelper::ModI8
+            | RuntimeHelper::ModI16 => {
+                let core_label = self.unique_label("rt_sdiv_core");
+                let zero_label = self.unique_label("rt_sdiv_zero");
+                let finish_label = self.unique_label("rt_sdiv_finish");
+                self.clear_current_frame_slot(flag_offset, Type::new(ScalarType::U8));
+                self.emit_runtime_set_flag_if_signed(arg0_offset, ty, flag_offset, 0x02);
+                self.emit_runtime_negate_if_signed(arg0_offset, ty, flag_offset, 0x01);
+                self.emit_runtime_negate_if_signed(arg1_offset, ty, flag_offset, 0x01);
+                self.clear_current_frame_slot(work_offset, ty);
+                self.emit_const_to_w(ty.bit_width() as u8);
+                self.store_w_to_current_frame_byte(count_offset);
+                self.emit_current_frame_nonzero_branch(arg1_offset, ty, &core_label, &zero_label);
+                self.program.push(AsmLine::Label(core_label));
+                self.emit_unsigned_divmod_core(
+                    arg0_offset,
+                    arg1_offset,
+                    work_offset,
+                    count_offset,
+                    ty,
+                    &finish_label,
+                );
+                self.program.push(AsmLine::Label(zero_label));
+                self.clear_current_frame_slot(arg0_offset, ty);
+                self.clear_current_frame_slot(work_offset, ty);
+                self.branch_to_label(&finish_label);
+                self.program.push(AsmLine::Label(finish_label));
+
+                if matches!(helper, RuntimeHelper::DivI8 | RuntimeHelper::DivI16) {
+                    let negate_label = self.unique_label("rt_sdiv_neg");
+                    let done_label = self.unique_label("rt_sdiv_done");
+                    self.branch_on_current_frame_bit(flag_offset, 0, &negate_label, &done_label);
+                    self.program.push(AsmLine::Label(negate_label));
+                    self.negate_current_frame_value(arg0_offset, ty);
+                    self.program.push(AsmLine::Label(done_label));
+                    self.emit_return_current_frame_value(arg0_offset, ty);
+                } else {
+                    let negate_label = self.unique_label("rt_smod_neg");
+                    let done_label = self.unique_label("rt_smod_done");
+                    self.branch_on_current_frame_bit(flag_offset, 1, &negate_label, &done_label);
+                    self.program.push(AsmLine::Label(negate_label));
+                    self.negate_current_frame_value(work_offset, ty);
+                    self.program.push(AsmLine::Label(done_label));
+                    self.emit_return_current_frame_value(work_offset, ty);
+                }
+            }
+            RuntimeHelper::Shl8
+            | RuntimeHelper::Shl16
+            | RuntimeHelper::ShrU8
+            | RuntimeHelper::ShrI8
+            | RuntimeHelper::ShrU16
+            | RuntimeHelper::ShrI16 => {
+                let loop_label = self.unique_label("rt_shift_loop");
+                let body_label = self.unique_label("rt_shift_body");
+                let done_label = self.unique_label("rt_shift_done");
+                self.clamp_runtime_shift_count(arg1_offset, ty);
+                self.program.push(AsmLine::Label(loop_label.clone()));
+                self.emit_current_frame_nonzero_branch(arg1_offset, ty, &body_label, &done_label);
+                self.program.push(AsmLine::Label(body_label));
+                if matches!(helper, RuntimeHelper::Shl8 | RuntimeHelper::Shl16) {
+                    self.shift_current_frame_value_left(arg0_offset, ty);
+                } else {
+                    self.shift_current_frame_value_right(
+                        arg0_offset,
+                        ty,
+                        matches!(helper, RuntimeHelper::ShrI8 | RuntimeHelper::ShrI16),
+                    );
+                }
+                self.decrement_current_frame_value(arg1_offset, ty);
+                self.branch_to_label(&loop_label);
+                self.program.push(AsmLine::Label(done_label));
+                self.emit_return_current_frame_value(arg0_offset, ty);
+            }
+        }
+
+        self.emit_runtime_epilogue(info);
+        self.program.push(AsmLine::Instr(AsmInstr::Return));
+    }
+
+    /// Emits the common stack-first runtime-helper prologue.
+    fn emit_runtime_prologue(&mut self, info: RuntimeHelperInfo) {
+        self.load_addr_to_w(self.layout.helpers.frame_ptr.lo);
+        self.store_w_to_addr(self.layout.helpers.scratch0);
+        self.load_addr_to_w(self.layout.helpers.frame_ptr.hi);
+        self.store_w_to_addr(self.layout.helpers.scratch1);
+        self.copy_pair_with_signed_offset(
+            self.layout.helpers.stack_ptr,
+            self.layout.helpers.frame_ptr,
+            negate_u16(info.arg_bytes),
+        );
+        self.load_addr_to_w(self.layout.helpers.scratch0);
+        self.push_w();
+        self.load_addr_to_w(self.layout.helpers.scratch1);
+        self.push_w();
+        if info.local_bytes != 0 {
+            self.add_immediate_to_pair(self.layout.helpers.stack_ptr, info.local_bytes);
+        }
+    }
+
+    /// Emits the common stack-first runtime-helper epilogue.
+    fn emit_runtime_epilogue(&mut self, info: RuntimeHelperInfo) {
+        self.load_current_frame_byte_to_w(info.arg_bytes);
+        self.store_w_to_addr(self.layout.helpers.scratch0);
+        self.load_current_frame_byte_to_w(info.arg_bytes + 1);
+        self.store_w_to_addr(self.layout.helpers.scratch1);
+        self.copy_pair_with_signed_offset(
+            self.layout.helpers.frame_ptr,
+            self.layout.helpers.stack_ptr,
+            info.arg_bytes,
+        );
+        self.load_addr_to_w(self.layout.helpers.scratch0);
+        self.store_w_to_addr(self.layout.helpers.frame_ptr.lo);
+        self.load_addr_to_w(self.layout.helpers.scratch1);
+        self.store_w_to_addr(self.layout.helpers.frame_ptr.hi);
+    }
+
+    /// Emits unsigned shift-and-add multiplication into a local result slot.
+    fn emit_unsigned_mul_core(
+        &mut self,
+        multiplicand_offset: u16,
+        multiplier_offset: u16,
+        result_offset: u16,
+        count_offset: u16,
+        ty: Type,
+    ) {
+        let loop_label = self.unique_label("rt_mul_loop");
+        let body_label = self.unique_label("rt_mul_body");
+        let add_label = self.unique_label("rt_mul_add");
+        let next_label = self.unique_label("rt_mul_next");
+        let done_label = self.unique_label("rt_mul_done");
+        self.program.push(AsmLine::Label(loop_label.clone()));
+        self.emit_current_frame_nonzero_branch(count_offset, Type::new(ScalarType::U8), &body_label, &done_label);
+        self.program.push(AsmLine::Label(body_label));
+        self.branch_on_current_frame_bit(multiplier_offset, 0, &add_label, &next_label);
+        self.program.push(AsmLine::Label(add_label));
+        self.add_current_frame_value_into_slot(multiplicand_offset, result_offset, ty);
+        self.program.push(AsmLine::Label(next_label));
+        self.shift_current_frame_value_left(multiplicand_offset, ty);
+        self.shift_current_frame_value_right(multiplier_offset, ty, false);
+        self.decrement_current_frame_value(count_offset, Type::new(ScalarType::U8));
+        self.branch_to_label(&loop_label);
+        self.program.push(AsmLine::Label(done_label));
+    }
+
+    /// Emits one loop-based restoring-division core that materializes quotient in `arg0`.
+    fn emit_unsigned_divmod_core(
+        &mut self,
+        dividend_offset: u16,
+        divisor_offset: u16,
+        remainder_offset: u16,
+        count_offset: u16,
+        ty: Type,
+        finish_label: &str,
+    ) {
+        let loop_label = self.unique_label("rt_div_loop");
+        let body_label = self.unique_label("rt_div_body");
+        self.program.push(AsmLine::Label(loop_label.clone()));
+        self.emit_current_frame_nonzero_branch(count_offset, Type::new(ScalarType::U8), &body_label, finish_label);
+        self.program.push(AsmLine::Label(body_label));
+        self.program.push(AsmLine::Instr(AsmInstr::Bcf {
+            f: low7(STATUS_ADDR),
+            b: STATUS_C_BIT,
+        }));
+        self.rotate_current_frame_value_left(dividend_offset, ty);
+        self.rotate_current_frame_value_left(remainder_offset, ty);
+        let ge_label = self.unique_label("rt_div_ge");
+        let next_label = self.unique_label("rt_div_next");
+        self.emit_current_frame_unsigned_ge_branch(
+            remainder_offset,
+            divisor_offset,
+            ty,
+            &ge_label,
+            &next_label,
+        );
+        self.program.push(AsmLine::Label(ge_label));
+        self.sub_current_frame_value_from_slot(divisor_offset, remainder_offset, ty);
+        self.set_current_frame_bit(dividend_offset, 0);
+        self.program.push(AsmLine::Label(next_label));
+        self.decrement_current_frame_value(count_offset, Type::new(ScalarType::U8));
+        self.branch_to_label(&loop_label);
+    }
+
+    /// Negates a signed arg in place and toggles one helper flag when the sign bit was set.
+    fn emit_runtime_negate_if_signed(&mut self, offset: u16, ty: Type, flag_offset: u16, flag_mask: u8) {
+        let negate_label = self.unique_label("rt_negate");
+        let done_label = self.unique_label("rt_negate_done");
+        self.branch_on_current_frame_bit(
+            offset + (ty.byte_width() - 1) as u16,
+            7,
+            &negate_label,
+            &done_label,
+        );
+        self.program.push(AsmLine::Label(negate_label));
+        self.load_current_frame_byte_to_w(flag_offset);
+        self.program.push(AsmLine::Instr(AsmInstr::Xorlw(flag_mask)));
+        self.store_w_to_current_frame_byte(flag_offset);
+        self.negate_current_frame_value(offset, ty);
+        self.program.push(AsmLine::Label(done_label));
+    }
+
+    /// Sets one helper flag when a signed arg carries a negative sign bit.
+    fn emit_runtime_set_flag_if_signed(&mut self, offset: u16, ty: Type, flag_offset: u16, flag_mask: u8) {
+        let set_label = self.unique_label("rt_setflag");
+        let done_label = self.unique_label("rt_setflag_done");
+        self.branch_on_current_frame_bit(
+            offset + (ty.byte_width() - 1) as u16,
+            7,
+            &set_label,
+            &done_label,
+        );
+        self.program.push(AsmLine::Label(set_label));
+        self.load_current_frame_byte_to_w(flag_offset);
+        self.program.push(AsmLine::Instr(AsmInstr::Iorlw(flag_mask)));
+        self.store_w_to_current_frame_byte(flag_offset);
+        self.program.push(AsmLine::Label(done_label));
+    }
+
+    /// Clamps a dynamic shift count to the operand bit width to avoid unbounded helper loops.
+    fn clamp_runtime_shift_count(&mut self, offset: u16, ty: Type) {
+        let clamp_label = self.unique_label("rt_shift_clamp");
+        let done_label = self.unique_label("rt_shift_clamp_done");
+        let width = ty.bit_width() as u8;
+
+        if ty.byte_width() == 2 {
+            self.emit_current_frame_nonzero_branch(offset + 1, Type::new(ScalarType::U8), &clamp_label, &done_label);
+            self.program.push(AsmLine::Label(done_label.clone()));
+        }
+
+        self.load_current_frame_byte_to_w(offset);
+        self.store_w_to_addr(self.layout.helpers.scratch0);
+        self.emit_const_to_w(width);
+        self.select_bank(self.layout.helpers.scratch0);
+        self.program.push(AsmLine::Instr(AsmInstr::Subwf {
+            f: low7(self.layout.helpers.scratch0),
+            d: Dest::W,
+        }));
+        self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+            f: low7(STATUS_ADDR),
+            b: STATUS_C_BIT,
+        }));
+        self.branch_to_label(&clamp_label);
+        if ty.byte_width() == 2 {
+            let final_done = self.unique_label("rt_shift_clamp_done2");
+            self.branch_to_label(&final_done);
+            self.program.push(AsmLine::Label(clamp_label));
+            self.emit_const_to_w(width);
+            self.store_w_to_current_frame_byte(offset);
+            self.emit_const_to_w(0);
+            self.store_w_to_current_frame_byte(offset + 1);
+            self.program.push(AsmLine::Label(final_done));
+            return;
+        }
+
+        self.branch_to_label(&done_label);
+        self.program.push(AsmLine::Label(clamp_label));
+        self.emit_const_to_w(width);
+        self.store_w_to_current_frame_byte(offset);
+        self.program.push(AsmLine::Label(done_label));
+    }
+
     /// Returns the storage classification assigned to one source-level symbol.
     fn symbol_storage(&self, symbol: SymbolId) -> SymbolStorage {
         self.layout.symbol_storage[&symbol]
@@ -1624,22 +2386,32 @@ fn block_label(function_name: &str, block: usize) -> String {
 /// Computes the worst-case software-stack depth over the non-recursive call graph.
 fn compute_max_stack_depth(ir_program: &IrProgram, frames: &BTreeMap<SymbolId, FrameLayout>) -> u16 {
     let mut calls = BTreeMap::<SymbolId, Vec<SymbolId>>::new();
+    let mut helper_depths = BTreeMap::<SymbolId, u16>::new();
     for function in &ir_program.functions {
         let mut callees = Vec::new();
+        let mut helper_depth = 0u16;
         for block in &function.blocks {
             for instr in &block.instructions {
-                if let IrInstr::Call { function: callee, .. } = instr {
-                    callees.push(*callee);
+                match instr {
+                    IrInstr::Call { function: callee, .. } => callees.push(*callee),
+                    IrInstr::Binary { dst, op, .. } => {
+                        if let Some(helper) = binary_helper(*op, function.temp_types[*dst]) {
+                            let info = helper.info();
+                            helper_depth = helper_depth.max(info.arg_bytes + info.frame_bytes);
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
         calls.insert(function.symbol, callees);
+        helper_depths.insert(function.symbol, helper_depth);
     }
 
     let mut memo = BTreeMap::new();
     calls.keys()
         .copied()
-        .map(|symbol| compute_function_stack_depth(symbol, &calls, frames, &mut memo))
+        .map(|symbol| compute_function_stack_depth(symbol, &calls, &helper_depths, frames, &mut memo))
         .max()
         .unwrap_or(0)
 }
@@ -1648,6 +2420,7 @@ fn compute_max_stack_depth(ir_program: &IrProgram, frames: &BTreeMap<SymbolId, F
 fn compute_function_stack_depth(
     symbol: SymbolId,
     calls: &BTreeMap<SymbolId, Vec<SymbolId>>,
+    helper_depths: &BTreeMap<SymbolId, u16>,
     frames: &BTreeMap<SymbolId, FrameLayout>,
     memo: &mut BTreeMap<SymbolId, u16>,
 ) -> u16 {
@@ -1662,11 +2435,11 @@ fn compute_function_stack_depth(
         .flatten()
         .map(|callee| {
             let arg_bytes = frames.get(callee).map_or(0, |frame| frame.arg_bytes);
-            arg_bytes + compute_function_stack_depth(*callee, calls, frames, memo)
+            arg_bytes + compute_function_stack_depth(*callee, calls, helper_depths, frames, memo)
         })
         .max()
         .unwrap_or(0);
-    let depth = own + nested;
+    let depth = own + nested.max(helper_depths.get(&symbol).copied().unwrap_or(0));
     memo.insert(symbol, depth);
     depth
 }
@@ -1741,6 +2514,23 @@ fn eval_const_expr(expr: &TypedExpr) -> i64 {
         | TypedExprKind::Deref(_)
         | TypedExprKind::Symbol(_) => 0,
     }
+}
+
+/// Returns one constant operand normalized to the destination type when available.
+fn constant_operand_value(operand: Operand, ty: Type) -> Option<i64> {
+    match operand {
+        Operand::Constant(value) => Some(normalize_value(value, ty)),
+        Operand::Symbol(_) | Operand::Temp(_) => None,
+    }
+}
+
+/// Returns the shift amount when a normalized constant is an exact power of two.
+fn normalized_power_of_two_shift(value: Option<i64>, ty: Type) -> Option<usize> {
+    let value = normalize_value(value?, ty) as u64;
+    if value == 0 || !value.is_power_of_two() {
+        return None;
+    }
+    Some(value.trailing_zeros() as usize)
 }
 
 /// Returns the low seven address bits used by direct-register PIC16 instructions.
@@ -2158,6 +2948,145 @@ mod tests {
             .expect("fp restore");
 
         assert!(last_sp_restore < last_fp_restore);
+    }
+
+    #[test]
+    /// Verifies stack-depth analysis includes compiler-generated Phase 5 helper calls.
+    fn phase_five_stack_depth_accounts_for_runtime_helpers() {
+        let u16_ty = Type::new(ScalarType::U16);
+        let program = IrProgram {
+            globals: Vec::new(),
+            functions: vec![IrFunction {
+                symbol: 1,
+                params: Vec::new(),
+                locals: Vec::new(),
+                entry: 0,
+                temp_types: vec![u16_ty],
+                return_type: Type::new(ScalarType::Void),
+                blocks: vec![IrBlock {
+                    id: 0,
+                    name: "entry".to_string(),
+                    instructions: vec![IrInstr::Binary {
+                        dst: 0,
+                        op: BinaryOp::Multiply,
+                        lhs: Operand::Constant(3),
+                        rhs: Operand::Constant(7),
+                    }],
+                    terminator: IrTerminator::Return(None),
+                }],
+            }],
+        };
+        let frames = BTreeMap::from([(
+            1,
+            FrameLayout {
+                arg_bytes: 0,
+                saved_fp_offset: 0,
+                local_bytes: 0,
+                temp_bytes: 2,
+                frame_bytes: 4,
+            },
+        )]);
+
+        assert_eq!(compute_max_stack_depth(&program, &frames), 14);
+    }
+
+    #[test]
+    /// Verifies Phase 5 multiplication lowers through helper calls that appear in code symbols.
+    fn phase_five_runtime_helper_calls_emit_labels_and_calls() {
+        let registry = DeviceRegistry::new();
+        let target = registry.device("pic16f628a").expect("device");
+        let u16_ty = Type::new(ScalarType::U16);
+        let program = TypedProgram {
+            symbols: vec![symbol(0, "main", Type::new(ScalarType::Void), SymbolKind::Function)],
+            globals: Vec::new(),
+            functions: vec![TypedFunction {
+                symbol: 0,
+                params: Vec::new(),
+                locals: Vec::new(),
+                body: None,
+                return_type: Type::new(ScalarType::Void),
+                span: Span::new(0, 0),
+            }],
+        };
+        let ir = IrProgram {
+            globals: Vec::new(),
+            functions: vec![IrFunction {
+                symbol: 0,
+                params: Vec::new(),
+                locals: Vec::new(),
+                entry: 0,
+                temp_types: vec![u16_ty],
+                return_type: Type::new(ScalarType::Void),
+                blocks: vec![IrBlock {
+                    id: 0,
+                    name: "entry".to_string(),
+                    instructions: vec![IrInstr::Binary {
+                        dst: 0,
+                        op: BinaryOp::Multiply,
+                        lhs: Operand::Constant(9),
+                        rhs: Operand::Constant(11),
+                    }],
+                    terminator: IrTerminator::Return(None),
+                }],
+            }],
+        };
+        let mut diagnostics = DiagnosticBag::new(WarningProfile::default());
+        let output = compile_program(target, &program, &ir, &mut diagnostics).expect("backend");
+
+        assert!(!diagnostics.has_errors());
+        let asm = output.program.render();
+        assert!(asm.contains("call __rt_mul_u16"));
+        assert!(asm.contains("__rt_mul_u16:"));
+        assert!(output.map.code_symbols.iter().any(|(name, _)| name == "__rt_mul_u16"));
+    }
+
+    #[test]
+    /// Verifies constant-count shifts lower inline without pulling in the dynamic helper path.
+    fn phase_five_constant_shift_stays_inline() {
+        let registry = DeviceRegistry::new();
+        let target = registry.device("pic16f628a").expect("device");
+        let u16_ty = Type::new(ScalarType::U16);
+        let program = TypedProgram {
+            symbols: vec![symbol(0, "main", Type::new(ScalarType::Void), SymbolKind::Function)],
+            globals: Vec::new(),
+            functions: vec![TypedFunction {
+                symbol: 0,
+                params: Vec::new(),
+                locals: Vec::new(),
+                body: None,
+                return_type: Type::new(ScalarType::Void),
+                span: Span::new(0, 0),
+            }],
+        };
+        let ir = IrProgram {
+            globals: Vec::new(),
+            functions: vec![IrFunction {
+                symbol: 0,
+                params: Vec::new(),
+                locals: Vec::new(),
+                entry: 0,
+                temp_types: vec![u16_ty],
+                return_type: Type::new(ScalarType::Void),
+                blocks: vec![IrBlock {
+                    id: 0,
+                    name: "entry".to_string(),
+                    instructions: vec![IrInstr::Binary {
+                        dst: 0,
+                        op: BinaryOp::ShiftRight,
+                        lhs: Operand::Constant(0x0123),
+                        rhs: Operand::Constant(3),
+                    }],
+                    terminator: IrTerminator::Return(None),
+                }],
+            }],
+        };
+        let mut diagnostics = DiagnosticBag::new(WarningProfile::default());
+        let output = compile_program(target, &program, &ir, &mut diagnostics).expect("backend");
+
+        assert!(!diagnostics.has_errors());
+        let asm = output.program.render();
+        assert!(!asm.contains("call __rt_shr_u16"));
+        assert!(!asm.contains("__rt_shr_u16:"));
     }
 
     /// Builds one typed symbol used by the backend unit test fixture.

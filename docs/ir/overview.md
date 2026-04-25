@@ -8,17 +8,19 @@ Motivation:
 - enable validation and optimization passes
 - keep call and memory lowering explicit
 
-Current Phase 4 IR carries:
+Current Phase 5 IR carries:
 
 - typed casts
 - typed compare conditions
 - explicit address materialization
 - explicit indirect load/store
 - direct-call instructions with arbitrary argument lists
+- typed arithmetic and shift instructions for helper-aware lowering
 
-Phase 4 detail:
+Current detail:
 
 - [phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
+- [phase5-arithmetic-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase5-arithmetic-lowering.md:1)
 
 Historical detail:
 

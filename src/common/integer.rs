@@ -59,6 +59,7 @@ pub fn eval_binary(op: BinaryOp, lhs: i64, rhs: i64, operand_ty: Type, result_ty
     let rhs_unsigned = normalize_value(rhs, operand_ty);
     let lhs_signed = signed_value(lhs, operand_ty);
     let rhs_signed = signed_value(rhs, operand_ty);
+    let shift_count = (rhs_unsigned as usize).min(operand_ty.bit_width());
 
     let value = match op {
         BinaryOp::Add => lhs_unsigned + rhs_unsigned,
@@ -80,6 +81,14 @@ pub fn eval_binary(op: BinaryOp, lhs: i64, rhs: i64, operand_ty: Type, result_ty
                 lhs_signed % rhs_signed
             } else {
                 lhs_unsigned % rhs_unsigned
+            }
+        }
+        BinaryOp::ShiftLeft => lhs_unsigned << shift_count,
+        BinaryOp::ShiftRight => {
+            if operand_ty.is_signed() {
+                lhs_signed >> shift_count
+            } else {
+                lhs_unsigned >> shift_count
             }
         }
         BinaryOp::BitAnd => lhs_unsigned & rhs_unsigned,
@@ -175,7 +184,10 @@ mod tests {
 
         assert_eq!(eval_binary(BinaryOp::Add, 0xFFFF, 1, u16_ty, u16_ty), 0);
         assert_eq!(eval_binary(BinaryOp::Sub, 0, 1, u16_ty, u16_ty), 0xFFFF);
+        assert_eq!(eval_binary(BinaryOp::ShiftLeft, 1, 3, u16_ty, u16_ty), 8);
+        assert_eq!(eval_binary(BinaryOp::ShiftRight, 0x8000, 15, u16_ty, u16_ty), 1);
         assert_eq!(eval_unary(UnaryOp::BitwiseNot, 0x00FF, u16_ty, u16_ty), 0xFF00);
         assert_eq!(signed_value(eval_unary(UnaryOp::Negate, 2, i16_ty, i16_ty), i16_ty), -2);
+        assert_eq!(signed_value(eval_binary(BinaryOp::ShiftRight, -2, 1, i16_ty, i16_ty), i16_ty), -1);
     }
 }

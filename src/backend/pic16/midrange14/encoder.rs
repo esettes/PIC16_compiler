@@ -136,6 +136,8 @@ fn encode_instr(instr: &AsmInstr) -> u16 {
         AsmInstr::Iorwf { f, d } => 0x0400 | dest_bit(*d) | u16::from(*f & 0x7F),
         AsmInstr::Xorwf { f, d } => 0x0600 | dest_bit(*d) | u16::from(*f & 0x7F),
         AsmInstr::Subwf { f, d } => 0x0200 | dest_bit(*d) | u16::from(*f & 0x7F),
+        AsmInstr::Rlf { f, d } => 0x0D00 | dest_bit(*d) | u16::from(*f & 0x7F),
+        AsmInstr::Rrf { f, d } => 0x0C00 | dest_bit(*d) | u16::from(*f & 0x7F),
         AsmInstr::Bcf { f, b } => 0x1000 | (u16::from(*b & 0x07) << 7) | u16::from(*f & 0x7F),
         AsmInstr::Bsf { f, b } => 0x1400 | (u16::from(*b & 0x07) << 7) | u16::from(*f & 0x7F),
         AsmInstr::Btfsc { f, b } => 0x1800 | (u16::from(*b & 0x07) << 7) | u16::from(*f & 0x7F),
