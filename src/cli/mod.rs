@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use crate::diagnostics::WarningProfile;
 
+pub const CLI_NAME: &str = "picc";
+
 #[derive(Clone, Debug)]
 pub struct CliOptions {
     pub command: CliCommand,
@@ -172,31 +174,31 @@ fn parse_define(raw: &str, defines: &mut BTreeMap<String, String>) -> Result<(),
 
 /// Returns the static CLI help text shown for `--help` and argument errors.
 pub fn help_text() -> &'static str {
-    "\
-pic16cc 0.1.0
-
-Usage:
-  pic16cc --target <name> [options] -o <out.hex> <input.c>
-  pic16cc --list-targets
-  pic16cc --help
-  pic16cc --version
-
-Options:
-  --target <name>   Target device (`pic16f628a`, `pic16f877a`)
-  -o <path>         Output Intel HEX path
-  -I <dir>          Add include directory
-  -D <name=value>   Define object-like macro
-  -O0|-O1|-O2|-Os   Optimization level
-  -Wall             Enable baseline warnings
-  -Wextra           Enable extra warnings
-  -Werror           Treat warnings as errors
-  --emit-tokens     Write token dump next to output
-  --emit-ast        Write AST dump next to output
-  --emit-ir         Write IR dump next to output
-  --emit-asm        Write assembly dump next to output
-  --map             Write map file next to output
-  --list-file       Write listing file next to output
-  --verbose         Enable verbose build logs"
+    concat!(
+        "picc ",
+        env!("CARGO_PKG_VERSION"),
+        "\n\nUsage:\n",
+        "  picc --target <name> [options] -o <out.hex> <input.c>\n",
+        "  picc --list-targets\n",
+        "  picc --help\n",
+        "  picc --version\n\n",
+        "Options:\n",
+        "  --target <name>   Target device (`pic16f628a`, `pic16f877a`)\n",
+        "  -o <path>         Output Intel HEX path\n",
+        "  -I <dir>          Add include directory\n",
+        "  -D <name=value>   Define object-like macro\n",
+        "  -O0|-O1|-O2|-Os   Optimization level\n",
+        "  -Wall             Enable baseline warnings\n",
+        "  -Wextra           Enable extra warnings\n",
+        "  -Werror           Treat warnings as errors\n",
+        "  --emit-tokens     Write token dump next to output\n",
+        "  --emit-ast        Write AST dump next to output\n",
+        "  --emit-ir         Write IR dump next to output\n",
+        "  --emit-asm        Write assembly dump next to output\n",
+        "  --map             Write map file next to output\n",
+        "  --list-file       Write listing file next to output\n",
+        "  --verbose         Enable verbose build logs"
+    )
 }
 
 impl Display for OptimizationLevel {

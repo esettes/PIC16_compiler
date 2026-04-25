@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use assembler::listing::render_listing;
 use backend::pic16::devices::{DeviceRegistry, TargetDevice};
 use backend::pic16::midrange14::codegen::compile_program;
-use cli::{CliCommand, CliOptions, OptimizationLevel};
+use cli::{CliCommand, CliOptions, OptimizationLevel, CLI_NAME};
 use common::source::SourceManager;
 use diagnostics::{DiagnosticBag, DiagnosticEmitter, Severity, StageResult};
 use frontend::ast::TranslationUnit;
@@ -67,7 +67,7 @@ pub fn execute(options: CliOptions) -> StageResult<CompilationOutput> {
             })
         }
         CliCommand::Version => {
-            println!("pic16cc {}", env!("CARGO_PKG_VERSION"));
+            println!("{CLI_NAME} {}", env!("CARGO_PKG_VERSION"));
             Ok(CompilationOutput {
                 hex_path: PathBuf::new(),
                 generated_files: Vec::new(),
@@ -175,6 +175,16 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
     let listing_path = command.artifacts.list_file.then(|| change_extension(&command.output, "lst"));
     let map_path = command.artifacts.map.then(|| change_extension(&command.output, "map"));
 
+    if let Some(parent) = command.output.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            DiagnosticBag::single(
+                Severity::Error,
+                "io",
+                format!("failed to create output directory `{}`: {error}", parent.display()),
+            )
+        })?;
+    }
+
     if let Some(path) = &listing_path {
         fs::write(path, render_listing(&assembled.program, &assembled.words)).map_err(|error| {
             DiagnosticBag::single(
@@ -196,15 +206,6 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
     }
 
     let hex_records = IntelHexWriter::new(target).emit(&assembled.words, target.default_config_word);
-    if let Some(parent) = command.output.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            DiagnosticBag::single(
-                Severity::Error,
-                "io",
-                format!("failed to create output directory `{}`: {error}", parent.display()),
-            )
-        })?;
-    }
     fs::write(&command.output, hex_records).map_err(|error| {
         DiagnosticBag::single(
             Severity::Error,

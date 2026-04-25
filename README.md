@@ -233,10 +233,64 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
+## Installing picc
+
+```bash
+cargo build --release
+./target/release/picc --version
+./target/release/picc --help
+
+cargo install --path .
+picc --version
+picc --help
+```
+
+## Compiling to HEX
+
+```bash
+picc --target pic16f877a -Wall -Wextra -Werror -O2 -I include -o build/main.hex src/main.c
+```
+
+## Using picc from Makefile
+
+```make
+PIC := picc
+TARGET := pic16f877a
+CFLAGS := -Wall -Wextra -Werror -O2 -I include
+SRC := src/main.c
+OUT := build/main.hex
+FLASH_CMD ?= echo "Configure FLASH_CMD to program"
+
+$(OUT): $(SRC)
+	mkdir -p build
+	$(PIC) --target $(TARGET) $(CFLAGS) -o $(OUT) $(SRC)
+
+clean:
+	rm -rf build
+
+flash: $(OUT)
+	$(FLASH_CMD) $(OUT)
+```
+
+Variables:
+
+- `PIC`: compiler executable
+- `TARGET`: PIC device name
+- `CFLAGS`: compiler flags and include paths
+- `SRC`: input C file
+- `OUT`: output HEX path
+- `FLASH_CMD`: programmer command (override per toolchain)
+
+Commands:
+
+- `make`
+- `make clean`
+- `make flash`
+
 ## Usage
 
 ```bash
-cargo run -- \
+picc \
   --target pic16f628a \
   -I include \
   -O2 -Wall -Wextra \
@@ -249,7 +303,7 @@ cargo run -- \
 Phase 4 stack-first example:
 
 ```bash
-cargo run -- \
+picc \
   --target pic16f628a \
   -I include \
   -O2 -Wall -Wextra \
@@ -261,7 +315,7 @@ cargo run -- \
 Phase 5 arithmetic-helper example:
 
 ```bash
-cargo run -- \
+picc \
   --target pic16f877a \
   -I include \
   -O2 -Wall -Wextra \
@@ -273,7 +327,7 @@ cargo run -- \
 Phase 6 interrupt example:
 
 ```bash
-cargo run -- \
+picc \
   --target pic16f628a \
   -I include \
   -O2 -Wall -Wextra \
@@ -285,7 +339,7 @@ cargo run -- \
 List targets:
 
 ```bash
-cargo run -- --list-targets
+picc --list-targets
 ```
 
 ## Examples

@@ -6,7 +6,7 @@ license = "MIT"
 description = "Experimental C compiler for PIC16 mid-range MCUs"
 
 [[bin]]
-name = "pic16cc"
+name = "picc"
 path = "src/main.rs"
 
 [lib]

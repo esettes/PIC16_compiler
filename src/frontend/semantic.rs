@@ -1553,7 +1553,10 @@ impl<'a> SemanticAnalyzer<'a> {
             return expr;
         }
 
-        if warn_on_truncate && expr.ty.bit_width() > target_ty.bit_width() {
+        if warn_on_truncate
+            && expr.ty.bit_width() > target_ty.bit_width()
+            && !is_representable_integer_constant(&expr, target_ty)
+        {
             diagnostics.warning(
                 "semantic",
                 Some(expr.span),
@@ -2340,6 +2343,42 @@ fn eval_integer_constant_expr(expr: &TypedExpr) -> Option<i64> {
     };
 
     Some(normalize_value(value, expr.ty))
+}
+
+/// Returns true when an integer constant expression can be represented exactly by `target_ty`.
+fn is_representable_integer_constant(expr: &TypedExpr, target_ty: Type) -> bool {
+    if !target_ty.is_integer() {
+        return false;
+    }
+    let Some((min, max)) = integer_value_range(target_ty) else {
+        return false;
+    };
+    let Some(value) = eval_integer_constant_expr(expr) else {
+        return false;
+    };
+
+    let value = if expr.ty.is_signed() {
+        signed_value(value, expr.ty)
+    } else {
+        normalize_value(value, expr.ty)
+    };
+
+    (min..=max).contains(&value)
+}
+
+/// Returns the closed signed range that values of this integer type can represent.
+fn integer_value_range(ty: Type) -> Option<(i64, i64)> {
+    if !ty.is_integer() {
+        return None;
+    }
+
+    match ty.scalar {
+        ScalarType::I8 => Some((i64::from(i8::MIN), i64::from(i8::MAX))),
+        ScalarType::U8 => Some((0, i64::from(u8::MAX))),
+        ScalarType::I16 => Some((i64::from(i16::MIN), i64::from(i16::MAX))),
+        ScalarType::U16 => Some((0, i64::from(u16::MAX))),
+        ScalarType::Void => None,
+    }
 }
 
 /// Returns the shift amount when a normalized integer constant is an exact power of two.

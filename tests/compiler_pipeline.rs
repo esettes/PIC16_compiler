@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pic16cc::cli::{CliCommand, CliOptions, CompileCommand, OptimizationLevel, OutputArtifacts};
@@ -19,6 +20,20 @@ fn temp_file(name: &str) -> PathBuf {
         .expect("time")
         .as_nanos();
     std::env::temp_dir().join(format!("pic16cc-{stamp}-{name}"))
+}
+
+/// Creates a unique temporary directory path for CLI output.
+fn temp_dir_path(name: &str) -> PathBuf {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time")
+        .as_nanos();
+    std::env::temp_dir().join(format!("picc-{stamp}-{name}"))
+}
+
+/// Returns the built CLI path for integration tests.
+fn picc_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_picc"))
 }
 
 /// Compiles one input file with artifact dumps enabled and returns the HEX path.
@@ -83,6 +98,63 @@ fn compile_error(target: &str, name: &str, source: &str) -> String {
     })
     .expect_err("must fail");
     format!("{error}")
+}
+
+/// Compiles one source file path using a custom warning profile.
+fn compile_path_with_profile(
+    target: &str,
+    input: PathBuf,
+    warning_profile: WarningProfile,
+) -> Result<PathBuf, String> {
+    let output = temp_file("profile.hex");
+    let result = execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: target.to_string(),
+            input,
+            output: output.clone(),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O2,
+            artifacts: OutputArtifacts::default(),
+            verbose: false,
+            warning_profile,
+        }),
+    });
+
+    match result {
+        Ok(_) => Ok(output),
+        Err(error) => Err(format!("{error}")),
+    }
+}
+
+/// Compiles temporary source text using a custom warning profile.
+fn compile_source_with_profile(
+    target: &str,
+    name: &str,
+    source: &str,
+    warning_profile: WarningProfile,
+) -> Result<PathBuf, String> {
+    let input = temp_file(name);
+    fs::write(&input, source).expect("fixture");
+    compile_path_with_profile(target, input, warning_profile)
+}
+
+/// Compiles a checked-in example source with a custom warning profile.
+fn compile_example_with_profile(
+    target: &str,
+    input: &str,
+    warning_profile: WarningProfile,
+) -> Result<PathBuf, String> {
+    compile_path_with_profile(target, repo(input), warning_profile)
+}
+
+/// Returns a strict warning profile equivalent to `-Wall -Wextra -Werror`.
+fn strict_warnings() -> WarningProfile {
+    WarningProfile {
+        wall: true,
+        wextra: true,
+        werror: true,
+    }
 }
 
 /// Checks that the generated HEX includes both config data and the EOF record.
@@ -1330,36 +1402,235 @@ void main(void) {
 }
 
 #[test]
+/// Verifies representable integer constants can initialize unsigned bytes under `-Werror`.
+fn allows_representable_constant_to_unsigned_char() {
+    let output = compile_source_with_profile(
+        "pic16f628a",
+        "fit-u8.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    unsigned char i = 8;
+    TRISB = 0x00;
+    PORTB = i;
+}
+",
+        strict_warnings(),
+    )
+    .unwrap_or_else(|error| panic!("unexpected diagnostics: {error}"));
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies representable constants assigned to volatile SFR bytes do not warn.
+fn allows_representable_constant_to_volatile_unsigned_char() {
+    let output = compile_source_with_profile(
+        "pic16f628a",
+        "fit-volatile-u8.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    TRISB = 0x00;
+    PORTB = 0x01;
+}
+",
+        strict_warnings(),
+    )
+    .unwrap_or_else(|error| panic!("unexpected diagnostics: {error}"));
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies out-of-range constants still trigger narrowing diagnostics for unsigned bytes.
+fn rejects_out_of_range_constant_to_unsigned_char() {
+    let error = compile_source_with_profile(
+        "pic16f628a",
+        "oor-u8.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    unsigned char x = 300;
+    TRISB = 0x00;
+    PORTB = x;
+}
+",
+        strict_warnings(),
+    )
+    .expect_err("must fail");
+
+    assert!(error.contains("conversion from `int` to `unsigned char` truncates"));
+}
+
+#[test]
+/// Verifies out-of-range constants still trigger narrowing diagnostics for volatile SFR bytes.
+fn rejects_out_of_range_constant_to_volatile_unsigned_char() {
+    let error = compile_source_with_profile(
+        "pic16f628a",
+        "oor-volatile-u8.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    TRISB = 0x00;
+    PORTB = 300;
+}
+",
+        strict_warnings(),
+    )
+    .expect_err("must fail");
+
+    assert!(error.contains("conversion from `int` to `volatile unsigned char` truncates"));
+}
+
+#[test]
+/// Verifies non-constant narrowing conversions still fail under `-Werror`.
+fn rejects_non_constant_int_to_unsigned_char_under_werror() {
+    let error = compile_source_with_profile(
+        "pic16f628a",
+        "nonconst-narrow-u8.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    int x = 1234;
+    unsigned char y = x;
+    TRISB = 0x00;
+    PORTB = y;
+}
+",
+        strict_warnings(),
+    )
+    .expect_err("must fail");
+
+    assert!(error.contains("conversion from `int` to `unsigned char` truncates"));
+}
+
+#[test]
+/// Verifies the checked-in blink example compiles with `-Wall -Wextra -Werror`.
+fn blink_compiles_under_strict_warnings() {
+    let output = compile_example_with_profile(
+        "pic16f628a",
+        "examples/pic16f628a/blink.c",
+        strict_warnings(),
+    )
+    .unwrap_or_else(|error| panic!("unexpected diagnostics: {error}"));
+
+    assert_hex_is_programmable(&output);
+}
+
+fn assert_makefile_shape(path: &str) {
+    let makefile = fs::read_to_string(repo(path)).expect("makefile");
+    assert!(makefile.contains("$(PIC)"));
+    assert!(makefile.contains("--target"));
+    assert!(makefile.contains("-o $(OUT)"));
+    assert!(!makefile.contains("cargo run"));
+}
+
+#[test]
+/// Verifies the release binary is named `picc`.
+fn release_binary_is_picc() {
+    let path = picc_bin();
+    let stem = path.file_stem().and_then(|name| name.to_str()).expect("bin stem");
+    assert_eq!(stem, "picc");
+}
+
+#[test]
+/// Verifies `picc --help` prints the CLI usage text.
+fn cli_help_works() {
+    let output = Command::new(picc_bin())
+        .current_dir(repo("."))
+        .arg("--help")
+        .output()
+        .expect("run picc --help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("picc"));
+    assert!(stdout.contains("Usage:"));
+}
+
+#[test]
+/// Verifies `picc --version` prints the version string.
+fn cli_version_works() {
+    let output = Command::new(picc_bin())
+        .current_dir(repo("."))
+        .arg("--version")
+        .output()
+        .expect("run picc --version");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("picc "));
+}
+
+#[test]
+/// Verifies the CLI emits HEX, map, and listing outputs.
+fn cli_generates_hex_map_and_list_outputs() {
+    let out_dir = temp_dir_path("cli-out");
+    let out_hex = out_dir.join("blink.hex");
+    let output = Command::new(picc_bin())
+        .current_dir(repo("."))
+        .args([
+            "--target",
+            "pic16f628a",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-O2",
+            "-I",
+            "include",
+            "--map",
+            "--list-file",
+        ])
+        .arg("-o")
+        .arg(&out_hex)
+        .arg("examples/pic16f628a/blink.c")
+        .output()
+        .expect("run picc");
+
+    if !output.status.success() {
+        panic!(
+            "picc failed: stdout={:?} stderr={:?}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    assert_hex_is_programmable(&out_hex);
+    assert!(out_hex.with_extension("map").exists());
+    assert!(out_hex.with_extension("lst").exists());
+}
+
+#[test]
+/// Verifies example Makefiles use the installed `picc` CLI shape.
+fn example_makefiles_use_picc_cli() {
+    assert_makefile_shape("examples/pic16f628a/Makefile");
+    assert_makefile_shape("examples/pic16f877a/Makefile");
+    assert_makefile_shape("examples/Makefile.template");
+}
+
+#[test]
 /// Verifies the README command shape still parses into the expected CLI options.
 fn parses_cli_shape_requested_in_readme() {
     let options = CliOptions::parse(vec![
-        "pic16cc".to_string(),
+        "picc".to_string(),
         "--target".to_string(),
-        "pic16f628a".to_string(),
-        "-I".to_string(),
-        "include".to_string(),
-        "-O2".to_string(),
+        "pic16f877a".to_string(),
         "-Wall".to_string(),
         "-Wextra".to_string(),
-        "--emit-ast".to_string(),
-        "--emit-ir".to_string(),
-        "--emit-asm".to_string(),
-        "--map".to_string(),
-        "--list-file".to_string(),
+        "-Werror".to_string(),
+        "-O2".to_string(),
+        "-I".to_string(),
+        "include".to_string(),
         "-o".to_string(),
-        "build/blink.hex".to_string(),
-        "examples/pic16f628a/blink.c".to_string(),
+        "build/main.hex".to_string(),
+        "src/main.c".to_string(),
     ])
     .expect("parse cli");
 
     let CliCommand::Compile(command) = options.command else {
         panic!("expected compile command");
     };
-    assert_eq!(command.target, "pic16f628a");
-    assert_eq!(command.output, PathBuf::from("build/blink.hex"));
-    assert!(command.artifacts.emit_ast);
-    assert!(command.artifacts.emit_ir);
-    assert!(command.artifacts.emit_asm);
-    assert!(command.artifacts.map);
-    assert!(command.artifacts.list_file);
+    assert_eq!(command.target, "pic16f877a");
+    assert_eq!(command.output, PathBuf::from("build/main.hex"));
 }
