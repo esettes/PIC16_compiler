@@ -26,6 +26,7 @@ impl<'a> IrLowerer<'a> {
         for function in &program.functions {
             if let Some(body) = &function.body {
                 let mut builder = FunctionBuilder::new(function.symbol, function, body.clone());
+                builder.is_interrupt = program.symbols[function.symbol].is_interrupt;
                 functions.push(builder.lower(diagnostics));
             }
         }
@@ -35,6 +36,7 @@ impl<'a> IrLowerer<'a> {
 
 struct FunctionBuilder {
     symbol: SymbolId,
+    is_interrupt: bool,
     params: Vec<SymbolId>,
     locals: Vec<SymbolId>,
     return_type: Type,
@@ -50,6 +52,7 @@ impl FunctionBuilder {
     fn new(symbol: SymbolId, function: &TypedFunction, body: TypedStmt) -> Self {
         Self {
             symbol,
+            is_interrupt: false,
             params: function.params.clone(),
             locals: function.locals.clone(),
             return_type: function.return_type,
@@ -79,6 +82,7 @@ impl FunctionBuilder {
         }
         IrFunction {
             symbol: self.symbol,
+            is_interrupt: self.is_interrupt,
             params: self.params.clone(),
             locals: self.locals.clone(),
             blocks: self.blocks.clone(),
@@ -603,6 +607,7 @@ mod tests {
             name: name.to_string(),
             ty,
             storage_class: StorageClass::Auto,
+            is_interrupt: false,
             kind,
             span: Span::new(0, 0),
             fixed_address: None,

@@ -20,6 +20,7 @@ pub struct FunctionDecl {
     pub name: String,
     pub return_type: Type,
     pub storage_class: StorageClass,
+    pub is_interrupt: bool,
     pub params: Vec<VarDecl>,
     pub body: Option<Stmt>,
     pub span: Span,
@@ -143,7 +144,8 @@ impl TranslationUnit {
                 Item::Function(function) => {
                     let _ = writeln!(
                         output,
-                        "fn {}({}) -> {}",
+                        "{}fn {}({}) -> {}",
+                        if function.is_interrupt { "interrupt " } else { "" },
                         function.name,
                         function
                             .params

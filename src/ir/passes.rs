@@ -233,6 +233,7 @@ mod tests {
             globals: Vec::new(),
             functions: vec![IrFunction {
                 symbol: 0,
+                is_interrupt: false,
                 params: Vec::new(),
                 locals: Vec::new(),
                 entry: 0,
@@ -316,6 +317,7 @@ mod tests {
             globals: Vec::new(),
             functions: vec![IrFunction {
                 symbol: 0 as SymbolId,
+                is_interrupt: false,
                 params: Vec::new(),
                 locals: Vec::new(),
                 entry: 0,

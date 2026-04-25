@@ -25,6 +25,7 @@ pub struct Symbol {
     pub name: String,
     pub ty: Type,
     pub storage_class: StorageClass,
+    pub is_interrupt: bool,
     pub kind: SymbolKind,
     pub span: Span,
     pub fixed_address: Option<u16>,
@@ -191,6 +192,7 @@ impl<'a> SemanticAnalyzer<'a> {
         }
 
         self.reject_recursive_calls(diagnostics);
+        self.validate_interrupt_handlers(diagnostics);
 
         self.emit_warnings(diagnostics);
         if diagnostics.has_errors() {
@@ -215,6 +217,7 @@ impl<'a> SemanticAnalyzer<'a> {
                     is_volatile: true,
                 }),
                 storage_class: StorageClass::Extern,
+                is_interrupt: false,
                 kind: SymbolKind::DeviceRegister,
                 span: Span::new(0, 0),
                 fixed_address: Some(register.address),
@@ -267,6 +270,7 @@ impl<'a> SemanticAnalyzer<'a> {
             name: global.name.clone(),
             ty: global.ty,
             storage_class: global.storage_class,
+            is_interrupt: false,
             kind: SymbolKind::Global,
             span: global.span,
             fixed_address: None,
@@ -292,11 +296,22 @@ impl<'a> SemanticAnalyzer<'a> {
                     format!("symbol `{}` already declared as non-function", function.name),
                     None,
                 );
+            } else if existing_symbol.is_interrupt != function.is_interrupt {
+                diagnostics.error(
+                    "semantic",
+                    Some(function.span),
+                    format!(
+                        "function `{}` changes interrupt qualifier between declarations",
+                        function.name
+                    ),
+                    Some("declare the ISR consistently on every prototype and definition".to_string()),
+                );
             }
             return;
         }
 
         self.validate_return_type(function.return_type, function.span, &function.name, diagnostics);
+        self.validate_interrupt_signature(function, diagnostics);
 
         let parameter_types = function
             .params
@@ -312,11 +327,12 @@ impl<'a> SemanticAnalyzer<'a> {
             name: function.name.clone(),
             ty: function.return_type,
             storage_class: function.storage_class,
+            is_interrupt: function.is_interrupt,
             kind: SymbolKind::Function,
             span: function.span,
             fixed_address: None,
             is_defined: function.body.is_none(),
-            is_referenced: false,
+            is_referenced: function.is_interrupt,
             parameter_types,
         });
         self.globals_by_name.insert(function.name.clone(), symbol);
@@ -391,6 +407,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 name: param.name.clone(),
                 ty: param_ty,
                 storage_class: param.storage_class,
+                is_interrupt: false,
                 kind: SymbolKind::Param,
                 span: param.span,
                 fixed_address: None,
@@ -411,6 +428,9 @@ impl<'a> SemanticAnalyzer<'a> {
             .map(|stmt| self.analyze_stmt(stmt, diagnostics));
         if let Some(body) = body.as_ref() {
             self.reject_stack_local_pointer_returns(body, diagnostics);
+            if self.symbols[symbol].is_interrupt {
+                self.reject_interrupt_body(symbol, body, diagnostics);
+            }
         }
 
         let locals = self.function_symbols_since(function_symbol_start);
@@ -551,7 +571,11 @@ impl<'a> SemanticAnalyzer<'a> {
                         diagnostics.error(
                             "semantic",
                             Some(*span),
-                            "void function cannot return a value",
+                            if self.symbols[current_function].is_interrupt {
+                                "interrupt handler cannot return a value"
+                            } else {
+                                "void function cannot return a value"
+                            },
                             None,
                         );
                         None
@@ -1605,6 +1629,55 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
+    /// Validates the fixed Phase 6 ISR signature for `void __interrupt handler(void)`.
+    fn validate_interrupt_signature(
+        &mut self,
+        function: &FunctionDecl,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        if !function.is_interrupt {
+            return;
+        }
+
+        if !function.return_type.is_void() {
+            diagnostics.error(
+                "semantic",
+                Some(function.span),
+                format!(
+                    "interrupt handler `{}` must return `void` in phase 6",
+                    function.name
+                ),
+                Some("declare it as `void __interrupt isr(void)`".to_string()),
+            );
+        }
+
+        if !function.params.is_empty() {
+            diagnostics.error(
+                "semantic",
+                Some(function.span),
+                format!(
+                    "interrupt handler `{}` cannot take parameters in phase 6",
+                    function.name
+                ),
+                Some("remove the parameters and use `void`".to_string()),
+            );
+        }
+
+        if let Some(existing) = self.interrupt_handler()
+            && self.symbols[existing].name != function.name
+        {
+            diagnostics.error(
+                "semantic",
+                Some(function.span),
+                format!(
+                    "phase 6 supports only one interrupt handler; already declared `{}`",
+                    self.symbols[existing].name
+                ),
+                Some("keep a single `__interrupt` function in this program".to_string()),
+            );
+        }
+    }
+
     /// Validates one parameter type against the fixed Phase 3 call ABI.
     fn validate_param_type(
         &mut self,
@@ -1659,6 +1732,23 @@ impl<'a> SemanticAnalyzer<'a> {
         let mut state = BTreeMap::<SymbolId, VisitState>::new();
         for function in &self.functions {
             self.visit_call_graph(function.symbol, &mut state, &mut Vec::new(), diagnostics);
+        }
+    }
+
+    /// Ensures the single Phase 6 ISR, when declared, is fully defined before codegen.
+    fn validate_interrupt_handlers(&self, diagnostics: &mut DiagnosticBag) {
+        if let Some(symbol) = self.interrupt_handler()
+            && !self.has_body(symbol)
+        {
+            diagnostics.error(
+                "semantic",
+                Some(self.symbols[symbol].span),
+                format!(
+                    "interrupt handler `{}` must be defined in phase 6",
+                    self.symbols[symbol].name
+                ),
+                None,
+            );
         }
     }
 
@@ -1911,6 +2001,172 @@ impl<'a> SemanticAnalyzer<'a> {
             && symbol.ty.is_pointer()
     }
 
+    /// Rejects calls and runtime-helper-requiring expressions inside one Phase 6 ISR body.
+    fn reject_interrupt_body(
+        &self,
+        function: SymbolId,
+        body: &TypedStmt,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        self.walk_interrupt_stmt(function, body, diagnostics);
+    }
+
+    /// Walks one typed statement tree while enforcing the conservative Phase 6 ISR subset.
+    fn walk_interrupt_stmt(
+        &self,
+        function: SymbolId,
+        stmt: &TypedStmt,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        match stmt {
+            TypedStmt::Block(statements, _) => {
+                for statement in statements {
+                    self.walk_interrupt_stmt(function, statement, diagnostics);
+                }
+            }
+            TypedStmt::VarDecl(_, initializer, _)
+            | TypedStmt::Return(initializer, _) => {
+                if let Some(expr) = initializer {
+                    self.walk_interrupt_expr(function, expr, diagnostics);
+                }
+            }
+            TypedStmt::Expr(expr, _) => self.walk_interrupt_expr(function, expr, diagnostics),
+            TypedStmt::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                self.walk_interrupt_expr(function, condition, diagnostics);
+                self.walk_interrupt_stmt(function, then_branch, diagnostics);
+                if let Some(else_branch) = else_branch {
+                    self.walk_interrupt_stmt(function, else_branch, diagnostics);
+                }
+            }
+            TypedStmt::While {
+                condition, body, ..
+            } => {
+                self.walk_interrupt_expr(function, condition, diagnostics);
+                self.walk_interrupt_stmt(function, body, diagnostics);
+            }
+            TypedStmt::DoWhile {
+                body,
+                condition,
+                ..
+            } => {
+                self.walk_interrupt_stmt(function, body, diagnostics);
+                self.walk_interrupt_expr(function, condition, diagnostics);
+            }
+            TypedStmt::For {
+                init,
+                condition,
+                step,
+                body,
+                ..
+            } => {
+                if let Some(init) = init {
+                    self.walk_interrupt_stmt(function, init, diagnostics);
+                }
+                if let Some(condition) = condition {
+                    self.walk_interrupt_expr(function, condition, diagnostics);
+                }
+                if let Some(step) = step {
+                    self.walk_interrupt_expr(function, step, diagnostics);
+                }
+                self.walk_interrupt_stmt(function, body, diagnostics);
+            }
+            TypedStmt::Break(_) | TypedStmt::Continue(_) | TypedStmt::Empty(_) => {}
+        }
+    }
+
+    /// Walks one typed expression tree and rejects unsupported Phase 6 ISR operations.
+    fn walk_interrupt_expr(
+        &self,
+        function: SymbolId,
+        expr: &TypedExpr,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        match &expr.kind {
+            TypedExprKind::Call { function: callee, args } => {
+                diagnostics.error(
+                    "semantic",
+                    Some(expr.span),
+                    format!(
+                        "interrupt handler `{}` cannot call `{}` in phase 6",
+                        self.symbols[function].name,
+                        self.symbols[*callee].name
+                    ),
+                    Some("keep ISR code inline; call normal functions from non-interrupt code".to_string()),
+                );
+                for arg in args {
+                    self.walk_interrupt_expr(function, arg, diagnostics);
+                }
+            }
+            TypedExprKind::Binary { op, lhs, rhs } => {
+                self.walk_interrupt_expr(function, lhs, diagnostics);
+                self.walk_interrupt_expr(function, rhs, diagnostics);
+                if self.is_interrupt_helper_required(*op, expr.ty, lhs, rhs) {
+                    diagnostics.error(
+                        "semantic",
+                        Some(expr.span),
+                        format!(
+                            "interrupt handler `{}` cannot use `{op:?}` when it would lower through a runtime helper",
+                            self.symbols[function].name
+                        ),
+                        Some("use inline-safe arithmetic only inside the ISR in phase 6".to_string()),
+                    );
+                }
+            }
+            TypedExprKind::Unary { expr, .. }
+            | TypedExprKind::ArrayDecay(expr)
+            | TypedExprKind::AddressOf(expr)
+            | TypedExprKind::Deref(expr)
+            | TypedExprKind::Cast { expr, .. } => {
+                self.walk_interrupt_expr(function, expr, diagnostics);
+            }
+            TypedExprKind::Assign { target, value } => {
+                self.walk_interrupt_expr(function, target, diagnostics);
+                self.walk_interrupt_expr(function, value, diagnostics);
+            }
+            TypedExprKind::IntLiteral(_) | TypedExprKind::Symbol(_) => {}
+        }
+    }
+
+    /// Returns true when one ISR expression would need a Phase 5 runtime helper call.
+    fn is_interrupt_helper_required(
+        &self,
+        op: BinaryOp,
+        ty: Type,
+        lhs: &TypedExpr,
+        rhs: &TypedExpr,
+    ) -> bool {
+        let lhs_const = eval_integer_constant_expr(lhs).map(|value| normalize_value(value, ty));
+        let rhs_const = eval_integer_constant_expr(rhs).map(|value| normalize_value(value, ty));
+
+        match op {
+            BinaryOp::Multiply => {
+                !(lhs_const == Some(0)
+                    || rhs_const == Some(0)
+                    || lhs_const == Some(1)
+                    || rhs_const == Some(1)
+                    || normalized_power_of_two_shift(lhs_const, ty).is_some()
+                    || normalized_power_of_two_shift(rhs_const, ty).is_some())
+            }
+            BinaryOp::Divide => !(lhs_const == Some(0) || rhs_const == Some(1)),
+            BinaryOp::Modulo => !(lhs_const == Some(0) || rhs_const == Some(1)),
+            BinaryOp::ShiftLeft | BinaryOp::ShiftRight => eval_integer_constant_expr(rhs).is_none(),
+            _ => false,
+        }
+    }
+
+    /// Returns the single interrupt-handler symbol when the program declares one.
+    fn interrupt_handler(&self) -> Option<SymbolId> {
+        self.symbols
+            .iter()
+            .find(|symbol| symbol.kind == SymbolKind::Function && symbol.is_interrupt)
+            .map(|symbol| symbol.id)
+    }
+
     /// Assigns a stable symbol id and stores a symbol in the global table.
     fn insert_symbol(&mut self, mut symbol: Symbol) -> SymbolId {
         let id = self.symbols.len();
@@ -1936,6 +2192,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 name: "__shadow_error".to_string(),
                 ty,
                 storage_class,
+                is_interrupt: false,
                 kind,
                 span,
                 fixed_address: None,
@@ -1950,6 +2207,7 @@ impl<'a> SemanticAnalyzer<'a> {
             name: name.clone(),
             ty,
             storage_class,
+            is_interrupt: false,
             kind,
             span,
             fixed_address: None,
@@ -2082,6 +2340,15 @@ fn eval_integer_constant_expr(expr: &TypedExpr) -> Option<i64> {
     };
 
     Some(normalize_value(value, expr.ty))
+}
+
+/// Returns the shift amount when a normalized integer constant is an exact power of two.
+fn normalized_power_of_two_shift(value: Option<i64>, ty: Type) -> Option<usize> {
+    let value = normalize_value(value?, ty) as u64;
+    if value == 0 || !value.is_power_of_two() {
+        return None;
+    }
+    Some(value.trailing_zeros() as usize)
 }
 
 /// Collects direct function-call targets that appear anywhere inside one typed statement tree.

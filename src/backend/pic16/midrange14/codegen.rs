@@ -21,6 +21,8 @@ const STATUS_Z_BIT: u8 = 2;
 const STATUS_IRP_BIT: u8 = 7;
 const INDF_ADDR: u16 = 0x00;
 const FSR_ADDR: u16 = 0x04;
+const PCLATH_ADDR: u16 = 0x0A;
+const UNKNOWN_BANK: u8 = u8::MAX;
 
 #[derive(Debug)]
 pub struct BackendOutput {
@@ -45,6 +47,19 @@ struct HelperRegisters {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct InterruptContext {
+    w: u16,
+    status: u16,
+    pclath: u16,
+    fsr: u16,
+    return_high: u16,
+    scratch0: u16,
+    scratch1: u16,
+    stack_ptr: RegisterPair,
+    frame_ptr: RegisterPair,
+}
+
+#[derive(Clone, Copy, Debug)]
 struct BranchTargets<'a> {
     then_label: &'a str,
     else_label: &'a str,
@@ -53,6 +68,7 @@ struct BranchTargets<'a> {
 #[derive(Debug)]
 struct StorageLayout {
     helpers: HelperRegisters,
+    interrupt: Option<InterruptContext>,
     symbol_storage: BTreeMap<SymbolId, SymbolStorage>,
     temp_offsets: BTreeMap<(SymbolId, usize), u16>,
     frames: BTreeMap<SymbolId, FrameLayout>,
@@ -84,7 +100,7 @@ pub fn compile_program(
     ir_program: &IrProgram,
     diagnostics: &mut DiagnosticBag,
 ) -> Option<BackendOutput> {
-    let layout = StorageAllocator::new(target.allocatable_gpr)
+    let layout = StorageAllocator::new(target.allocatable_gpr, target.shared_gpr)
         .layout(typed_program, ir_program, diagnostics)?;
 
     let mut codegen = CodegenContext::new(target, typed_program, &layout);
@@ -104,12 +120,16 @@ pub fn compile_program(
 
 struct StorageAllocator<'a> {
     ranges: &'a [MemoryRange],
+    shared_ranges: &'a [MemoryRange],
 }
 
 impl<'a> StorageAllocator<'a> {
     /// Creates a RAM allocator over the device's allocatable GPR ranges.
-    fn new(ranges: &'a [MemoryRange]) -> Self {
-        Self { ranges }
+    fn new(ranges: &'a [MemoryRange], shared_ranges: &'a [MemoryRange]) -> Self {
+        Self {
+            ranges,
+            shared_ranges,
+        }
     }
 
     /// Assigns RAM slots for globals, per-frame autos, and backend helper storage.
@@ -154,6 +174,66 @@ impl<'a> StorageAllocator<'a> {
             return_high,
             scratch0,
             scratch1,
+        };
+
+        let interrupt = if ir_program.functions.iter().any(|function| function.is_interrupt) {
+            let mut shared = AddressAllocator::new(self.shared_ranges);
+            let Some(w) = shared.next_span(1) else {
+                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                return None;
+            };
+            let Some(status) = shared.next_span(1) else {
+                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                return None;
+            };
+            let Some(pclath) = shared.next_span(1) else {
+                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                return None;
+            };
+            let Some(fsr) = shared.next_span(1) else {
+                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                return None;
+            };
+            let Some(return_high_ctx) = shared.next_span(1) else {
+                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                return None;
+            };
+            let Some(scratch0_ctx) = shared.next_span(1) else {
+                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                return None;
+            };
+            let Some(scratch1_ctx) = shared.next_span(1) else {
+                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                return None;
+            };
+            let Some(stack_ptr_ctx_lo) = shared.next_span(2) else {
+                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                return None;
+            };
+            let Some(frame_ptr_ctx_lo) = shared.next_span(2) else {
+                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                return None;
+            };
+
+            Some(InterruptContext {
+                w,
+                status,
+                pclath,
+                fsr,
+                return_high: return_high_ctx,
+                scratch0: scratch0_ctx,
+                scratch1: scratch1_ctx,
+                stack_ptr: RegisterPair {
+                    lo: stack_ptr_ctx_lo,
+                    hi: stack_ptr_ctx_lo + 1,
+                },
+                frame_ptr: RegisterPair {
+                    lo: frame_ptr_ctx_lo,
+                    hi: frame_ptr_ctx_lo + 1,
+                },
+            })
+        } else {
+            None
         };
 
         let mut symbol_storage = BTreeMap::new();
@@ -235,7 +315,7 @@ impl<'a> StorageAllocator<'a> {
             return None;
         };
 
-        let max_stack_depth = compute_max_stack_depth(ir_program, &frames);
+        let max_stack_depth = compute_max_stack_depth_with_interrupts(ir_program, &frames);
         if max_stack_depth > stack_capacity {
             diagnostics.error(
                 "backend",
@@ -250,6 +330,7 @@ impl<'a> StorageAllocator<'a> {
 
         Some(StorageLayout {
             helpers,
+            interrupt,
             symbol_storage,
             temp_offsets,
             frames,
@@ -335,7 +416,7 @@ impl<'a> CodegenContext<'a> {
             typed_program,
             layout,
             program: AsmProgram::new(),
-            current_bank: 0,
+            current_bank: UNKNOWN_BANK,
             label_counter: 0,
             used_helpers: BTreeSet::new(),
         }
@@ -353,13 +434,34 @@ impl<'a> CodegenContext<'a> {
 
     /// Emits reset and interrupt vector stubs for the current target descriptor.
     fn emit_vectors(&mut self) {
+        let interrupt = self
+            .typed_program
+            .symbols
+            .iter()
+            .find(|symbol| symbol.kind == SymbolKind::Function && symbol.is_interrupt)
+            .map(|symbol| function_label(&symbol.name));
         self.program.push(AsmLine::Org(self.target.vectors.reset));
-        self.program.push(AsmLine::Instr(AsmInstr::SetPage("__start".to_string())));
-        self.program.push(AsmLine::Instr(AsmInstr::Goto("__start".to_string())));
+        self.program.push(AsmLine::Label("__reset_vector".to_string()));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Goto("__reset_dispatch".to_string())));
         self.program.push(AsmLine::Org(self.target.vectors.interrupt));
         self.program.push(AsmLine::Label("__interrupt_vector".to_string()));
-        self.program.push(AsmLine::Instr(AsmInstr::Retfie));
+        if interrupt.is_some() {
+            self.program
+                .push(AsmLine::Instr(AsmInstr::Goto("__interrupt_dispatch".to_string())));
+        } else {
+            self.program.push(AsmLine::Instr(AsmInstr::Retfie));
+        }
         self.program.push(AsmLine::Org(self.target.vectors.interrupt + 1));
+        self.program.push(AsmLine::Label("__reset_dispatch".to_string()));
+        self.program.push(AsmLine::Instr(AsmInstr::SetPage("__start".to_string())));
+        self.program.push(AsmLine::Instr(AsmInstr::Goto("__start".to_string())));
+        if let Some(interrupt) = interrupt {
+            self.program
+                .push(AsmLine::Label("__interrupt_dispatch".to_string()));
+            self.program.push(AsmLine::Instr(AsmInstr::SetPage(interrupt.clone())));
+            self.program.push(AsmLine::Instr(AsmInstr::Goto(interrupt)));
+        }
         self.program.push(AsmLine::Label("__start".to_string()));
     }
 
@@ -446,8 +548,15 @@ impl<'a> CodegenContext<'a> {
             "frame args={} saved_fp={} locals={} temps={} frame_bytes={}",
             arg_bytes, saved_fp_offset, local_bytes, temp_bytes, frame_bytes
         )));
-        self.current_bank = 0;
-        self.emit_prologue(function.symbol);
+        self.current_bank = UNKNOWN_BANK;
+        if function.is_interrupt {
+            self.program.push(AsmLine::Comment(
+                "interrupt context save + isolated stack frame".to_string(),
+            ));
+            self.emit_interrupt_prologue(function.symbol);
+        } else {
+            self.emit_prologue(function.symbol);
+        }
 
         let reachable = function.reachable_blocks();
         for block in &function.blocks {
@@ -556,10 +665,26 @@ impl<'a> CodegenContext<'a> {
                         self.clear_temp(function.symbol, *dst, dst_ty);
                     }
                     BinaryOp::Multiply | BinaryOp::Divide | BinaryOp::Modulo => {
-                        self.emit_phase_five_binary(function.symbol, *op, *lhs, *rhs, dst_ty, *dst);
+                        self.emit_phase_five_binary(
+                            function,
+                            *op,
+                            *lhs,
+                            *rhs,
+                            dst_ty,
+                            *dst,
+                            diagnostics,
+                        );
                     }
                     BinaryOp::ShiftLeft | BinaryOp::ShiftRight => {
-                        self.emit_phase_five_binary(function.symbol, *op, *lhs, *rhs, dst_ty, *dst);
+                        self.emit_phase_five_binary(
+                            function,
+                            *op,
+                            *lhs,
+                            *rhs,
+                            dst_ty,
+                            *dst,
+                            diagnostics,
+                        );
                     }
                 }
             }
@@ -597,8 +722,13 @@ impl<'a> CodegenContext<'a> {
                 if let Some(value) = value {
                     self.emit_return_value(function.symbol, *value, function.return_type);
                 }
-                self.emit_epilogue(function.symbol);
-                self.program.push(AsmLine::Instr(AsmInstr::Return));
+                if function.is_interrupt {
+                    self.emit_interrupt_epilogue(function.symbol);
+                    self.program.push(AsmLine::Instr(AsmInstr::Retfie));
+                } else {
+                    self.emit_epilogue(function.symbol);
+                    self.program.push(AsmLine::Instr(AsmInstr::Return));
+                }
             }
             IrTerminator::Jump(target) => self.branch_to_label(&block_label(fn_name, *target)),
             IrTerminator::Branch {
@@ -623,6 +753,23 @@ impl<'a> CodegenContext<'a> {
         dst: Option<usize>,
         diagnostics: &mut DiagnosticBag,
     ) {
+        if function.is_interrupt {
+            diagnostics.error(
+                "backend",
+                None,
+                format!(
+                    "interrupt handler `{}` reached normal-call lowering for `{}`",
+                    self.symbol_name(function.symbol),
+                    self.symbol_name(callee)
+                ),
+                Some("phase 6 forbids normal function calls inside ISRs".to_string()),
+            );
+            if let Some(dst) = dst {
+                self.clear_temp(function.symbol, dst, function.temp_types[dst]);
+            }
+            return;
+        }
+
         let callee_symbol = &self.typed_program.symbols[callee];
         for (index, arg) in args.iter().enumerate() {
             let Some(param_ty) = callee_symbol.parameter_types.get(index).copied() else {
@@ -1071,15 +1218,18 @@ impl<'a> CodegenContext<'a> {
     }
 
     /// Lowers Phase 5 arithmetic through inline fast paths or runtime helper calls.
+    #[allow(clippy::too_many_arguments)]
     fn emit_phase_five_binary(
         &mut self,
-        function_symbol: SymbolId,
+        function: &IrFunction,
         op: BinaryOp,
         lhs: Operand,
         rhs: Operand,
         ty: Type,
         dst_temp: usize,
+        diagnostics: &mut DiagnosticBag,
     ) {
+        let function_symbol = function.symbol;
         let lhs_const = constant_operand_value(lhs, ty);
         let rhs_const = constant_operand_value(rhs, ty);
 
@@ -1135,7 +1285,7 @@ impl<'a> CodegenContext<'a> {
             _ => unreachable!("phase five arithmetic op"),
         }
 
-        self.emit_runtime_binary_call(function_symbol, op, lhs, rhs, ty, dst_temp);
+        self.emit_runtime_binary_call(function, op, lhs, rhs, ty, dst_temp, diagnostics);
     }
 
     /// Emits one constant-count shift directly in the caller frame without a helper call.
@@ -1160,15 +1310,31 @@ impl<'a> CodegenContext<'a> {
     }
 
     /// Emits one helper call for a Phase 5 arithmetic operation under the stack-first ABI.
+    #[allow(clippy::too_many_arguments)]
     fn emit_runtime_binary_call(
         &mut self,
-        function_symbol: SymbolId,
+        function: &IrFunction,
         op: BinaryOp,
         lhs: Operand,
         rhs: Operand,
         ty: Type,
         dst_temp: usize,
+        diagnostics: &mut DiagnosticBag,
     ) {
+        let function_symbol = function.symbol;
+        if function.is_interrupt {
+            diagnostics.error(
+                "backend",
+                None,
+                format!(
+                    "interrupt handler `{}` reached runtime-helper lowering for `{op:?}`",
+                    self.symbol_name(function_symbol)
+                ),
+                Some("phase 6 forbids helper calls inside ISRs".to_string()),
+            );
+            self.clear_temp(function_symbol, dst_temp, ty);
+            return;
+        }
         let helper = binary_helper(op, ty).expect("phase five helper exists");
         let info = helper.info();
         self.used_helpers.insert(helper);
@@ -1444,6 +1610,80 @@ impl<'a> CodegenContext<'a> {
         self.store_w_to_addr(self.layout.helpers.frame_ptr.lo);
         self.load_addr_to_w(self.layout.helpers.scratch1);
         self.store_w_to_addr(self.layout.helpers.frame_ptr.hi);
+    }
+
+    /// Emits the conservative Phase 6 ISR prologue before the shared frame logic runs.
+    fn emit_interrupt_prologue(&mut self, function_symbol: SymbolId) {
+        let Some(ctx) = self.layout.interrupt else {
+            return;
+        };
+
+        self.store_w_to_shared_addr(ctx.w);
+        self.load_direct_addr_to_w(STATUS_ADDR);
+        self.store_w_to_shared_addr(ctx.status);
+        self.load_direct_addr_to_w(PCLATH_ADDR);
+        self.store_w_to_shared_addr(ctx.pclath);
+        self.load_direct_addr_to_w(FSR_ADDR);
+        self.store_w_to_shared_addr(ctx.fsr);
+
+        self.current_bank = UNKNOWN_BANK;
+        self.load_addr_to_w(self.layout.helpers.return_high);
+        self.store_w_to_shared_addr(ctx.return_high);
+        self.load_addr_to_w(self.layout.helpers.scratch0);
+        self.store_w_to_shared_addr(ctx.scratch0);
+        self.load_addr_to_w(self.layout.helpers.scratch1);
+        self.store_w_to_shared_addr(ctx.scratch1);
+        self.load_addr_to_w(self.layout.helpers.stack_ptr.lo);
+        self.store_w_to_shared_addr(ctx.stack_ptr.lo);
+        self.load_addr_to_w(self.layout.helpers.stack_ptr.hi);
+        self.store_w_to_shared_addr(ctx.stack_ptr.hi);
+        self.load_addr_to_w(self.layout.helpers.frame_ptr.lo);
+        self.store_w_to_shared_addr(ctx.frame_ptr.lo);
+        self.load_addr_to_w(self.layout.helpers.frame_ptr.hi);
+        self.store_w_to_shared_addr(ctx.frame_ptr.hi);
+
+        self.current_bank = UNKNOWN_BANK;
+        self.emit_prologue(function_symbol);
+    }
+
+    /// Emits the Phase 6 ISR epilogue, restores saved context, and leaves `W` ready for `retfie`.
+    fn emit_interrupt_epilogue(&mut self, function_symbol: SymbolId) {
+        let Some(ctx) = self.layout.interrupt else {
+            return;
+        };
+
+        self.emit_epilogue(function_symbol);
+        self.current_bank = UNKNOWN_BANK;
+
+        self.load_shared_addr_to_w(ctx.return_high);
+        self.store_w_to_addr(self.layout.helpers.return_high);
+        self.load_shared_addr_to_w(ctx.scratch0);
+        self.store_w_to_addr(self.layout.helpers.scratch0);
+        self.load_shared_addr_to_w(ctx.scratch1);
+        self.store_w_to_addr(self.layout.helpers.scratch1);
+        self.load_shared_addr_to_w(ctx.stack_ptr.lo);
+        self.store_w_to_addr(self.layout.helpers.stack_ptr.lo);
+        self.load_shared_addr_to_w(ctx.stack_ptr.hi);
+        self.store_w_to_addr(self.layout.helpers.stack_ptr.hi);
+        self.load_shared_addr_to_w(ctx.frame_ptr.lo);
+        self.store_w_to_addr(self.layout.helpers.frame_ptr.lo);
+        self.load_shared_addr_to_w(ctx.frame_ptr.hi);
+        self.store_w_to_addr(self.layout.helpers.frame_ptr.hi);
+
+        self.load_shared_addr_to_w(ctx.fsr);
+        self.store_w_to_direct_addr(FSR_ADDR);
+        self.load_shared_addr_to_w(ctx.pclath);
+        self.store_w_to_direct_addr(PCLATH_ADDR);
+        self.load_shared_addr_to_w(ctx.status);
+        self.store_w_to_direct_addr(STATUS_ADDR);
+        self.program.push(AsmLine::Instr(AsmInstr::Swapf {
+            f: low7(ctx.w),
+            d: Dest::F,
+        }));
+        self.program.push(AsmLine::Instr(AsmInstr::Swapf {
+            f: low7(ctx.w),
+            d: Dest::W,
+        }));
     }
 
     /// Pushes one 8-bit or 16-bit operand onto the upward-growing software stack.
@@ -1892,6 +2132,19 @@ impl<'a> CodegenContext<'a> {
         }));
     }
 
+    /// Loads one mirrored/common address into `W` without touching bank bits.
+    fn load_direct_addr_to_w(&mut self, addr: u16) {
+        self.program.push(AsmLine::Instr(AsmInstr::Movf {
+            f: low7(addr),
+            d: Dest::W,
+        }));
+    }
+
+    /// Loads one shared ISR-context byte into `W` without changing `STATUS`.
+    fn load_shared_addr_to_w(&mut self, addr: u16) {
+        self.load_direct_addr_to_w(addr);
+    }
+
     /// Emits the shortest sequence to place an 8-bit constant into `W`.
     fn emit_const_to_w(&mut self, value: u8) {
         if value == 0 {
@@ -1915,6 +2168,16 @@ impl<'a> CodegenContext<'a> {
     fn store_w_to_addr(&mut self, addr: u16) {
         self.select_bank(addr);
         self.program.push(AsmLine::Instr(AsmInstr::Movwf(low7(addr))));
+    }
+
+    /// Stores the current `W` value into a mirrored/common address without bank selection.
+    fn store_w_to_direct_addr(&mut self, addr: u16) {
+        self.program.push(AsmLine::Instr(AsmInstr::Movwf(low7(addr))));
+    }
+
+    /// Stores the current `W` value into a shared ISR-context byte without changing `STATUS`.
+    fn store_w_to_shared_addr(&mut self, addr: u16) {
+        self.store_w_to_direct_addr(addr);
     }
 
     /// Clears one banked RAM address to zero.
@@ -2013,7 +2276,7 @@ impl<'a> CodegenContext<'a> {
             "runtime helper {:?} args={} locals={} frame_bytes={}",
             helper, info.arg_bytes, info.local_bytes, info.frame_bytes
         )));
-        self.current_bank = 0;
+        self.current_bank = UNKNOWN_BANK;
         self.emit_runtime_prologue(info);
 
         match helper {
@@ -2383,11 +2646,17 @@ fn block_label(function_name: &str, block: usize) -> String {
     format!("fn_{function_name}_b{block}")
 }
 
-/// Computes the worst-case software-stack depth over the non-recursive call graph.
-fn compute_max_stack_depth(ir_program: &IrProgram, frames: &BTreeMap<SymbolId, FrameLayout>) -> u16 {
+/// Computes the worst-case software-stack depth across normal code plus one interrupt frame.
+fn compute_max_stack_depth_with_interrupts(
+    ir_program: &IrProgram,
+    frames: &BTreeMap<SymbolId, FrameLayout>,
+) -> u16 {
     let mut calls = BTreeMap::<SymbolId, Vec<SymbolId>>::new();
     let mut helper_depths = BTreeMap::<SymbolId, u16>::new();
     for function in &ir_program.functions {
+        if function.is_interrupt {
+            continue;
+        }
         let mut callees = Vec::new();
         let mut helper_depth = 0u16;
         for block in &function.blocks {
@@ -2409,11 +2678,26 @@ fn compute_max_stack_depth(ir_program: &IrProgram, frames: &BTreeMap<SymbolId, F
     }
 
     let mut memo = BTreeMap::new();
-    calls.keys()
+    let normal_max = calls
+        .keys()
         .copied()
         .map(|symbol| compute_function_stack_depth(symbol, &calls, &helper_depths, frames, &mut memo))
         .max()
-        .unwrap_or(0)
+        .unwrap_or(0);
+    let interrupt_extra = ir_program
+        .functions
+        .iter()
+        .filter(|function| function.is_interrupt)
+        .map(|function| frames.get(&function.symbol).map_or(0, |frame| frame.frame_bytes))
+        .max()
+        .unwrap_or(0);
+    normal_max + interrupt_extra
+}
+
+#[cfg(test)]
+/// Compatibility wrapper for tests that do not model interrupts explicitly.
+fn compute_max_stack_depth(ir_program: &IrProgram, frames: &BTreeMap<SymbolId, FrameLayout>) -> u16 {
+    compute_max_stack_depth_with_interrupts(ir_program, frames)
 }
 
 /// Computes the worst-case stack usage while one function is active.
@@ -2478,6 +2762,21 @@ fn build_map(
         ("__stack.base".to_string(), layout.stack_base),
         ("__stack.end".to_string(), layout.stack_end),
     ]);
+    if let Some(interrupt) = layout.interrupt {
+        data_symbols.extend([
+            ("__isr_ctx.w".to_string(), interrupt.w),
+            ("__isr_ctx.status".to_string(), interrupt.status),
+            ("__isr_ctx.pclath".to_string(), interrupt.pclath),
+            ("__isr_ctx.fsr".to_string(), interrupt.fsr),
+            ("__isr_ctx.return_high".to_string(), interrupt.return_high),
+            ("__isr_ctx.scratch0".to_string(), interrupt.scratch0),
+            ("__isr_ctx.scratch1".to_string(), interrupt.scratch1),
+            ("__isr_ctx.stack_ptr.lo".to_string(), interrupt.stack_ptr.lo),
+            ("__isr_ctx.stack_ptr.hi".to_string(), interrupt.stack_ptr.hi),
+            ("__isr_ctx.frame_ptr.lo".to_string(), interrupt.frame_ptr.lo),
+            ("__isr_ctx.frame_ptr.hi".to_string(), interrupt.frame_ptr.hi),
+        ]);
+    }
     data_symbols.sort_by_key(|(_, addr)| *addr);
 
     MapFile {
@@ -2587,6 +2886,7 @@ mod tests {
             globals: vec![1],
             functions: vec![IrFunction {
                 symbol: 0,
+                is_interrupt: false,
                 params: Vec::new(),
                 locals: Vec::new(),
                 entry: 0,
@@ -2629,6 +2929,7 @@ mod tests {
             functions: vec![
                 IrFunction {
                     symbol: 1,
+                    is_interrupt: false,
                     params: Vec::new(),
                     locals: Vec::new(),
                     entry: 0,
@@ -2647,6 +2948,7 @@ mod tests {
                 },
                 IrFunction {
                     symbol: 2,
+                    is_interrupt: false,
                     params: Vec::new(),
                     locals: Vec::new(),
                     entry: 0,
@@ -2728,6 +3030,7 @@ mod tests {
             functions: vec![
                 IrFunction {
                     symbol: 0,
+                    is_interrupt: false,
                     params: Vec::new(),
                     locals: Vec::new(),
                     entry: 0,
@@ -2746,6 +3049,7 @@ mod tests {
                 },
                 IrFunction {
                     symbol: 1,
+                    is_interrupt: false,
                     params: vec![2, 3, 4],
                     locals: Vec::new(),
                     entry: 0,
@@ -2796,6 +3100,7 @@ mod tests {
             globals: Vec::new(),
             functions: vec![IrFunction {
                 symbol: 0,
+                is_interrupt: false,
                 params: Vec::new(),
                 locals: vec![1],
                 entry: 0,
@@ -2825,7 +3130,7 @@ mod tests {
             }],
         };
         let mut diagnostics = DiagnosticBag::new(WarningProfile::default());
-        let layout = StorageAllocator::new(target.allocatable_gpr)
+        let layout = StorageAllocator::new(target.allocatable_gpr, target.shared_gpr)
             .layout(&program, &ir, &mut diagnostics)
             .expect("layout");
 
@@ -2877,6 +3182,7 @@ mod tests {
             functions: vec![
                 IrFunction {
                     symbol: 0,
+                    is_interrupt: false,
                     params: Vec::new(),
                     locals: Vec::new(),
                     entry: 0,
@@ -2902,6 +3208,7 @@ mod tests {
                 },
                 IrFunction {
                     symbol: 1,
+                    is_interrupt: false,
                     params: vec![2, 3],
                     locals: Vec::new(),
                     entry: 0,
@@ -2922,7 +3229,7 @@ mod tests {
             ],
         };
         let mut diagnostics = DiagnosticBag::new(WarningProfile::default());
-        let layout = StorageAllocator::new(target.allocatable_gpr)
+        let layout = StorageAllocator::new(target.allocatable_gpr, target.shared_gpr)
             .layout(&program, &ir, &mut diagnostics)
             .expect("layout");
         let mut codegen = CodegenContext::new(target, &program, &layout);
@@ -2958,6 +3265,7 @@ mod tests {
             globals: Vec::new(),
             functions: vec![IrFunction {
                 symbol: 1,
+                is_interrupt: false,
                 params: Vec::new(),
                 locals: Vec::new(),
                 entry: 0,
@@ -3012,6 +3320,7 @@ mod tests {
             globals: Vec::new(),
             functions: vec![IrFunction {
                 symbol: 0,
+                is_interrupt: false,
                 params: Vec::new(),
                 locals: Vec::new(),
                 entry: 0,
@@ -3062,6 +3371,7 @@ mod tests {
             globals: Vec::new(),
             functions: vec![IrFunction {
                 symbol: 0,
+                is_interrupt: false,
                 params: Vec::new(),
                 locals: Vec::new(),
                 entry: 0,
@@ -3089,6 +3399,151 @@ mod tests {
         assert!(!asm.contains("__rt_shr_u16:"));
     }
 
+    #[test]
+    /// Verifies a program without an ISR leaves the interrupt vector as a safe `retfie`.
+    fn phase_six_default_interrupt_vector_is_retfie() {
+        let registry = DeviceRegistry::new();
+        let target = registry.device("pic16f628a").expect("device");
+        let program = TypedProgram {
+            symbols: vec![symbol(0, "main", Type::new(ScalarType::Void), SymbolKind::Function)],
+            globals: Vec::new(),
+            functions: vec![TypedFunction {
+                symbol: 0,
+                params: Vec::new(),
+                locals: Vec::new(),
+                body: None,
+                return_type: Type::new(ScalarType::Void),
+                span: Span::new(0, 0),
+            }],
+        };
+        let ir = IrProgram {
+            globals: Vec::new(),
+            functions: vec![IrFunction {
+                symbol: 0,
+                is_interrupt: false,
+                params: Vec::new(),
+                locals: Vec::new(),
+                entry: 0,
+                temp_types: Vec::new(),
+                return_type: Type::new(ScalarType::Void),
+                blocks: vec![IrBlock {
+                    id: 0,
+                    name: "entry".to_string(),
+                    instructions: Vec::new(),
+                    terminator: IrTerminator::Return(None),
+                }],
+            }],
+        };
+        let mut diagnostics = DiagnosticBag::new(WarningProfile::default());
+        let output = compile_program(target, &program, &ir, &mut diagnostics).expect("backend");
+
+        assert!(!diagnostics.has_errors());
+        assert_eq!(output.words[&target.vectors.interrupt], 0x0009);
+    }
+
+    #[test]
+    /// Verifies Phase 6 emits vector dispatch, ISR context slots, and `retfie` for one handler.
+    fn phase_six_interrupt_vectors_and_context_emit() {
+        let registry = DeviceRegistry::new();
+        let target = registry.device("pic16f628a").expect("device");
+        let mut isr = symbol(1, "isr", Type::new(ScalarType::Void), SymbolKind::Function);
+        isr.is_interrupt = true;
+        let program = TypedProgram {
+            symbols: vec![
+                symbol(0, "main", Type::new(ScalarType::Void), SymbolKind::Function),
+                isr,
+            ],
+            globals: Vec::new(),
+            functions: vec![
+                TypedFunction {
+                    symbol: 0,
+                    params: Vec::new(),
+                    locals: Vec::new(),
+                    body: None,
+                    return_type: Type::new(ScalarType::Void),
+                    span: Span::new(0, 0),
+                },
+                TypedFunction {
+                    symbol: 1,
+                    params: Vec::new(),
+                    locals: Vec::new(),
+                    body: None,
+                    return_type: Type::new(ScalarType::Void),
+                    span: Span::new(0, 0),
+                },
+            ],
+        };
+        let ir = IrProgram {
+            globals: Vec::new(),
+            functions: vec![
+                IrFunction {
+                    symbol: 0,
+                    is_interrupt: false,
+                    params: Vec::new(),
+                    locals: Vec::new(),
+                    entry: 0,
+                    temp_types: Vec::new(),
+                    return_type: Type::new(ScalarType::Void),
+                    blocks: vec![IrBlock {
+                        id: 0,
+                        name: "entry".to_string(),
+                        instructions: Vec::new(),
+                        terminator: IrTerminator::Return(None),
+                    }],
+                },
+                IrFunction {
+                    symbol: 1,
+                    is_interrupt: true,
+                    params: Vec::new(),
+                    locals: Vec::new(),
+                    entry: 0,
+                    temp_types: Vec::new(),
+                    return_type: Type::new(ScalarType::Void),
+                    blocks: vec![IrBlock {
+                        id: 0,
+                        name: "entry".to_string(),
+                        instructions: Vec::new(),
+                        terminator: IrTerminator::Return(None),
+                    }],
+                },
+            ],
+        };
+        let mut diagnostics = DiagnosticBag::new(WarningProfile::default());
+        let output = compile_program(target, &program, &ir, &mut diagnostics).expect("backend");
+
+        assert!(!diagnostics.has_errors());
+        let reset_dispatch = output
+            .map
+            .code_symbols
+            .iter()
+            .find(|(name, _)| name == "__reset_dispatch")
+            .expect("reset dispatch")
+            .1;
+        let interrupt_dispatch = output
+            .map
+            .code_symbols
+            .iter()
+            .find(|(name, _)| name == "__interrupt_dispatch")
+            .expect("interrupt dispatch")
+            .1;
+        assert_eq!(output.words[&target.vectors.reset], 0x2800 | (reset_dispatch & 0x07FF));
+        assert_eq!(
+            output.words[&target.vectors.interrupt],
+            0x2800 | (interrupt_dispatch & 0x07FF)
+        );
+        assert!(output
+            .map
+            .data_symbols
+            .iter()
+            .any(|(name, _)| name == "__isr_ctx.w"));
+        assert!(output
+            .map
+            .data_symbols
+            .iter()
+            .any(|(name, _)| name == "__isr_ctx.stack_ptr.lo"));
+        assert!(output.program.render().contains("retfie"));
+    }
+
     /// Builds one typed symbol used by the backend unit test fixture.
     fn symbol(id: usize, name: &str, ty: Type, kind: SymbolKind) -> Symbol {
         Symbol {
@@ -3096,6 +3551,7 @@ mod tests {
             name: name.to_string(),
             ty,
             storage_class: StorageClass::Auto,
+            is_interrupt: false,
             kind,
             span: Span::new(0, 0),
             fixed_address: None,

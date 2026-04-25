@@ -64,6 +64,27 @@ fn compile_source(target: &str, name: &str, source: &str) -> PathBuf {
     compile_input(target, input)
 }
 
+/// Compiles one temporary source expecting a diagnostic failure and returns the rendered error text.
+fn compile_error(target: &str, name: &str, source: &str) -> String {
+    let input = temp_file(name);
+    fs::write(&input, source).expect("fixture");
+    let error = execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: target.to_string(),
+            input,
+            output: temp_file("error.hex"),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O0,
+            artifacts: OutputArtifacts::default(),
+            verbose: false,
+            warning_profile: WarningProfile::default(),
+        }),
+    })
+    .expect_err("must fail");
+    format!("{error}")
+}
+
 /// Checks that the generated HEX includes both config data and the EOF record.
 fn assert_hex_is_programmable(output: &Path) {
     let hex = fs::read_to_string(output).expect("hex");
@@ -106,6 +127,25 @@ fn assert_phase5_helper_artifacts(output: &Path, helper: &str) {
     assert!(asm.contains(&format!("{helper}:")));
     assert!(map.contains(helper));
     assert!(listing.contains(helper));
+}
+
+/// Verifies Phase 6 artifacts expose the interrupt vector, ISR symbol, and saved-context slots.
+fn assert_phase6_interrupt_artifacts(output: &Path, isr_symbol: &str) {
+    let asm = read_artifact(output, "asm");
+    let map = read_artifact(output, "map");
+    let listing = read_artifact(output, "lst");
+
+    assert!(asm.contains("org 0x0004"));
+    assert!(asm.contains("__interrupt_vector:"));
+    assert!(asm.contains("goto __interrupt_dispatch"));
+    assert!(asm.contains(&format!("{isr_symbol}:")));
+    assert!(asm.contains("retfie"));
+    assert!(map.contains("__interrupt_vector"));
+    assert!(map.contains("__isr_ctx.w"));
+    assert!(map.contains("__isr_ctx.status"));
+    assert!(map.contains("__isr_ctx.stack_ptr.lo"));
+    assert!(listing.contains("__interrupt_vector"));
+    assert!(listing.contains("retfie"));
 }
 
 #[test]
@@ -307,6 +347,36 @@ fn compiles_phase5_expression_example() {
     assert!(asm.contains("call __rt_mul_u16"));
     assert!(asm.contains("call __rt_div_u16"));
     assert!(asm.contains("call __rt_mod_u16"));
+}
+
+#[test]
+/// Verifies the PIC16F628A timer ISR example emits the interrupt vector and `retfie`.
+fn compiles_phase6_pic16f628a_timer_interrupt_example() {
+    let output = compile_example("pic16f628a", "examples/pic16f628a/timer_interrupt.c");
+
+    assert_hex_is_programmable(&output);
+    assert_phase4_stack_metadata(&output);
+    assert_phase6_interrupt_artifacts(&output, "fn_isr");
+}
+
+#[test]
+/// Verifies the PIC16F877A timer ISR example emits the interrupt vector and saved context.
+fn compiles_phase6_pic16f877a_timer_interrupt_example() {
+    let output = compile_example("pic16f877a", "examples/pic16f877a/timer_interrupt.c");
+
+    assert_hex_is_programmable(&output);
+    assert_phase4_stack_metadata(&output);
+    assert_phase6_interrupt_artifacts(&output, "fn_isr");
+}
+
+#[test]
+/// Verifies the PIC16F877A GPIO ISR example compiles with the same Phase 6 vector shape.
+fn compiles_phase6_pic16f877a_gpio_interrupt_example() {
+    let output = compile_example("pic16f877a", "examples/pic16f877a/gpio_interrupt.c");
+
+    assert_hex_is_programmable(&output);
+    assert_phase4_stack_metadata(&output);
+    assert_phase6_interrupt_artifacts(&output, "fn_isr");
 }
 
 #[test]
@@ -773,6 +843,115 @@ void main(void) {
     .expect_err("must fail");
 
     assert!(format!("{error}").contains("constant shift count"));
+}
+
+#[test]
+/// Verifies interrupt handlers must return `void`.
+fn reports_interrupt_return_type_mismatch() {
+    let error = compile_error(
+        "pic16f628a",
+        "isr-ret-type.c",
+        "\
+#include <pic16/pic16f628a.h>
+int __interrupt isr(void) {
+    return 1;
+}
+void main(void) {
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("must return `void`"));
+}
+
+#[test]
+/// Verifies interrupt handlers cannot take parameters.
+fn reports_interrupt_parameter_mismatch() {
+    let error = compile_error(
+        "pic16f628a",
+        "isr-params.c",
+        "\
+#include <pic16/pic16f628a.h>
+void __interrupt isr(int value) {
+}
+void main(void) {
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("cannot take parameters"));
+}
+
+#[test]
+/// Verifies Phase 6 rejects multiple interrupt handlers in one program.
+fn reports_multiple_interrupt_handlers() {
+    let error = compile_error(
+        "pic16f628a",
+        "two-isr.c",
+        "\
+#include <pic16/pic16f628a.h>
+void __interrupt isr1(void) {
+    PORTB = PORTB ^ 0x01;
+}
+void __interrupt isr2(void) {
+    PORTB = PORTB ^ 0x02;
+}
+void main(void) {
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("only one interrupt handler"));
+}
+
+#[test]
+/// Verifies Phase 6 rejects normal function calls inside ISRs.
+fn reports_interrupt_function_calls() {
+    let error = compile_error(
+        "pic16f628a",
+        "isr-call.c",
+        "\
+#include <pic16/pic16f628a.h>
+void helper(void) {
+    PORTB = 0x33;
+}
+void __interrupt isr(void) {
+    helper();
+}
+void main(void) {
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("cannot call `helper`"));
+}
+
+#[test]
+/// Verifies Phase 6 rejects runtime-helper arithmetic inside ISRs.
+fn reports_interrupt_runtime_helper_arithmetic() {
+    let error = compile_error(
+        "pic16f628a",
+        "isr-helper.c",
+        "\
+#include <pic16/pic16f628a.h>
+void __interrupt isr(void) {
+    int a = 3;
+    int b = 4;
+    int c;
+    c = a * b;
+    PORTB = c;
+}
+void main(void) {
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("runtime helper"));
 }
 
 #[test]

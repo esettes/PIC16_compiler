@@ -26,7 +26,7 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 5: arithmetic runtime helpers on top of Phase 4 Stack-first ABI**.
+Current implementation is **Phase 6: ISR support on top of the Phase 4 Stack-first ABI and Phase 5 arithmetic helpers**.
 
 What changed from Phase 3:
 
@@ -36,6 +36,9 @@ What changed from Phase 3:
 - nested non-recursive calls use one coherent caller-pushed ABI
 - `*`, `/`, `%`, `<<`, and `>>` now lower to real PIC16 code
 - compiler runtime helper labels appear in `.map` and `.lst` when helper lowering is used
+- `void __interrupt isr(void)` now emits a real interrupt vector at `0x0004`
+- ISR code saves/restores CPU and ABI context conservatively, then returns with `retfie`
+- Phase 6 ISR body rules reject normal calls and runtime-helper-requiring expressions
 - active docs now describe stack-first behavior; old Phase 2/3 docs remain historical
 
 ## Phase 4 ABI Summary
@@ -65,8 +68,11 @@ More detail:
 - [docs/backend/phase4-stack-first-abi.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-first-abi.md:1)
 - [docs/backend/phase4-stack-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-model.md:1)
 - [docs/backend/phase5-helper-calling.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase5-helper-calling.md:1)
+- [docs/backend/phase6-interrupts.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase6-interrupts.md:1)
 - [docs/ir/phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
 - [docs/ir/phase5-arithmetic-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase5-arithmetic-lowering.md:1)
+- [docs/ir/phase6-isr-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase6-isr-lowering.md:1)
+- [docs/frontend/phase6-isr-syntax.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase6-isr-syntax.md:1)
 - [docs/runtime/phase5-arithmetic-helpers.md](/home/settes/cursus/PIC16_compiler/docs/runtime/phase5-arithmetic-helpers.md:1)
 - [docs/migration/phase3-to-phase4-abi.md](/home/settes/cursus/PIC16_compiler/docs/migration/phase3-to-phase4-abi.md:1)
 
@@ -100,6 +106,48 @@ Behavior notes:
 - division or modulo by constant zero is rejected
 - dynamic division/modulo by zero returns `0`
 - arithmetic uses fixed-width PIC16-style wrap/truncation; 8-bit multiply returns low 8 bits
+
+## Phase 6 Interrupt Summary
+
+Chosen ISR syntax:
+
+- `void __interrupt isr(void)`
+
+Phase 6 interrupt model:
+
+- one ISR per program
+- ISR must return `void`
+- ISR must take no parameters
+- reset vector stays at `0x0000`
+- interrupt vector is emitted at `0x0004`
+- when an ISR exists, the vector dispatches to it through a nearby page-safe stub
+- when no ISR exists, the default interrupt vector is `retfie`
+
+Saved ISR context:
+
+- `W`
+- `STATUS`
+- `PCLATH`
+- `FSR`
+- `return_high`
+- `scratch0`
+- `scratch1`
+- `stack_ptr`
+- `frame_ptr`
+
+Phase 6 ISR restrictions:
+
+- no normal function calls inside ISR
+- no runtime-helper calls inside ISR
+- any `*`, `/`, `%`, `<<`, `>>` expression that would lower through a Phase 5 helper is rejected
+- inline-safe arithmetic, comparisons, assignments, SFR access, pointer dereference, and stack-backed locals remain allowed
+
+Current ISR interaction model with the stack-first ABI:
+
+- ISR uses the same frame machinery as normal functions
+- ISR saves interrupted ABI state first
+- ISR may use locals and IR temps on the software stack
+- ISR restores interrupted ABI state before `retfie`
 
 Current integer-promotion subset:
 
@@ -143,6 +191,9 @@ Supported:
 - 3+ argument stack calls
 - stack-backed local arrays
 - pointer arguments and pointer returns
+- one `void __interrupt isr(void)` handler
+- interrupt vector emission at `0x0004`
+- `retfie`
 
 Still unsupported:
 
@@ -155,7 +206,6 @@ Still unsupported:
 - pointer relational compares other than `==` / `!=`
 - `struct`, `union`, `enum`
 - `float`
-- user ISR support
 - recursion
 
 Current constraints:
@@ -164,6 +214,9 @@ Current constraints:
 - returning a pointer to stack-local storage is rejected, including direct forms and obvious local alias chains
 - explicit source casts are still limited; widening/truncation casts are primarily inserted by semantic analysis
 - pointers are data-space-only; code pointers remain unsupported
+- only one ISR is supported in this phase
+- ISR code cannot call normal functions or Phase 5 runtime helpers
+- no emulator or hardware execution runs in CI; validation is compile/listing/map/HEX shape based
 
 ## Build
 
@@ -217,6 +270,18 @@ cargo run -- \
   examples/pic16f877a/expression_test.c
 ```
 
+Phase 6 interrupt example:
+
+```bash
+cargo run -- \
+  --target pic16f628a \
+  -I include \
+  -O2 -Wall -Wextra \
+  --emit-ir --emit-asm --map --list-file \
+  -o build/timer-interrupt.hex \
+  examples/pic16f628a/timer_interrupt.c
+```
+
 List targets:
 
 ```bash
@@ -238,6 +303,9 @@ cargo run -- --list-targets
 - [examples/pic16f877a/mul16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/mul16.c:1)
 - [examples/pic16f877a/pointer16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/pointer16.c:1)
 - [examples/pic16f877a/shift_mix.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/shift_mix.c:1)
+- [examples/pic16f628a/timer_interrupt.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/timer_interrupt.c:1)
+- [examples/pic16f877a/timer_interrupt.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/timer_interrupt.c:1)
+- [examples/pic16f877a/gpio_interrupt.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/gpio_interrupt.c:1)
 
 ## Documentation
 

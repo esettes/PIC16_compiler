@@ -17,6 +17,7 @@ pub struct IrProgram {
 #[derive(Clone, Debug)]
 pub struct IrFunction {
     pub symbol: SymbolId,
+    pub is_interrupt: bool,
     pub params: Vec<SymbolId>,
     pub locals: Vec<SymbolId>,
     pub blocks: Vec<IrBlock>,
@@ -117,7 +118,13 @@ impl IrProgram {
     pub fn render(&self) -> String {
         let mut output = String::new();
         for function in &self.functions {
-            let _ = writeln!(output, "fn #{} entry=b{}", function.symbol, function.entry);
+            let _ = writeln!(
+                output,
+                "{}fn #{} entry=b{}",
+                if function.is_interrupt { "interrupt " } else { "" },
+                function.symbol,
+                function.entry
+            );
             for block in &function.blocks {
                 let _ = writeln!(output, "  b{} ({}):", block.id, block.name);
                 for instruction in &block.instructions {

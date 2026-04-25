@@ -14,6 +14,13 @@ pub struct Parser<'a> {
     _source: &'a PreprocessedSource,
 }
 
+#[derive(Clone, Copy)]
+struct DeclSpecifiers {
+    storage_class: StorageClass,
+    ty: Type,
+    is_interrupt: bool,
+}
+
 impl<'a> Parser<'a> {
     /// Creates a parser over tokenized preprocessed source and a shared diagnostic sink.
     pub fn new(
@@ -41,8 +48,8 @@ impl<'a> Parser<'a> {
     /// Parses one top-level declaration or function definition.
     fn parse_item(&mut self) -> Item {
         let start = self.current_span().start;
-        let (storage_class, base_ty) = self.parse_decl_specifiers();
-        let (name, name_span, ty) = self.parse_declarator(base_ty);
+        let decl = self.parse_decl_specifiers();
+        let (name, name_span, ty) = self.parse_declarator(decl.ty);
 
         if self.match_symbol(Symbol::LParen) {
             let params = self.parse_params();
@@ -52,7 +59,8 @@ impl<'a> Parser<'a> {
                 return Item::Function(FunctionDecl {
                     name,
                     return_type: ty,
-                    storage_class,
+                    storage_class: decl.storage_class,
+                    is_interrupt: decl.is_interrupt,
                     params,
                     body: Some(body),
                     span: Span::new(start, self.previous_span().end),
@@ -62,12 +70,21 @@ impl<'a> Parser<'a> {
             Item::Function(FunctionDecl {
                 name,
                 return_type: ty,
-                storage_class,
+                storage_class: decl.storage_class,
+                is_interrupt: decl.is_interrupt,
                 params,
                 body: None,
                 span: Span::new(start, self.previous_span().end),
             })
         } else {
+            if decl.is_interrupt {
+                self.diagnostics.error(
+                    "parser",
+                    Some(Span::new(start, name_span.end)),
+                    "`__interrupt` is only valid on function declarations",
+                    Some("declare the interrupt handler as `void __interrupt isr(void)`".to_string()),
+                );
+            }
             let initializer = if self.match_symbol(Symbol::Assign) {
                 Some(self.parse_expression())
             } else {
@@ -77,7 +94,7 @@ impl<'a> Parser<'a> {
             Item::Global(VarDecl {
                 name,
                 ty,
-                storage_class,
+                storage_class: decl.storage_class,
                 initializer,
                 span: Span::new(start, self.previous_span().end.max(name_span.end)),
             })
@@ -98,12 +115,20 @@ impl<'a> Parser<'a> {
         let mut params = Vec::new();
         loop {
             let start = self.current_span().start;
-            let (storage_class, base_ty) = self.parse_decl_specifiers();
-            let (name, _, ty) = self.parse_declarator(base_ty);
+            let decl = self.parse_decl_specifiers();
+            if decl.is_interrupt {
+                self.diagnostics.error(
+                    "parser",
+                    Some(Span::new(start, self.previous_span().end)),
+                    "`__interrupt` is not valid on parameters",
+                    None,
+                );
+            }
+            let (name, _, ty) = self.parse_declarator(decl.ty);
             params.push(VarDecl {
                 name,
                 ty,
-                storage_class,
+                storage_class: decl.storage_class,
                 initializer: None,
                 span: Span::new(start, self.previous_span().end),
             });
@@ -255,8 +280,16 @@ impl<'a> Parser<'a> {
     /// Parses a local variable declaration terminated by a semicolon.
     fn parse_local_decl(&mut self) -> VarDecl {
         let start = self.current_span().start;
-        let (storage_class, base_ty) = self.parse_decl_specifiers();
-        let (name, _, ty) = self.parse_declarator(base_ty);
+        let decl = self.parse_decl_specifiers();
+        let (name, _, ty) = self.parse_declarator(decl.ty);
+        if decl.is_interrupt {
+            self.diagnostics.error(
+                "parser",
+                Some(Span::new(start, self.previous_span().end)),
+                "`__interrupt` is only valid on top-level function declarations",
+                None,
+            );
+        }
         let initializer = if self.match_symbol(Symbol::Assign) {
             Some(self.parse_expression())
         } else {
@@ -266,7 +299,7 @@ impl<'a> Parser<'a> {
         VarDecl {
             name,
             ty,
-            storage_class,
+            storage_class: decl.storage_class,
             initializer,
             span: Span::new(start, self.previous_span().end),
         }
@@ -573,10 +606,11 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses storage, qualifier, and scalar type specifiers for a declaration.
-    fn parse_decl_specifiers(&mut self) -> (StorageClass, Type) {
+    fn parse_decl_specifiers(&mut self) -> DeclSpecifiers {
         let mut storage = StorageClass::Auto;
         let mut qualifiers = Qualifiers::default();
         let mut saw_unsigned = false;
+        let mut is_interrupt = false;
         let mut scalar = None::<ScalarType>;
 
         loop {
@@ -601,20 +635,45 @@ impl<'a> Parser<'a> {
                     saw_unsigned = true;
                     self.advance();
                 }
+                TokenKind::Keyword(Keyword::Interrupt) => {
+                    is_interrupt = true;
+                    self.advance();
+                }
                 TokenKind::Keyword(Keyword::Void) => {
+                    if scalar.is_some() {
+                        self.diagnostics.error(
+                            "parser",
+                            Some(self.current_span()),
+                            "duplicate type specifier",
+                            None,
+                        );
+                    }
                     scalar = Some(ScalarType::Void);
                     self.advance();
-                    break;
                 }
                 TokenKind::Keyword(Keyword::Char) => {
+                    if scalar.is_some() {
+                        self.diagnostics.error(
+                            "parser",
+                            Some(self.current_span()),
+                            "duplicate type specifier",
+                            None,
+                        );
+                    }
                     scalar = Some(if saw_unsigned { ScalarType::U8 } else { ScalarType::I8 });
                     self.advance();
-                    break;
                 }
                 TokenKind::Keyword(Keyword::Int) => {
+                    if scalar.is_some() {
+                        self.diagnostics.error(
+                            "parser",
+                            Some(self.current_span()),
+                            "duplicate type specifier",
+                            None,
+                        );
+                    }
                     scalar = Some(if saw_unsigned { ScalarType::U16 } else { ScalarType::I16 });
                     self.advance();
-                    break;
                 }
                 _ => break,
             }
@@ -629,7 +688,11 @@ impl<'a> Parser<'a> {
             );
             ScalarType::I16
         });
-        (storage, Type::new(scalar).with_qualifiers(qualifiers))
+        DeclSpecifiers {
+            storage_class: storage,
+            ty: Type::new(scalar).with_qualifiers(qualifiers),
+            is_interrupt,
+        }
     }
 
     /// Parses a named declarator with Phase 3 pointer and one-dimensional array suffixes.
@@ -657,8 +720,16 @@ impl<'a> Parser<'a> {
 
     /// Parses a standalone type name used by `sizeof(type)`.
     fn parse_type_name(&mut self) -> Type {
-        let (_, base_ty) = self.parse_decl_specifiers();
-        self.parse_abstract_declarator(base_ty)
+        let decl = self.parse_decl_specifiers();
+        if decl.is_interrupt {
+            self.diagnostics.error(
+                "parser",
+                Some(self.previous_span()),
+                "`__interrupt` is not valid in type names",
+                None,
+            );
+        }
+        self.parse_abstract_declarator(decl.ty)
     }
 
     /// Parses the pointer and array suffix pieces of an abstract declarator.
@@ -736,6 +807,7 @@ impl<'a> Parser<'a> {
                 | TokenKind::Keyword(Keyword::Void)
                 | TokenKind::Keyword(Keyword::Char)
                 | TokenKind::Keyword(Keyword::Int)
+                | TokenKind::Keyword(Keyword::Interrupt)
         )
     }
 

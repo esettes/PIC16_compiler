@@ -123,6 +123,42 @@ Behavior:
 - dynamic zero divisors return `0`
 - arithmetic is fixed-width and PIC16-oriented; overflow wraps/truncates
 
+### Phase 6 Interrupt Model
+
+Chosen syntax:
+
+- `void __interrupt isr(void)`
+
+Current interrupt policy is conservative Option A:
+
+- at most one ISR per program
+- ISR must be `void` and parameterless
+- ISR cannot call normal functions
+- ISR cannot use any expression that would lower through a Phase 5 runtime helper
+- inline-safe arithmetic, compares, pointer dereference, locals, and direct SFR access remain allowed
+
+Vector layout:
+
+- `0x0000`: reset vector, direct `goto __reset_dispatch`
+- `0x0004`: interrupt vector, direct `goto __interrupt_dispatch` when ISR exists
+- `0x0004`: `retfie` when no ISR exists
+- dispatch stubs after `0x0004` handle `PCLATH` page selection before branching to `main` startup or ISR body
+
+ISR save/restore policy:
+
+- save `W`, `STATUS`, `PCLATH`, `FSR`
+- save backend ABI state: `return_high`, `scratch0`, `scratch1`, `stack_ptr`, `frame_ptr`
+- save context into shared GPR addresses so `W` can be restored with `swapf` after `STATUS` is restored
+- reuse normal stack-frame prologue/epilogue inside ISR after context is saved
+- end ISR with `retfie`, never normal `return`
+
+Stack-first ABI interaction:
+
+- interrupted software-stack state is preserved before ISR frame allocation
+- ISR may still use stack-backed locals and IR temps
+- interrupted `stack_ptr` / `frame_ptr` are restored before `retfie`
+- Phase 6 stack sizing adds one ISR frame on top of worst-case normal call depth
+
 ### Banking and Paging
 
 Backend explicitly models:
@@ -159,7 +195,6 @@ Not implemented:
 - multidimensional arrays
 - structs
 - floats
-- user ISR support
 - recursion
 
 ## Invariants
@@ -204,6 +239,12 @@ IR models:
 
 Boolean expressions lower through branch form first. Memory expressions lower through explicit address and indirect ops.
 
+Interrupt functions stay structurally ordinary IR functions, but carry interrupt metadata so the backend can:
+
+- emit the interrupt vector and dispatch stub
+- pick ISR prologue/epilogue instead of normal return lowering
+- account for ISR frame depth separately from the normal call graph
+
 ### Backend
 
 Backend lowers:
@@ -225,6 +266,5 @@ Per-call IR temps now live in frame storage, not static absolute RAM.
 After Phase 5:
 
 1. richer pointer compatibility and initializer support
-2. interrupts
-3. stronger PIC16 peephole/bank/page optimization
-4. more PIC16 mid-range targets
+2. stronger PIC16 peephole/bank/page optimization
+3. more PIC16 mid-range targets

@@ -10,7 +10,7 @@ Shared backend responsibilities:
 - IR -> PIC16 asm lowering
 - 14-bit word encoding
 
-Current backend phase: **Phase 5 arithmetic helpers on Phase 4 Stack-first ABI**
+Current backend phase: **Phase 6 interrupts on top of Phase 5 arithmetic helpers and the Phase 4 Stack-first ABI**
 
 Backend owns:
 
@@ -21,6 +21,8 @@ Backend owns:
 - per-call frame lowering for locals and IR temps
 - `FSR/INDF` indirect access for pointers and frame storage
 - Phase 5 runtime helper emission for multiply/divide/modulo and dynamic shifts
+- interrupt vector emission and ISR dispatch
+- ISR-specific save/restore and `retfie` lowering
 
 Current call contract:
 
@@ -52,9 +54,26 @@ Current backend docs:
 - [phase4-stack-first-abi.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-first-abi.md:1)
 - [phase4-stack-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-model.md:1)
 - [phase5-helper-calling.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase5-helper-calling.md:1)
+- [phase6-interrupts.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase6-interrupts.md:1)
 - [../runtime/phase5-arithmetic-helpers.md](/home/settes/cursus/PIC16_compiler/docs/runtime/phase5-arithmetic-helpers.md:1)
 - [../ir/phase5-arithmetic-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase5-arithmetic-lowering.md:1)
 - [../ir/phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
+
+Phase 6 interrupt contract:
+
+- ISR syntax is `void __interrupt isr(void)`
+- one ISR per program
+- ISR uses the same software-stack frame machinery after saving context
+- vector at `0x0004` dispatches to a page-safe ISR stub
+- default no-ISR vector is `retfie`
+- ISR saves `W`, `STATUS`, `PCLATH`, `FSR`, `return_high`, `scratch0`, `scratch1`, `stack_ptr`, `frame_ptr`
+- ISR ends with `retfie`
+
+Phase 6 restrictions:
+
+- no normal function calls inside ISR
+- no Phase 5 helper calls inside ISR
+- helper-requiring `*`, `/`, `%`, and dynamic shifts are rejected during semantic analysis
 
 Historical docs:
 

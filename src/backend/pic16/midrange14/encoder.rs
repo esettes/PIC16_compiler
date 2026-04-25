@@ -138,6 +138,7 @@ fn encode_instr(instr: &AsmInstr) -> u16 {
         AsmInstr::Subwf { f, d } => 0x0200 | dest_bit(*d) | u16::from(*f & 0x7F),
         AsmInstr::Rlf { f, d } => 0x0D00 | dest_bit(*d) | u16::from(*f & 0x7F),
         AsmInstr::Rrf { f, d } => 0x0C00 | dest_bit(*d) | u16::from(*f & 0x7F),
+        AsmInstr::Swapf { f, d } => 0x0E00 | dest_bit(*d) | u16::from(*f & 0x7F),
         AsmInstr::Bcf { f, b } => 0x1000 | (u16::from(*b & 0x07) << 7) | u16::from(*f & 0x7F),
         AsmInstr::Bsf { f, b } => 0x1400 | (u16::from(*b & 0x07) << 7) | u16::from(*f & 0x7F),
         AsmInstr::Btfsc { f, b } => 0x1800 | (u16::from(*b & 0x07) << 7) | u16::from(*f & 0x7F),
@@ -158,5 +159,23 @@ const fn dest_bit(dest: Dest) -> u16 {
     match dest {
         Dest::W => 0x0000,
         Dest::F => 0x0080,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encode_instr;
+    use crate::backend::pic16::midrange14::asm::{AsmInstr, Dest};
+
+    #[test]
+    /// Verifies the interrupt return instruction encodes to the canonical PIC16 word.
+    fn encodes_retfie() {
+        assert_eq!(encode_instr(&AsmInstr::Retfie), 0x0009);
+    }
+
+    #[test]
+    /// Verifies `swapf` uses the expected file-register opcode family.
+    fn encodes_swapf() {
+        assert_eq!(encode_instr(&AsmInstr::Swapf { f: 0x70, d: Dest::W }), 0x0E70);
     }
 }

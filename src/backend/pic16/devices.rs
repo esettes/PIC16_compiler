@@ -37,6 +37,7 @@ pub struct TargetDevice {
     pub bank_count: u8,
     pub vectors: DeviceVectors,
     pub allocatable_gpr: &'static [MemoryRange],
+    pub shared_gpr: &'static [MemoryRange],
     pub sfrs: &'static [DeviceRegister],
     pub default_config_word: u16,
     pub capabilities: &'static [&'static str],
@@ -93,7 +94,8 @@ impl DeviceRegistry {
 }
 
 const F628A_GPR: [MemoryRange; 1] = [MemoryRange { start: 0x20, end: 0x6F }];
-const F877A_GPR: [MemoryRange; 1] = [MemoryRange { start: 0x20, end: 0x7F }];
+const F877A_GPR: [MemoryRange; 1] = [MemoryRange { start: 0x20, end: 0x6F }];
+const SHARED_GPR: [MemoryRange; 1] = [MemoryRange { start: 0x70, end: 0x7F }];
 
 const F628A_SFRS: [DeviceRegister; 17] = [
     DeviceRegister { name: "INDF", address: 0x00 },
@@ -152,6 +154,7 @@ fn pic16f628a() -> TargetDevice {
             config_word: 0x2007,
         },
         allocatable_gpr: &F628A_GPR,
+        shared_gpr: &SHARED_GPR,
         sfrs: &F628A_SFRS,
         default_config_word: 0x3F30,
         capabilities: &[
@@ -181,6 +184,7 @@ fn pic16f877a() -> TargetDevice {
             config_word: 0x2007,
         },
         allocatable_gpr: &F877A_GPR,
+        shared_gpr: &SHARED_GPR,
         sfrs: &F877A_SFRS,
         default_config_word: 0x3F32,
         capabilities: &[
