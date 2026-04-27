@@ -1,5 +1,7 @@
 use std::fmt::{Display, Formatter};
 
+pub type StructId = usize;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScalarType {
     Void,
@@ -36,6 +38,8 @@ pub struct Type {
     pub qualifiers: Qualifiers,
     pub pointer_depth: u8,
     pub array_len: Option<usize>,
+    pub struct_id: Option<StructId>,
+    pub struct_size: usize,
 }
 
 impl Type {
@@ -49,6 +53,23 @@ impl Type {
             },
             pointer_depth: 0,
             array_len: None,
+            struct_id: None,
+            struct_size: 0,
+        }
+    }
+
+    /// Creates an unqualified named struct type with fixed packed byte size.
+    pub const fn struct_type(struct_id: StructId, struct_size: usize) -> Self {
+        Self {
+            scalar: ScalarType::Void,
+            qualifiers: Qualifiers {
+                is_const: false,
+                is_volatile: false,
+            },
+            pointer_depth: 0,
+            array_len: None,
+            struct_id: Some(struct_id),
+            struct_size,
         }
     }
 
@@ -93,7 +114,20 @@ impl Type {
 
     /// Returns true when this type is plain `void`.
     pub fn is_void(self) -> bool {
-        self.scalar == ScalarType::Void && self.pointer_depth == 0 && self.array_len.is_none()
+        self.scalar == ScalarType::Void
+            && self.struct_id.is_none()
+            && self.pointer_depth == 0
+            && self.array_len.is_none()
+    }
+
+    /// Returns true when this type is a complete struct object type.
+    pub fn is_struct(self) -> bool {
+        self.struct_id.is_some() && self.pointer_depth == 0 && self.array_len.is_none()
+    }
+
+    /// Returns true when this type's base object is a struct.
+    pub fn has_struct_base(self) -> bool {
+        self.struct_id.is_some()
     }
 
     /// Returns true when this type is a constrained Phase 3 data pointer.
@@ -108,6 +142,9 @@ impl Type {
 
     /// Returns true when this type can currently be lowered by the backend.
     pub fn is_supported_codegen_scalar(self) -> bool {
+        if self.has_struct_base() {
+            return false;
+        }
         if self.pointer_depth > 1 {
             return false;
         }
@@ -122,7 +159,7 @@ impl Type {
 
     /// Returns true when this type is an integer scalar value.
     pub fn is_integer(self) -> bool {
-        !self.is_void() && !self.is_pointer() && !self.is_array()
+        !self.is_void() && !self.is_pointer() && !self.is_array() && !self.has_struct_base()
     }
 
     /// Returns true when this type is a scalar value that fits in registers or temps.
@@ -147,12 +184,7 @@ impl Type {
 
     /// Returns true when the type can be the target of a Phase 3 data pointer.
     pub fn is_supported_pointer_target(self) -> bool {
-        self.pointer_depth == 0
-            && self.array_len.is_none()
-            && matches!(
-                self.scalar,
-                ScalarType::I8 | ScalarType::U8 | ScalarType::I16 | ScalarType::U16
-            )
+        self.pointer_depth == 0 && self.array_len.is_none() && self.has_size()
     }
 
     /// Returns true when the type can live in a scalar value position in Phase 3.
@@ -166,6 +198,7 @@ impl Type {
     /// Returns true when the type can be declared as an addressable object in Phase 3.
     pub fn is_supported_object_type(self) -> bool {
         self.is_supported_value_type()
+            || self.is_struct()
             || (self.is_array() && self.element_type().is_supported_pointer_target())
     }
 
@@ -181,6 +214,9 @@ impl Type {
         }
         if self.is_pointer() {
             return 2;
+        }
+        if self.struct_id.is_some() {
+            return self.struct_size;
         }
         match self.scalar {
             ScalarType::Void => 0,
@@ -201,7 +237,7 @@ impl Type {
 
     /// Returns true when the type has a complete object size in the current phase.
     pub fn has_size(self) -> bool {
-        !self.is_void()
+        !self.is_void() && (self.struct_id.is_none() || self.struct_size > 0)
     }
 }
 
@@ -221,14 +257,18 @@ impl Display for Type {
         if self.qualifiers.is_volatile {
             formatter.write_str("volatile ")?;
         }
-        let name = match self.scalar {
-            ScalarType::Void => "void",
-            ScalarType::I8 => "char",
-            ScalarType::U8 => "unsigned char",
-            ScalarType::I16 => "int",
-            ScalarType::U16 => "unsigned int",
+        let rendered_struct = if let Some(struct_id) = self.struct_id {
+            format!("struct#{struct_id}")
+        } else {
+            match self.scalar {
+                ScalarType::Void => "void".to_string(),
+                ScalarType::I8 => "char".to_string(),
+                ScalarType::U8 => "unsigned char".to_string(),
+                ScalarType::I16 => "int".to_string(),
+                ScalarType::U16 => "unsigned int".to_string(),
+            }
         };
-        formatter.write_str(name)?;
+        formatter.write_str(&rendered_struct)?;
         for _ in 0..self.pointer_depth {
             formatter.write_str("*")?;
         }

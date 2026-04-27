@@ -2,11 +2,37 @@ use std::fmt::Write;
 
 use crate::common::source::Span;
 
-use super::types::{StorageClass, Type};
+use super::types::{StorageClass, StructId, Type};
 
 #[derive(Clone, Debug)]
 pub struct TranslationUnit {
     pub items: Vec<Item>,
+    pub struct_defs: Vec<StructDef>,
+    pub enum_constants: Vec<EnumConstant>,
+}
+
+#[derive(Clone, Debug)]
+pub struct StructDef {
+    pub id: StructId,
+    pub name: String,
+    pub fields: Vec<StructField>,
+    pub size: usize,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct StructField {
+    pub name: String,
+    pub ty: Type,
+    pub offset: usize,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct EnumConstant {
+    pub name: String,
+    pub value: i64,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug)]
@@ -31,8 +57,14 @@ pub struct VarDecl {
     pub name: String,
     pub ty: Type,
     pub storage_class: StorageClass,
-    pub initializer: Option<Expr>,
+    pub initializer: Option<Initializer>,
     pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub enum Initializer {
+    Expr(Expr),
+    List(Vec<Initializer>, Span),
 }
 
 #[derive(Clone, Debug)]
@@ -79,6 +111,10 @@ pub struct Expr {
 pub enum ExprKind {
     IntLiteral(i64),
     Name(String),
+    Cast {
+        ty: Type,
+        expr: Box<Expr>,
+    },
     Unary {
         op: UnaryOp,
         expr: Box<Expr>,
@@ -101,6 +137,14 @@ pub enum ExprKind {
     Call {
         callee: String,
         args: Vec<Expr>,
+    },
+    Member {
+        base: Box<Expr>,
+        field: String,
+    },
+    PointerMember {
+        base: Box<Expr>,
+        field: String,
     },
     SizeOfExpr(Box<Expr>),
     SizeOfType(Type),
@@ -139,6 +183,22 @@ impl TranslationUnit {
     /// Renders a compact textual view of the parsed AST for debugging artifacts.
     pub fn render(&self) -> String {
         let mut output = String::new();
+        for def in &self.struct_defs {
+            let _ = writeln!(
+                output,
+                "struct {} size={} fields={}",
+                def.name,
+                def.size,
+                def.fields
+                    .iter()
+                    .map(|field| format!("{}:{}@{}", field.name, field.ty, field.offset))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        for constant in &self.enum_constants {
+            let _ = writeln!(output, "enum_const {} = {}", constant.name, constant.value);
+        }
         for item in &self.items {
             match item {
                 Item::Function(function) => {
@@ -248,6 +308,7 @@ fn render_expr(expr: &Expr) -> String {
     match &expr.kind {
         ExprKind::IntLiteral(value) => value.to_string(),
         ExprKind::Name(name) => name.clone(),
+        ExprKind::Cast { ty, expr } => format!("({ty})({})", render_expr(expr)),
         ExprKind::Unary { op, expr } => format!("{op:?}({})", render_expr(expr)),
         ExprKind::AddressOf(expr) => format!("&({})", render_expr(expr)),
         ExprKind::Deref(expr) => format!("*({})", render_expr(expr)),
@@ -265,6 +326,8 @@ fn render_expr(expr: &Expr) -> String {
             callee,
             args.iter().map(render_expr).collect::<Vec<_>>().join(", ")
         ),
+        ExprKind::Member { base, field } => format!("{}.{}", render_expr(base), field),
+        ExprKind::PointerMember { base, field } => format!("{}->{}", render_expr(base), field),
         ExprKind::SizeOfExpr(expr) => format!("sizeof({})", render_expr(expr)),
         ExprKind::SizeOfType(ty) => format!("sizeof({ty})"),
     }

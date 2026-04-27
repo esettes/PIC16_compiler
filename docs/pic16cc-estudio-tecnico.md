@@ -29,6 +29,14 @@ Cada concepto importante se presenta respondiendo siempre cuatro preguntas:
 
 No se asume conocimiento previo de compiladores. Sí se asume que el lector sabe programar y puede seguir razonamientos técnicos.
 
+Esta edición ampliada añade una segunda capa pedagógica sobre la primera:
+
+- más lectura guiada de código real del repositorio
+- más casos prácticos completos, siguiendo ejemplos existentes en `examples/`
+- más conexión explícita entre fuente C, semántica, IR, backend, artefactos y tests
+
+La idea es que el lector no sólo entienda conceptos. La idea es que pueda abrir archivos reales del proyecto y reconocer por qué cada bloque de código está ahí, qué problema resuelve y cómo encaja con el resto.
+
 Estado del proyecto estudiado:
 
 - crate principal: `pic16cc`
@@ -4125,6 +4133,32 @@ Ejemplo conceptual:
 argv -> parse CLI -> execute(options)
 ```
 
+Fragmento literal representativo de `src/main.rs`:
+
+```rust
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let options = match pic16cc::cli::CliOptions::parse(args) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    };
+
+    if let Err(error) = pic16cc::execute(options) {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+}
+```
+
+Qué enseña este bloque:
+
+- `main` es deliberadamente pequeño
+- la lógica real vive fuera
+- los códigos de salida CLI y compilación están separados
+
 ## Orquestación principal: `src/lib.rs`
 
 Qué es:
@@ -4163,6 +4197,78 @@ Ejemplo:
 
 Este archivo es excelente para una primera lectura seria del compilador, porque te da el mapa general sin hundirte todavía en detalles de una sola fase.
 
+Fragmento literal representativo de `src/lib.rs`:
+
+```rust
+let mut lexer = Lexer::new(&preprocessed, &mut diagnostics);
+let tokens = lexer.tokenize();
+if diagnostics.has_errors() {
+    return Err(diagnostics);
+}
+
+let mut parser = Parser::new(tokens, &preprocessed, &mut diagnostics);
+let ast: TranslationUnit = parser.parse_translation_unit();
+if diagnostics.has_errors() {
+    return Err(diagnostics);
+}
+
+let semantic = SemanticAnalyzer::new(target);
+let typed_program = semantic.analyze(ast, &mut diagnostics);
+if diagnostics.has_errors() {
+    return Err(diagnostics);
+}
+let typed_program = typed_program.expect("semantic result checked");
+```
+
+Este bloque es importante porque deja ver transición real:
+
+```text
+texto preprocesado -> tokens -> AST -> programa tipado
+```
+
+## CLI: `src/cli/mod.rs`
+
+Qué es:
+
+el contrato externo del compilador.
+
+Por qué existe:
+
+- porque alguien tiene que traducir opciones de usuario a estructura interna
+- porque así `main` no mezcla parsing de argumentos con compilación
+
+Cómo se implementa aquí:
+
+- reconoce `--target`, `-I`, `-D`, `-O*`
+- activa artefactos como `--emit-ir` o `--emit-asm`
+- valida errores de forma antes de entrar al pipeline real
+
+Fragmento literal representativo de `src/cli/mod.rs`:
+
+```rust
+match argument.as_str() {
+    "--help" | "-h" => return Ok(Self { command: CliCommand::Help }),
+    "--version" => return Ok(Self { command: CliCommand::Version }),
+    "--list-targets" => return Ok(Self { command: CliCommand::ListTargets }),
+    "--emit-tokens" => artifacts.emit_tokens = true,
+    "--emit-ast" => artifacts.emit_ast = true,
+    "--emit-ir" => artifacts.emit_ir = true,
+    "--emit-asm" => artifacts.emit_asm = true,
+    "--map" => artifacts.map = true,
+    "--list-file" => artifacts.list_file = true,
+    "--verbose" => verbose = true,
+    "--opt-report" => opt_report = true,
+    "-Wall" => warning_profile.wall = true,
+    "-Wextra" => warning_profile.wextra = true,
+    "-Werror" => warning_profile.werror = true,
+```
+
+Qué enseña:
+
+- la CLI del proyecto es explícita
+- los artefactos de estudio forman parte del producto
+- el libro puede referirse a flags reales, no inventados
+
 ## Frontend: `src/frontend`
 
 ### `preprocessor.rs`
@@ -4173,11 +4279,48 @@ Responsabilidad:
 - macros objeto
 - condicionales del preprocesador
 
+Fragmento literal de `src/frontend/preprocessor.rs`:
+
+```rust
+pub struct Preprocessor<'a> {
+    target: &'a TargetDevice,
+    include_dirs: Vec<PathBuf>,
+    macros: BTreeMap<String, MacroDef>,
+    source_manager: &'a mut SourceManager,
+    include_guard: HashSet<PathBuf>,
+}
+```
+
+Este bloque ya comunica diseño:
+
+- depende del target
+- mantiene macros
+- preserva acceso a fuentes reales
+- evita inclusión recursiva accidental
+
 ### `lexer.rs`
 
 Responsabilidad:
 
 - convertir texto en tokens
+
+Fragmento literal de `src/frontend/lexer.rs`:
+
+```rust
+pub enum TokenKind {
+    Identifier(String),
+    Number(i64),
+    Keyword(Keyword),
+    Symbol(Symbol),
+    Eof,
+}
+```
+
+Qué enseña:
+
+- el token ya clasifica sin semántica
+- los enteros ya se materializan como valores
+- EOF explícito simplifica parser
 
 ### `parser.rs`
 
@@ -4186,6 +4329,34 @@ Responsabilidad:
 - construir AST
 - manejar precedencia
 - reconocer declaraciones, sentencias y expresiones
+
+Fragmento literal de `src/frontend/parser.rs`:
+
+```rust
+if self.match_keyword(Keyword::If) {
+    self.expect_symbol(Symbol::LParen);
+    let condition = self.parse_expression();
+    self.expect_symbol(Symbol::RParen);
+    let then_branch = Box::new(self.parse_statement());
+    let else_branch = if self.match_keyword(Keyword::Else) {
+        Some(Box::new(self.parse_statement()))
+    } else {
+        None
+    };
+    return Stmt::If {
+        condition,
+        then_branch,
+        else_branch,
+        span: Span::new(start, self.previous_span().end),
+    };
+}
+```
+
+Esto es visualmente útil porque el lector ve:
+
+- dónde nace un `if` en el AST
+- cómo el parser consume tokens en orden
+- cómo se conservan `span` para diagnósticos
 
 ### `semantic.rs`
 
@@ -4198,6 +4369,31 @@ Responsabilidad:
 - restricciones del subconjunto
 - validaciones Phase 3/4/5/6
 
+Fragmento literal de `src/frontend/semantic.rs`:
+
+```rust
+fn seed_device_registers(&mut self) {
+    for register in self.target.sfrs {
+        let symbol = self.insert_symbol(Symbol {
+            id: self.symbols.len(),
+            name: register.name.to_string(),
+            ty: Type::new(ScalarType::U8).with_qualifiers(Qualifiers {
+                is_const: false,
+                is_volatile: true,
+            }),
+            storage_class: StorageClass::Extern,
+            is_interrupt: false,
+            kind: SymbolKind::DeviceRegister,
+            span: Span::new(0, 0),
+            fixed_address: Some(register.address),
+            is_defined: true,
+            is_referenced: false,
+            parameter_types: Vec::new(),
+        });
+```
+
+Este bloque es de los más pedagógicos del proyecto porque muestra literalmente cómo `PORTA`, `PORTB`, `TRISB` o `INTCON` entran al compilador como símbolos reales.
+
 ## IR: `src/ir`
 
 ### `model.rs`
@@ -4206,17 +4402,81 @@ Responsabilidad:
 
 - definir la forma de la IR
 
+Fragmento literal de `src/ir/model.rs`:
+
+```rust
+pub enum IrTerminator {
+    Return(Option<Operand>),
+    Jump(BlockId),
+    Branch {
+        condition: IrCondition,
+        then_block: BlockId,
+        else_block: BlockId,
+    },
+    Unreachable,
+}
+```
+
+Qué enseña:
+
+- el control flow ya no es sintaxis
+- ahora es grafo explícito
+- `Return`, `Jump` y `Branch` son casos distintos y visibles
+
 ### `lowering.rs`
 
 Responsabilidad:
 
 - transformar el programa tipado en IR
 
+Fragmento literal de `src/ir/lowering.rs`:
+
+```rust
+TypedStmt::While {
+    condition, body, ..
+} => {
+    let header = self.new_block("while.head");
+    let body_block = self.new_block("while.body");
+    let end = self.new_block("while.end");
+    self.ensure_jump(header);
+
+    self.current = header;
+    self.loop_stack.push((header, end));
+    self.lower_condition(condition, body_block, end);
+```
+
+Este bloque vuelve muy visual el paso de:
+
+```text
+while fuente -> header + body + end
+```
+
 ### `passes.rs`
 
 Responsabilidad:
 
 - optimizaciones IR
+
+Fragmento literal de `src/ir/passes.rs`:
+
+```rust
+if let (Operand::Constant(lhs), Operand::Constant(rhs)) = (lhs, rhs) {
+    let ty = function.temp_types[dst];
+    let result = eval_binary(op, lhs, rhs, ty, ty);
+    *instr = IrInstr::Copy {
+        dst,
+        src: Operand::Constant(result),
+    };
+    constants.insert(dst, result);
+    stats.expressions_folded += 1;
+}
+```
+
+Qué enseña:
+
+- el pass no “piensa” en alto nivel
+- reescribe instrucciones concretas
+- una expresión constante deja de ser `Binary` y pasa a ser `Copy`
 
 ## Backend: `src/backend/pic16`
 
@@ -4225,6 +4485,17 @@ Responsabilidad:
 Responsabilidad:
 
 - describir chips concretos
+
+Fragmento literal representativo:
+
+```text
+target descriptor -> vectores, RAM, bancos, SFR, config word
+```
+
+Aquí conviene recordar algo importante:
+
+- `devices.rs` no es decoración
+- es lo que permite compartir backend entre `PIC16F628A` y `PIC16F877A`
 
 ### `midrange14/codegen.rs`
 
@@ -4236,6 +4507,30 @@ Responsabilidad:
 - ISR
 - banking/paging
 
+Fragmento literal de `src/backend/pic16/midrange14/codegen.rs`:
+
+```rust
+self.program.push(AsmLine::Comment(format!(
+    "frame args={} saved_fp={} locals={} temps={} frame_bytes={}",
+    arg_bytes, saved_fp_offset, local_bytes, temp_bytes, frame_bytes
+)));
+self.current_bank = UNKNOWN_BANK;
+if function.is_interrupt {
+    self.program.push(AsmLine::Comment(
+        "interrupt context save + isolated stack frame".to_string(),
+    ));
+    self.emit_interrupt_prologue(function.symbol);
+} else {
+    self.emit_prologue(function.symbol);
+}
+```
+
+Este bloque es muy ilustrativo porque muestra:
+
+- el backend deja huellas didácticas en asm
+- el ABI real aparece impreso
+- ISR y función normal divergen desde prólogo
+
 ### `midrange14/asm.rs`
 
 Responsabilidad:
@@ -4243,17 +4538,56 @@ Responsabilidad:
 - representar instrucciones simbólicas
 - peephole optimization
 
+Fragmento conceptual útil:
+
+```text
+asm interno = representación antes de codificar a palabra PIC16
+```
+
+Este punto importa porque el compilador no genera HEX directamente desde IR.
+
 ### `midrange14/encoder.rs`
 
 Responsabilidad:
 
 - codificar instrucciones a palabras
 
+Fragmento conceptual útil:
+
+```text
+asm simbólico -> palabras de 14 bits -> registros Intel HEX
+```
+
 ### `midrange14/runtime.rs`
 
 Responsabilidad:
 
 - clasificación y soporte de helpers aritméticos
+
+Fragmento literal de `src/backend/pic16/midrange14/runtime.rs`:
+
+```rust
+Self::MulU16 => RuntimeHelperInfo {
+    label: "__rt_mul_u16",
+    operand_ty: Type::new(ScalarType::U16),
+    arg_bytes: 4,
+    local_bytes: 4,
+    frame_bytes: 6,
+},
+Self::DivU16 => RuntimeHelperInfo {
+    label: "__rt_div_u16",
+    operand_ty: Type::new(ScalarType::U16),
+    arg_bytes: 4,
+    local_bytes: 4,
+    frame_bytes: 6,
+},
+```
+
+Qué enseña:
+
+- cada helper tiene contrato
+- el coste de frame está explicitado
+- el runtime no es “caja negra”
 
 ## Salida: otras carpetas clave
 
@@ -4294,6 +4628,29 @@ Cómo conviene leerlo:
 Ejemplo:
 
 Los tests de nested calls, pointer escapes e ISR prohibiendo helpers cuentan la historia de los problemas reales que el proyecto tuvo que cerrar.
+
+Fragmento literal de `tests/compiler_pipeline.rs`:
+
+```rust
+fn assert_phase4_stack_metadata(output: &Path) {
+    let asm = read_artifact(output, "asm");
+    let map = read_artifact(output, "map");
+    let listing = read_artifact(output, "lst");
+
+    assert!(asm.contains("frame args="));
+    assert!(asm.contains("stack base="));
+    assert!(map.contains("__abi.stack_ptr.lo"));
+    assert!(map.contains("__abi.frame_ptr.lo"));
+    assert!(map.contains("__stack.base"));
+    assert!(map.contains("__stack.end"));
+    assert!(listing.contains("frame args="));
+}
+```
+
+Este bloque es importante porque enseña algo muy valioso:
+
+- los tests no sólo miran “compila o no”
+- también verifican rastros concretos del ABI y del backend
 
 ## Método recomendado para leer el repositorio
 
@@ -4957,7 +5314,2101 @@ No por burocracia, sino porque documentar bien obliga a pensar bien.
 
 ---
 
-# 37. Epílogo pedagógico
+# 37. Apéndice H: lectura guiada del orquestador real
+
+## Por qué existe este apéndice
+
+Hasta ahora el libro ha explicado conceptos, arquitectura y evolución histórica.
+
+Este apéndice cambia de ángulo:
+
+- deja de mirar el compilador “desde lejos”
+- empieza a leer el código real que une todas las piezas
+- usa el repositorio como texto principal de estudio
+
+La pregunta que guía esta parte no es sólo “qué hace el compilador”.
+
+La pregunta es:
+
+```text
+¿en qué archivo exacto ocurre cada decisión importante?
+```
+
+## El corazón real del pipeline está en `src/lib.rs`
+
+Si hubiera que enseñar este compilador abriendo un solo archivo primero, sería `src/lib.rs`.
+
+Ahí aparece la ruta completa, en orden, sin metáforas:
+
+```rust
+    let mut preprocessor = Preprocessor::new(
+        target,
+        command.include_dirs.clone(),
+        command.defines.clone(),
+        &mut source_manager,
+    );
+    let preprocessed = preprocessor.process(main_source, &mut diagnostics);
+    if diagnostics.has_errors() {
+        return Err(diagnostics);
+    }
+
+    let preprocessed = preprocessed.expect("preprocessor result checked");
+    if command.artifacts.emit_tokens {
+        let tokens = Lexer::new(&preprocessed, &mut diagnostics).collect_debug();
+        write_artifact(&command.output, "tokens", &tokens)?;
+    }
+
+    let mut lexer = Lexer::new(&preprocessed, &mut diagnostics);
+    let tokens = lexer.tokenize();
+    if diagnostics.has_errors() {
+        return Err(diagnostics);
+    }
+
+    let mut parser = Parser::new(tokens, &preprocessed, &mut diagnostics);
+    let ast: TranslationUnit = parser.parse_translation_unit();
+    if diagnostics.has_errors() {
+        return Err(diagnostics);
+    }
+
+    if command.artifacts.emit_ast {
+        write_artifact(&command.output, "ast", &ast.render())?;
+    }
+
+    let semantic = SemanticAnalyzer::new(target);
+    let typed_program = semantic.analyze(ast, &mut diagnostics);
+    if diagnostics.has_errors() {
+        return Err(diagnostics);
+    }
+    let typed_program = typed_program.expect("semantic result checked");
+
+    let mut ir_program = IrLowerer::new(target).lower(&typed_program, &mut diagnostics);
+    if diagnostics.has_errors() {
+        return Err(diagnostics);
+    }
+```
+
+Y después continúa así:
+
+```rust
+    let mut optimization_report = OptimizationReport::default();
+    match command.optimization {
+        OptimizationLevel::O0 => {}
+        OptimizationLevel::O1 | OptimizationLevel::O2 | OptimizationLevel::Os => {
+            optimization_report.constant_fold = constant_fold(&mut ir_program);
+            optimization_report.dead_code = dead_code_elimination(&mut ir_program);
+            optimization_report.temp_compaction = compact_temps(&mut ir_program);
+        }
+    }
+
+    if command.artifacts.emit_ir {
+        write_artifact(&command.output, "ir", &ir_program.render())?;
+    }
+
+    let assembled = compile_program(target, &typed_program, &ir_program, &mut diagnostics);
+    if diagnostics.has_errors() {
+        return Err(diagnostics);
+    }
+    let assembled = assembled.expect("backend result checked");
+    optimization_report.backend = assembled.optimization;
+
+    if command.artifacts.emit_asm {
+        write_artifact(&command.output, "asm", &assembled.program.render())?;
+    }
+```
+
+Esto es didácticamente valiosísimo porque convierte ideas abstractas en secuencia verificable.
+
+No dice “el compilador más o menos hace esto”.
+
+Dice:
+
+1. preprocesa
+2. tokeniza
+3. parsea
+4. tipa y valida
+5. baja a IR
+6. optimiza IR
+7. genera asm
+8. codifica a palabras máquina
+9. serializa a Intel HEX
+
+## Qué aprende un lector serio de este fragmento
+
+Primera lección:
+
+```text
+pipeline bueno = etapas pequeñas + chequeos de error entre etapas
+```
+
+Segunda lección:
+
+```text
+artefactos de depuración no son extras cosméticos;
+son ventanas de observación sobre estados internos distintos
+```
+
+Tercera lección:
+
+```text
+optimización ocurre sobre IR, no sobre texto fuente ni sobre HEX final
+```
+
+## El detalle que mucha gente subestima: mismo `DiagnosticBag` durante todo el viaje
+
+El archivo no crea un sistema de errores distinto por etapa.
+
+Va pasando la misma bolsa de diagnósticos:
+
+```rust
+    let mut diagnostics = DiagnosticBag::new(command.warning_profile);
+```
+
+y luego:
+
+```rust
+    let preprocessed = preprocessor.process(main_source, &mut diagnostics);
+    let mut lexer = Lexer::new(&preprocessed, &mut diagnostics);
+    let mut parser = Parser::new(tokens, &preprocessed, &mut diagnostics);
+    let typed_program = semantic.analyze(ast, &mut diagnostics);
+    let mut ir_program = IrLowerer::new(target).lower(&typed_program, &mut diagnostics);
+    let assembled = compile_program(target, &typed_program, &ir_program, &mut diagnostics);
+```
+
+Esto enseña una idea de ingeniería muy útil:
+
+- error reporting no es capa externa
+- forma parte del contrato entre etapas
+- cada fase puede enriquecer el mismo informe acumulado
+
+## Cómo se escriben artefactos auxiliares de forma uniforme
+
+Otra pieza pequeña pero pedagógicamente importante:
+
+```rust
+fn write_artifact(output: &Path, extension: &str, contents: &str) -> StageResult<()> {
+    let path = change_extension(output, extension);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            DiagnosticBag::single(
+                Severity::Error,
+                "io",
+                format!("failed to create artifact directory `{}`: {error}", parent.display()),
+            )
+        })?;
+    }
+
+    fs::write(&path, contents).map_err(|error| {
+        DiagnosticBag::single(
+            Severity::Error,
+            "io",
+            format!("failed to write artifact `{}`: {error}", path.display()),
+        )
+    })?;
+    Ok(())
+}
+```
+
+Qué enseña esto:
+
+- el compilador produce producto principal
+- pero también produce evidencia de compilación
+- y esa evidencia tiene API uniforme
+
+Eso vuelve más fácil:
+
+- depurar
+- enseñar
+- probar
+- comparar `-O0` contra `-O2`
+
+## Caso mental completo: `PORTB = 1;`
+
+Tomemos ejemplo mínimo:
+
+```c
+PORTB = 1;
+```
+
+Al leer `src/lib.rs`, ya puedes obligarte a pasar por cada capa sin saltos:
+
+1. preprocesador: quizá no cambia nada, pero fija origen y contexto
+2. lexer: produce identificador `PORTB`, símbolo `=`, número `1`, `;`
+3. parser: reconoce una asignación
+4. semántica: resuelve `PORTB` como símbolo de registro de dispositivo, lo trata como lvalue `volatile unsigned char`
+5. IR: expresa “copiar constante y luego almacenar en símbolo”
+6. backend: emite `movlw 0x01` seguido de store al SFR correcto
+7. encoder: transforma asm interno en palabras de 14 bits
+8. HEX: empaqueta palabras con checksum y EOF
+
+Ese ejercicio mental, repetido muchas veces, convierte lectura pasiva en comprensión real.
+
+## Punto de entrada visible para usuario: `src/main.rs`
+
+Aunque `src/lib.rs` contiene tubería real, el ejecutable empieza incluso antes:
+
+```rust
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let options = match pic16cc::cli::CliOptions::parse(args) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    };
+
+    if let Err(error) = pic16cc::execute(options) {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+}
+```
+
+Es pequeño. Precisamente por eso es buen diseño.
+
+Lección:
+
+- `main` no conoce semántica
+- `main` no conoce PIC16
+- `main` no conoce IR
+- `main` sólo parsea CLI y delega
+
+## Regla de lectura recomendada para este archivo
+
+Si enseñas este compilador a otra persona, pídele que haga esto:
+
+1. lea `execute`
+2. lea `compile_command`
+3. anote cada transición de representación
+4. para cada transición, abra archivo de implementación correspondiente
+
+Esa disciplina evita error muy común:
+
+```text
+leer funciones sueltas fuera de contexto y perder sentido global
+```
+
+---
+
+# 38. Apéndice I: lectura guiada del frontend real
+
+## Preprocesador real: no sólo expande texto, también preserva origen
+
+La estructura central aparece muy pronto:
+
+```rust
+pub struct Preprocessor<'a> {
+    target: &'a TargetDevice,
+    include_dirs: Vec<PathBuf>,
+    macros: BTreeMap<String, MacroDef>,
+    source_manager: &'a mut SourceManager,
+    include_guard: HashSet<PathBuf>,
+}
+```
+
+Esto ya dice mucho.
+
+No es un simple `String -> String`.
+
+Tiene:
+
+- target
+- macros predefinidas
+- rutas de include
+- gestor de fuentes
+- protección contra inclusiones recursivas
+
+La rutina de recorrido muestra bien filosofía de diseño:
+
+```rust
+    fn process_file(
+        &mut self,
+        source_id: SourceId,
+        output: &mut PreprocessedSource,
+        conditions: &mut Vec<ConditionFrame>,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        let path = self.source_manager.path(source_id).to_path_buf();
+        if !self.include_guard.insert(path.clone()) {
+            return;
+        }
+
+        let file = self.source_manager.file(source_id).clone();
+        for (line_index, line) in file.text.lines().enumerate() {
+            let point = SourcePoint {
+                file: source_id,
+                line: line_index + 1,
+                column: 1,
+            };
+            let trimmed = line.trim_start();
+            if trimmed.starts_with('#') {
+                self.handle_directive(
+                    &path,
+                    source_id,
+                    line_index + 1,
+                    trimmed,
+                    output,
+                    conditions,
+                    diagnostics,
+                );
+                continue;
+            }
+
+            if is_active(conditions) {
+                let expanded = self.expand_line(line, point, diagnostics);
+                output.push_str(&expanded, point);
+                output.push_char('\n', point);
+            }
+        }
+
+        self.include_guard.remove(&path);
+    }
+```
+
+Qué conviene observar aquí:
+
+1. el preprocesador recorre línea a línea
+2. detecta directivas sólo cuando la línea empieza con `#`
+3. conserva `SourcePoint`
+4. decide si una línea está activa según pila de condicionales
+
+Eso último importa mucho para diagnósticos buenos.
+
+Un compilador educativo pobre habría hecho sólo expansión textual y habría perdido trazabilidad.
+
+Éste no.
+
+## Lexer real: pequeño, directo, suficiente
+
+El tipo de token es deliberadamente simple:
+
+```rust
+pub enum TokenKind {
+    Identifier(String),
+    Number(i64),
+    Keyword(Keyword),
+    Symbol(Symbol),
+    Eof,
+}
+```
+
+Y la parte más instructiva del lexer está en `next_token`:
+
+```rust
+        if ch.is_ascii_alphabetic() || ch == '_' {
+            self.index += 1;
+            while self.index < bytes.len() {
+                let current = bytes[self.index] as char;
+                if current.is_ascii_alphanumeric() || current == '_' {
+                    self.index += 1;
+                } else {
+                    break;
+                }
+            }
+            let text = &self.source.text[start..self.index];
+            return Token {
+                kind: keyword_or_ident(text),
+                span: Span::new(start, self.index),
+            };
+        }
+
+        if ch.is_ascii_digit() {
+            self.index += 1;
+            if ch == '0'
+                && self.index < bytes.len()
+                && matches!(bytes[self.index] as char, 'x' | 'X')
+            {
+                self.index += 1;
+                while self.index < bytes.len() && (bytes[self.index] as char).is_ascii_hexdigit() {
+                    self.index += 1;
+                }
+            } else {
+                while self.index < bytes.len() && (bytes[self.index] as char).is_ascii_digit() {
+                    self.index += 1;
+                }
+            }
+```
+
+Esto enseña una verdad importante:
+
+```text
+lexer útil no necesita ser “ingenioso”;
+necesita ser claro, determinista y fácil de depurar
+```
+
+Además, la tabla de símbolos dobles deja ver prioridad correcta:
+
+```rust
+    fn try_double_symbol(&mut self) -> Option<Symbol> {
+        let rest = &self.source.text[self.index..];
+        let table = [
+            ("==", Symbol::EqualEqual),
+            ("!=", Symbol::BangEqual),
+            ("<=", Symbol::LessEqual),
+            ("<<", Symbol::LessLess),
+            (">=", Symbol::GreaterEqual),
+            (">>", Symbol::GreaterGreater),
+            ("&&", Symbol::AndAnd),
+            ("||", Symbol::OrOr),
+        ];
+```
+
+Siempre hay que reconocer primero operadores largos, o romperás tokens válidos en piezas incorrectas.
+
+## Parser real: decide “función o global” mirando forma, no adivinando intención
+
+La decisión central de `parse_item` merece leerse despacio:
+
+```rust
+    fn parse_item(&mut self) -> Item {
+        let start = self.current_span().start;
+        let decl = self.parse_decl_specifiers();
+        let (name, name_span, ty) = self.parse_declarator(decl.ty);
+
+        if self.match_symbol(Symbol::LParen) {
+            let params = self.parse_params();
+            let span = Span::new(start, self.previous_span().end);
+            if self.match_symbol(Symbol::LBrace) {
+                let body = self.parse_block_after_open(span.start);
+                return Item::Function(FunctionDecl {
+                    name,
+                    return_type: ty,
+                    storage_class: decl.storage_class,
+                    is_interrupt: decl.is_interrupt,
+                    params,
+                    body: Some(body),
+                    span: Span::new(start, self.previous_span().end),
+                });
+            }
+            self.expect_symbol(Symbol::Semicolon);
+            Item::Function(FunctionDecl {
+                name,
+                return_type: ty,
+                storage_class: decl.storage_class,
+                is_interrupt: decl.is_interrupt,
+                params,
+                body: None,
+                span: Span::new(start, self.previous_span().end),
+            })
+        } else {
+            if decl.is_interrupt {
+                self.diagnostics.error(
+                    "parser",
+                    Some(Span::new(start, name_span.end)),
+                    "`__interrupt` is only valid on function declarations",
+                    Some("declare the interrupt handler as `void __interrupt isr(void)`".to_string()),
+                );
+            }
+```
+
+Aquí se ve muy bien qué significa parsear:
+
+- reunir especificadores
+- parsear declarador
+- mirar siguiente forma sintáctica
+- clasificar top-level item
+
+No está “entendiendo” todavía si una función es legal para ABI o ISR.
+
+Sólo está construyendo estructura.
+
+Ésa es la separación sana entre parser y semántica.
+
+## Semántica real: el compilador deja de ver texto y empieza a ver programa
+
+El núcleo del archivo `src/frontend/semantic.rs` está en sus tipos intermedios:
+
+```rust
+pub enum TypedExprKind {
+    IntLiteral(i64),
+    Symbol(SymbolId),
+    Unary {
+        op: UnaryOp,
+        expr: Box<TypedExpr>,
+    },
+    Binary {
+        op: BinaryOp,
+        lhs: Box<TypedExpr>,
+        rhs: Box<TypedExpr>,
+    },
+    ArrayDecay(Box<TypedExpr>),
+    AddressOf(Box<TypedExpr>),
+    Deref(Box<TypedExpr>),
+    Assign {
+        target: Box<TypedExpr>,
+        value: Box<TypedExpr>,
+    },
+    Call {
+        function: SymbolId,
+        args: Vec<TypedExpr>,
+    },
+    Cast {
+        kind: CastKind,
+        expr: Box<TypedExpr>,
+    },
+}
+```
+
+Esto es una lección muy potente para quien quiera construir compiladores.
+
+El AST fuente todavía dice:
+
+```text
+“el usuario escribió esto”
+```
+
+La semántica ya dice:
+
+```text
+“esto significa exactamente esto”
+```
+
+Por ejemplo:
+
+- `Call` ya no guarda nombre textual, guarda `SymbolId`
+- `Cast` ya no es implícito, queda explícito
+- `ArrayDecay` deja visible regla C que muchas veces pasa desapercibida
+- `AddressOf` y `Deref` ya son nodos distintos y tipados
+
+## Por qué sembrar SFR como símbolos al principio
+
+Uno de los fragmentos más iluminadores del archivo es éste:
+
+```rust
+    fn seed_device_registers(&mut self) {
+        for register in self.target.sfrs {
+            let symbol = self.insert_symbol(Symbol {
+                id: self.symbols.len(),
+                name: register.name.to_string(),
+                ty: Type::new(ScalarType::U8).with_qualifiers(Qualifiers {
+                    is_const: false,
+                    is_volatile: true,
+                }),
+                storage_class: StorageClass::Extern,
+                is_interrupt: false,
+                kind: SymbolKind::DeviceRegister,
+                span: Span::new(0, 0),
+                fixed_address: Some(register.address),
+                is_defined: true,
+                is_referenced: false,
+                parameter_types: Vec::new(),
+            });
+            self.globals_by_name.insert(register.name.to_string(), symbol);
+        }
+    }
+```
+
+Esto merece pausa.
+
+No modela `PORTB`, `TRISB` o `INTCON` como magia del backend.
+
+Los modela como símbolos semánticos reales:
+
+- tienen nombre
+- tienen tipo
+- son `volatile`
+- tienen dirección fija
+
+Resultado:
+
+- el frontend puede resolverlos como nombres normales
+- el backend puede tratarlos como almacenamiento absoluto
+- el diagnóstico puede hablar de ellos como entidades del programa
+
+Éste es un ejemplo excelente de cómo un target específico puede entrar pronto en la cadena sin romper modularidad.
+
+## Casts y truncaciones: semántica útil, no sólo aceptadora
+
+Otro fragmento importante es `coerce_expr`.
+
+Parte del corazón está aquí:
+
+```rust
+        if warn_on_truncate
+            && expr.ty.bit_width() > target_ty.bit_width()
+            && !is_representable_integer_constant(&expr, target_ty)
+        {
+            diagnostics.warning(
+                "semantic",
+                Some(expr.span),
+                format!("conversion from `{}` to `{}` truncates", expr.ty, target_ty),
+                "W1001",
+            );
+        }
+```
+
+Qué enseña esto:
+
+- semántica no es sólo decir sí o no
+- también puede explicar riesgo
+- puede distinguir entre literal representable y truncación real
+
+Ejemplo pequeño:
+
+```c
+unsigned char x = 300;
+```
+
+Aquí no basta con “compila” o “no compila”.
+
+Hay una política concreta de warning, y el compilador la implementa con lógica explícita.
+
+## ISR: regla semántica visible y verificable
+
+La validación del manejador de interrupción está escrita con claridad admirable:
+
+```rust
+    fn validate_interrupt_signature(
+        &mut self,
+        function: &FunctionDecl,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        if !function.is_interrupt {
+            return;
+        }
+
+        if !function.return_type.is_void() {
+            diagnostics.error(
+                "semantic",
+                Some(function.span),
+                format!(
+                    "interrupt handler `{}` must return `void` in phase 6",
+                    function.name
+                ),
+                Some("declare it as `void __interrupt isr(void)`".to_string()),
+            );
+        }
+
+        if !function.params.is_empty() {
+            diagnostics.error(
+                "semantic",
+                Some(function.span),
+                format!(
+                    "interrupt handler `{}` cannot take parameters in phase 6",
+                    function.name
+                ),
+                Some("remove the parameters and use `void`".to_string()),
+            );
+        }
+```
+
+Esto es muy didáctico porque vuelve política de lenguaje en código legible.
+
+No hace falta leer documentación externa para saber subset soportado.
+
+Está ahí, en forma ejecutable.
+
+Ejemplo correcto del repositorio:
+
+```c
+void __interrupt isr(void) {
+    if ((INTCON & 0x04) != 0) {
+        tick_count = tick_count + 1;
+        PORTB = PORTB ^ 0x01;
+        INTCON = INTCON & 0xFB;
+    }
+}
+```
+
+Ejemplo incorrecto:
+
+```c
+unsigned int __interrupt isr(unsigned char reason) {
+    return reason;
+}
+```
+
+Ese segundo ejemplo viola dos reglas a la vez:
+
+- devuelve valor
+- recibe parámetros
+
+## Recursión prohibida: no por capricho, por modelo de stack
+
+Una de las mejores secciones del archivo es rechazo de ciclos de llamada:
+
+```rust
+    fn reject_recursive_calls(&self, diagnostics: &mut DiagnosticBag) {
+        let mut state = BTreeMap::<SymbolId, VisitState>::new();
+        for function in &self.functions {
+            self.visit_call_graph(function.symbol, &mut state, &mut Vec::new(), diagnostics);
+        }
+    }
+```
+
+y dentro de DFS:
+
+```rust
+                if matches!(state.get(&callee).copied(), Some(VisitState::Active)) {
+                    let cycle = stack
+                        .iter()
+                        .map(|id| self.symbols[*id].name.as_str())
+                        .chain(std::iter::once(self.symbols[callee].name.as_str()))
+                        .collect::<Vec<_>>()
+                        .join(" -> ");
+                    diagnostics.error(
+                        "semantic",
+                        Some(self.symbols[callee].span),
+                        format!("recursive call cycle `{cycle}` is not supported in phase 4"),
+                        Some("phase 4 computes software-stack usage statically; keep the call graph acyclic".to_string()),
+                    );
+                    continue;
+                }
+```
+
+Esto es oro pedagógico.
+
+Muestra una idea muy madura:
+
+```text
+regla del lenguaje no nace de teoría abstracta;
+nace de decisión de implementación del ABI y del análisis de stack
+```
+
+Ejemplo prohibido:
+
+```c
+unsigned int fact(unsigned int n) {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * fact(n - 1);
+}
+```
+
+Si el compilador quiere calcular profundidad máxima de stack de forma estática y simple, esta forma de recursión rompe esa suposición.
+
+## Punteros a locales de stack: otra restricción con motivación real
+
+También merece atención esta comprobación:
+
+```rust
+                            if self.returns_stack_local_address(&expr) {
+                                diagnostics.error(
+                                    "semantic",
+                                    Some(expr.span),
+                                    "returning the address of a stack local is not supported",
+                                    Some(
+                                        "return a global/static object address or write through an output parameter"
+                                            .to_string(),
+                                    ),
+                                );
+                            }
+```
+
+Conceptualmente es lo correcto aunque el C “normal” también lo considera error lógico clásico.
+
+En este proyecto, además, está ligado a cómo se materializan frames en Phase 4.
+
+Ejemplo que debe rechazarse:
+
+```c
+unsigned char *bad(void) {
+    unsigned char local = 3;
+    return &local;
+}
+```
+
+## Qué estudiar primero dentro de `semantic.rs`
+
+Orden recomendado:
+
+1. tipos de datos públicos: `TypedProgram`, `Symbol`, `TypedStmt`, `TypedExpr`
+2. `analyze`
+3. `seed_device_registers`
+4. `define_function`
+5. `coerce_expr`
+6. `validate_interrupt_signature`
+7. `reject_recursive_calls`
+8. restricciones de punteros de stack
+
+Si se sigue ese orden, el archivo deja de parecer enorme y empieza a parecer muy coherente.
+
+---
+
+# 39. Apéndice J: IR y lowering reales, leídos desde código
+
+## La forma real de la IR
+
+El archivo `src/ir/model.rs` contiene definición más importante para entender mitad central del compilador:
+
+```rust
+pub enum IrInstr {
+    Copy {
+        dst: TempId,
+        src: Operand,
+    },
+    AddrOf {
+        dst: TempId,
+        symbol: SymbolId,
+    },
+    Cast {
+        dst: TempId,
+        kind: CastKind,
+        src: Operand,
+    },
+    Unary {
+        dst: TempId,
+        op: UnaryOp,
+        src: Operand,
+    },
+    Binary {
+        dst: TempId,
+        op: BinaryOp,
+        lhs: Operand,
+        rhs: Operand,
+    },
+    Store {
+        target: SymbolId,
+        value: Operand,
+    },
+    LoadIndirect {
+        dst: TempId,
+        ptr: Operand,
+    },
+    StoreIndirect {
+        ptr: Operand,
+        value: Operand,
+        ty: Type,
+    },
+    Call {
+        dst: Option<TempId>,
+        function: SymbolId,
+        args: Vec<Operand>,
+    },
+}
+```
+
+Y el control flow explícito:
+
+```rust
+pub enum IrTerminator {
+    Return(Option<Operand>),
+    Jump(BlockId),
+    Branch {
+        condition: IrCondition,
+        then_block: BlockId,
+        else_block: BlockId,
+    },
+    Unreachable,
+}
+```
+
+Esto ya deja claras varias cosas:
+
+- la IR ya no es árbol
+- la IR ya vive en bloques básicos
+- llamadas, indirectos y stores ya son operaciones explícitas
+- el control flow se representa con terminadores separados
+
+## Por qué esta IR es buena para enseñar
+
+Porque tiene suficiente estructura para:
+
+- optimizar
+- modelar llamadas
+- modelar saltos
+- modelar indirección
+
+pero no tanta complejidad como para ocultar intención.
+
+No hay SSA completa.
+
+No hay phi nodes.
+
+No hay alias analysis complicada.
+
+Eso la hace ideal para aprendizaje serio.
+
+## Lowering real de `if`
+
+La traducción de un `if` se ve con nitidez en `src/ir/lowering.rs`:
+
+```rust
+            TypedStmt::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let then_block = self.new_block("if.then");
+                let else_block = self.new_block("if.else");
+                let join_block = self.new_block("if.end");
+                let else_target = if else_branch.is_some() { else_block } else { join_block };
+                self.lower_condition(condition, then_block, else_target);
+
+                self.current = then_block;
+                self.lower_stmt(then_branch);
+                self.ensure_jump(join_block);
+
+                if let Some(else_branch) = else_branch {
+                    self.current = else_block;
+                    self.lower_stmt(else_branch);
+                    self.ensure_jump(join_block);
+                }
+
+                self.current = join_block;
+            }
+```
+
+Éste es uno de los fragmentos que más conviene estudiar si alguien viene de ASTs puros.
+
+Muestra transición mental esencial:
+
+```text
+estructura sintáctica → bloques + aristas + join explícito
+```
+
+## Lowering real de `while`
+
+También es muy claro el caso del bucle:
+
+```rust
+            TypedStmt::While {
+                condition, body, ..
+            } => {
+                let header = self.new_block("while.head");
+                let body_block = self.new_block("while.body");
+                let end = self.new_block("while.end");
+                self.ensure_jump(header);
+
+                self.current = header;
+                self.loop_stack.push((header, end));
+                self.lower_condition(condition, body_block, end);
+
+                self.current = body_block;
+                self.lower_stmt(body);
+                self.ensure_jump(header);
+                self.loop_stack.pop();
+
+                self.current = end;
+            }
+```
+
+Qué ve aquí un constructor de compiladores:
+
+1. bloque cabecera
+2. evaluación de condición
+3. salto a cuerpo o salida
+4. salto de vuelta
+5. pila de destinos para `break` y `continue`
+
+## Caso guiado con código real: `sum_bytes`
+
+El ejemplo de `examples/pic16f628a/stack_abi.c` es excelente porque mezcla bucle, punteros y acumulación:
+
+```c
+unsigned int sum_bytes(unsigned char *ptr, unsigned int len, unsigned int bias) {
+    unsigned int i = 0;
+    unsigned int acc = bias;
+
+    while (i < len) {
+        acc = acc + ptr[i];
+        i = i + 1;
+    }
+
+    return acc;
+}
+```
+
+Haz ejercicio mental completo:
+
+1. `i` y `acc` ya son símbolos locales tipados
+2. `ptr[i]` ya no se entiende como sintaxis bonita, sino como aritmética de direcciones + carga indirecta
+3. `while (i < len)` ya no es nodo “while”, sino cabecera + branch
+4. `return acc` ya es terminador `Return(Some(...))`
+
+Este ejemplo enseña más que muchos ejemplos artificiales porque es pequeño pero fuerza al compilador a usar:
+
+- parámetros
+- locals
+- array decay
+- indexado
+- loop control
+- retorno de 16 bits
+
+## Render textual de IR: herramienta didáctica subestimada
+
+`IrProgram::render()` existe para depuración, pero también para aprender:
+
+```rust
+        for function in &self.functions {
+            let _ = writeln!(
+                output,
+                "{}fn #{} entry=b{}",
+                if function.is_interrupt { "interrupt " } else { "" },
+                function.symbol,
+                function.entry
+            );
+            for block in &function.blocks {
+                let _ = writeln!(output, "  b{} ({}):", block.id, block.name);
+                for instruction in &block.instructions {
+                    let _ = writeln!(output, "    {}", render_instr(instruction));
+                }
+                let _ = writeln!(output, "    {}", render_terminator(&block.terminator));
+            }
+        }
+```
+
+Esto convierte representación interna en objeto legible.
+
+Para enseñanza, eso es enorme.
+
+Permite comparar:
+
+- fuente C
+- AST
+- IR textual
+- asm
+
+sin necesidad de depurador especial.
+
+## Optimización real: propagación y folding de constantes
+
+El pase `constant_fold` no es teórico. Está muy concreto:
+
+```rust
+                    IrInstr::Binary { dst, op, lhs, rhs } => {
+                        let original = (lhs, rhs);
+                        let lhs = resolve_operand(lhs, &constants);
+                        let rhs = resolve_operand(rhs, &constants);
+                        if (lhs, rhs) != original {
+                            stats.operands_propagated += usize::from(lhs != original.0)
+                                + usize::from(rhs != original.1);
+                        }
+                        *instr = IrInstr::Binary { dst, op, lhs, rhs };
+                        if let (Operand::Constant(lhs), Operand::Constant(rhs)) = (lhs, rhs) {
+                            let ty = function.temp_types[dst];
+                            let result = eval_binary(op, lhs, rhs, ty, ty);
+                            *instr = IrInstr::Copy {
+                                dst,
+                                src: Operand::Constant(result),
+                            };
+                            constants.insert(dst, result);
+                            stats.expressions_folded += 1;
+                        }
+                    }
+```
+
+Qué enseña esto:
+
+- primero se propagan operandos conocidos
+- luego se reescribe instrucción
+- luego, si ambos lados ya son constantes, se colapsa a `Copy`
+
+No hay magia.
+
+Hay reescritura explícita y contabilidad explícita.
+
+## Optimización real: simplificación de ramas
+
+Más abajo, mismo pase hace algo muy instructivo:
+
+```rust
+        for block in &mut function.blocks {
+            if let IrTerminator::Branch {
+                condition,
+                then_block,
+                else_block,
+            } = &block.terminator
+                && let Some(value) = eval_condition(condition)
+            {
+                block.terminator = IrTerminator::Jump(if value { *then_block } else { *else_block });
+                stats.branches_simplified += 1;
+            }
+        }
+```
+
+Esto es importante porque demuestra que optimización útil no empieza por register allocation heroica.
+
+Empieza por cosas como:
+
+- si la condición ya se conoce
+- no dejes rama condicional
+- conviértela en salto simple
+
+## Optimización real: borrado de bloques inalcanzables
+
+Y `dead_code_elimination` completa la lección:
+
+```rust
+            if !reachable.contains(&block.id) {
+                stats.unreachable_blocks_cleared += usize::from(!block.instructions.is_empty());
+                stats.instructions_removed += block.instructions.len();
+                block.instructions.clear();
+                block.terminator = IrTerminator::Unreachable;
+                continue;
+            }
+```
+
+Este fragmento enseña una idea central:
+
+```text
+una optimización no sólo cambia instrucciones;
+también puede cambiar topología efectiva del CFG
+```
+
+## Qué mirar cuando abras un `.ir`
+
+Método recomendado:
+
+1. busca nombre de función
+2. identifica bloque de entrada
+3. anota cuántos bloques hay
+4. sigue ramas y joins
+5. pregunta qué temporales existen sólo por necesidad de orden
+6. observa qué comparaciones ya desaparecieron en `-O2`
+
+Preguntas útiles:
+
+- ¿qué partes siguen siendo simbólicas?
+- ¿qué partes ya son completamente explícitas?
+- ¿dónde aparece primera vez un `call`?
+- ¿dónde deja de existir el concepto “while” como tal?
+
+---
+
+# 40. Apéndice K: backend real, stack real, helpers reales
+
+## La primera gran verdad del backend: antes de emitir asm, asigna memoria
+
+La función `compile_program` deja clara la secuencia:
+
+```rust
+pub fn compile_program(
+    target: &TargetDevice,
+    typed_program: &TypedProgram,
+    ir_program: &IrProgram,
+    diagnostics: &mut DiagnosticBag,
+) -> Option<BackendOutput> {
+    let layout = StorageAllocator::new(target.allocatable_gpr, target.shared_gpr)
+        .layout(typed_program, ir_program, diagnostics)?;
+
+    let mut codegen = CodegenContext::new(target, typed_program, &layout);
+    codegen.emit_program(ir_program, diagnostics);
+```
+
+Lección:
+
+```text
+backend bueno no “escupe instrucciones” sin antes decidir dónde vive cada cosa
+```
+
+## Layout real de helpers y frame base
+
+La reserva de estado ABI aparece muy explícita:
+
+```rust
+        let Some(stack_ptr_lo) = allocator.next_span(2) else {
+            diagnostics.error("backend", None, "not enough RAM for ABI helper slots", None);
+            return None;
+        };
+        let Some(frame_ptr_lo) = allocator.next_span(2) else {
+            diagnostics.error("backend", None, "not enough RAM for ABI helper slots", None);
+            return None;
+        };
+        let Some(return_high) = allocator.next_span(1) else {
+            diagnostics.error("backend", None, "not enough RAM for ABI helper slots", None);
+            return None;
+        };
+```
+
+Aquí el backend ya admite una verdad incómoda pero real:
+
+- ABI cuesta RAM
+- helpers cuestan RAM
+- return values anchos cuestan RAM
+
+Después construye estructura reusable:
+
+```rust
+        let helpers = HelperRegisters {
+            stack_ptr: RegisterPair {
+                lo: stack_ptr_lo,
+                hi: stack_ptr_lo + 1,
+            },
+            frame_ptr: RegisterPair {
+                lo: frame_ptr_lo,
+                hi: frame_ptr_lo + 1,
+            },
+            return_high,
+            scratch0,
+            scratch1,
+        };
+```
+
+## Layout real del frame por función
+
+Otra parte excelente para estudio:
+
+```rust
+            let mut arg_bytes = 0u16;
+            for param in &function.params {
+                symbol_storage.insert(*param, SymbolStorage::Frame(arg_bytes));
+                arg_bytes += self.symbol_width(typed_program, *param)?;
+            }
+
+            let saved_fp_offset = arg_bytes;
+            let mut local_cursor = arg_bytes + 2;
+            for local in &function.locals {
+                let symbol = &typed_program.symbols[*local];
+                if symbol.kind != SymbolKind::Local || symbol.storage_class == crate::frontend::types::StorageClass::Static {
+                    continue;
+                }
+                symbol_storage.insert(*local, SymbolStorage::Frame(local_cursor));
+                local_cursor += self.symbol_width(typed_program, *local)?;
+            }
+```
+
+Este fragmento vale más que muchas descripciones verbales.
+
+Dice exactamente:
+
+1. argumentos al principio del frame
+2. luego `saved FP`
+3. luego locals
+4. luego temps IR
+
+Y eso coincide con capítulos teóricos anteriores.
+
+Éste es buen momento para comprobar que libro y código realmente se corresponden.
+
+## El vector de interrupción real
+
+La lógica de arranque y vectorización está escrita de forma muy visible:
+
+```rust
+    fn emit_vectors(&mut self) {
+        let interrupt = self
+            .typed_program
+            .symbols
+            .iter()
+            .find(|symbol| symbol.kind == SymbolKind::Function && symbol.is_interrupt)
+            .map(|symbol| function_label(&symbol.name));
+        self.program.push(AsmLine::Org(self.target.vectors.reset));
+        self.program.push(AsmLine::Label("__reset_vector".to_string()));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Goto("__reset_dispatch".to_string())));
+        self.program.push(AsmLine::Org(self.target.vectors.interrupt));
+        self.program.push(AsmLine::Label("__interrupt_vector".to_string()));
+        if interrupt.is_some() {
+            self.program
+                .push(AsmLine::Instr(AsmInstr::Goto("__interrupt_dispatch".to_string())));
+        } else {
+            self.program.push(AsmLine::Instr(AsmInstr::Retfie));
+        }
+```
+
+Qué conviene entender:
+
+- aunque usuario no escriba vector, backend sí
+- si no hay ISR, deja `retfie` seguro
+- si hay ISR, emite salto a dispatcher
+
+Este diseño es muy limpio porque separa:
+
+- semántica de “existe ISR”
+- mecánica de “cómo se materializa vector en target”
+
+## Comentarios asm como documentación viva del ABI
+
+Una idea especialmente didáctica del backend es que emite comentarios útiles:
+
+```rust
+        self.program.push(AsmLine::Comment(format!(
+            "frame args={} saved_fp={} locals={} temps={} frame_bytes={}",
+            arg_bytes, saved_fp_offset, local_bytes, temp_bytes, frame_bytes
+        )));
+```
+
+y también:
+
+```rust
+        self.program.push(AsmLine::Comment(format!(
+            "stack base=0x{:04X} end=0x{:04X} capacity={} max_depth={}",
+            self.layout.stack_base,
+            self.layout.stack_end,
+            self.layout.stack_capacity,
+            self.layout.max_stack_depth
+        )));
+```
+
+Esto convierte asm emitido en documento semiautodescriptivo.
+
+Para aprendizaje, eso es magnífico.
+
+## Lowering real de llamada de función
+
+La rutina `emit_call` enseña muy bien cómo Phase 4 aterriza en máquina:
+
+```rust
+        let callee_symbol = &self.typed_program.symbols[callee];
+        for (index, arg) in args.iter().enumerate() {
+            let Some(param_ty) = callee_symbol.parameter_types.get(index).copied() else {
+                diagnostics.error(
+                    "backend",
+                    None,
+                    "call passes more arguments than callee signature",
+                    None,
+                );
+                continue;
+            };
+            self.push_operand(function.symbol, *arg, param_ty);
+        }
+
+        let label = function_label(self.symbol_name(callee));
+        self.program.push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
+        self.program.push(AsmLine::Instr(AsmInstr::Call(label)));
+
+        let arg_bytes = self.function_arg_bytes(callee);
+        if arg_bytes != 0 {
+            self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(arg_bytes));
+        }
+```
+
+Es decir:
+
+1. empuja argumentos ya tipados
+2. prepara página
+3. hace `call`
+4. ajusta `SP`
+
+Ésa es la ABI en código.
+
+No en documento aparte.
+
+## Helpers runtime reales: catálogo tipado
+
+El archivo `src/backend/pic16/midrange14/runtime.rs` no es mero listado; es especificación ejecutable:
+
+```rust
+            Self::MulU16 => RuntimeHelperInfo {
+                label: "__rt_mul_u16",
+                operand_ty: Type::new(ScalarType::U16),
+                arg_bytes: 4,
+                local_bytes: 4,
+                frame_bytes: 6,
+            },
+            Self::DivU16 => RuntimeHelperInfo {
+                label: "__rt_div_u16",
+                operand_ty: Type::new(ScalarType::U16),
+                arg_bytes: 4,
+                local_bytes: 4,
+                frame_bytes: 6,
+            },
+            Self::Shl16 => RuntimeHelperInfo {
+                label: "__rt_shl16",
+                operand_ty: Type::new(ScalarType::U16),
+                arg_bytes: 4,
+                local_bytes: 0,
+                frame_bytes: 2,
+            },
+```
+
+Qué se aprende aquí:
+
+- helper no es sólo nombre
+- helper tiene contrato de operandos
+- helper tiene huella de frame
+
+Eso permite que backend razone sobre coste y sobre profundidad máxima de stack.
+
+## Optimización backend concreta: evitar helpers cuando divisor es potencia de dos
+
+Uno de los detalles más instructivos del backend es que no acepta siempre llamada a helper como destino final.
+
+Mantiene optimizaciones concretas. La base matemática visible está aquí:
+
+```rust
+fn normalized_power_of_two_shift(value: Option<i64>, ty: Type) -> Option<usize> {
+    let value = normalize_value(value?, ty) as u64;
+    if value == 0 || !value.is_power_of_two() {
+        return None;
+    }
+    Some(value.trailing_zeros() as usize)
+}
+```
+
+Idea:
+
+- si `x / 8`
+- y `8` es potencia de dos
+- quizá no hace falta helper de división
+- quizá basta shift correcto
+
+Ésta es optimización pequeña, segura y muy rentable en microcontrolador pequeño.
+
+## Caso práctico real 1: `expression_test.c`
+
+Código fuente:
+
+```c
+unsigned int expression_test(unsigned int a, unsigned int b, unsigned int c) {
+    return (a * b) + (c / 3) - (a % 5);
+}
+```
+
+Qué conviene esperar:
+
+- multiplicación de 16 bits probablemente helper
+- división por `3` probablemente helper
+- módulo por `5` probablemente helper
+- suma/resta alrededor quizá inline
+
+Este ejemplo es magnífico para estudiar límites entre:
+
+- aritmética que PIC16 puede resolver localmente
+- aritmética que conviene delegar a runtime
+
+## Caso práctico real 2: `timer_interrupt.c`
+
+Código fuente:
+
+```c
+void __interrupt isr(void) {
+    if ((INTCON & 0x04) != 0) {
+        tick_count = tick_count + 1;
+        PORTB = PORTB ^ 0x01;
+        INTCON = INTCON & 0xFB;
+    }
+}
+```
+
+Qué debe pasar por debajo:
+
+1. vector de interrupción salta a dispatcher
+2. backend guarda contexto mínimo necesario
+3. ejecuta cuerpo inline-safe
+4. restaura contexto
+5. emite `retfie`
+
+Y, muy importante, el frontend ya se ocupó antes de impedir operaciones que forzarían helper o llamada normal.
+
+## Pregunta clave para estudiar backend
+
+Cuando abras `codegen.rs`, no preguntes primero “¿cómo se genera cada instrucción?”.
+
+Pregunta primero:
+
+```text
+¿qué invariantes ya garantiza frontend + IR para simplificar backend?
+```
+
+Esa pregunta cambia por completo calidad de lectura.
+
+---
+
+# 41. Apéndice L: laboratorio reproducible de estudio
+
+## Objetivo
+
+Este apéndice no explica teoría nueva.
+
+Explica cómo estudiar el compilador de forma experimental, repetible y útil.
+
+## Comando base recomendado
+
+Si quieres seguir caso por caso y obtener artefactos:
+
+```bash
+cargo run -- --target pic16f628a -I include -O2 --emit-ast --emit-ir --emit-asm --map --list-file -o /tmp/blink.hex examples/pic16f628a/blink.c
+```
+
+Variantes frecuentes:
+
+```bash
+cargo run -- --target pic16f628a -I include -O2 --emit-ir --emit-asm -o /tmp/stack.hex examples/pic16f628a/stack_abi.c
+```
+
+```bash
+cargo run -- --target pic16f877a -I include -O2 --emit-ir --emit-asm --opt-report -o /tmp/expr.hex examples/pic16f877a/expression_test.c
+```
+
+Artefactos a inspeccionar junto al `.hex`:
+
+- `.ast`
+- `.ir`
+- `.asm`
+- `.map`
+- `.lst`
+
+## Ruta 1: `blink.c`
+
+Archivo:
+
+```text
+examples/pic16f628a/blink.c
+```
+
+Qué estudiar aquí:
+
+- inicialización de SFR
+- stores directos
+- control flow mínimo
+- diferencia entre `TRISB` y `PORTB`
+
+Preguntas guía:
+
+1. ¿cuándo se reconoce `PORTB` como símbolo preexistente?
+2. ¿cuándo deja de ser nombre y pasa a ser dirección fija?
+3. ¿qué parte del pipeline decide si hay banking?
+
+## Ruta 2: `stack_abi.c`
+
+Archivo:
+
+```text
+examples/pic16f628a/stack_abi.c
+```
+
+Qué estudiar aquí:
+
+- varios argumentos
+- locals en frame
+- array local
+- llamada anidada
+- retorno de 16 bits
+
+Fragmento clave:
+
+```c
+value = sum4(1, 2, build_local(3, 1, 2), 4);
+```
+
+Este ejemplo es excelente porque obliga a pensar en:
+
+- orden de evaluación
+- push de argumentos
+- frame temporal de `build_local`
+- posterior llamada a `sum4`
+
+Si entiendes bien este archivo, entiendes de verdad por qué existe Phase 4.
+
+## Ruta 3: `pointer16.c`
+
+Archivo:
+
+```text
+examples/pic16f877a/pointer16.c
+```
+
+Fragmentos clave:
+
+```c
+void store_word(unsigned int *ptr, unsigned int value) {
+    ptr[1] = value;
+}
+```
+
+```c
+volatile unsigned char *port = &PORTB;
+```
+
+```c
+if (cursor == words) {
+    *port = 0x5A;
+}
+```
+
+Qué estudiar aquí:
+
+- decay de arrays
+- comparación de punteros soportada
+- indirección
+- escala por tamaño de elemento
+- paso de punteros como parámetros
+
+## Ruta 4: `expression_test.c`
+
+Archivo:
+
+```text
+examples/pic16f877a/expression_test.c
+```
+
+Qué estudiar aquí:
+
+- lowering de expresión compuesta
+- aparición de helpers
+- interacción entre optimización IR y backend
+- relación entre `--opt-report` y asm resultante
+
+Preguntas guía:
+
+1. ¿cuántos temporales IR aparecen antes de asm?
+2. ¿qué partes se quedan inline?
+3. ¿qué helper labels aparecen en `.asm`?
+
+## Ruta 5: `timer_interrupt.c`
+
+Archivos:
+
+```text
+examples/pic16f628a/timer_interrupt.c
+examples/pic16f877a/timer_interrupt.c
+examples/pic16f877a/gpio_interrupt.c
+```
+
+Qué estudiar aquí:
+
+- restricción de ISR
+- vector de interrupción
+- contexto compartido
+- `retfie`
+
+Pregunta guía crucial:
+
+```text
+¿qué parte del comportamiento ISR está garantizada por semántica
+y qué parte la materializa backend?
+```
+
+## El propio test suite enseña cómo estudiar el compilador
+
+`tests/compiler_pipeline.rs` no es sólo verificación automática.
+
+También es catálogo de casos pedagógicos.
+
+Mira cómo compila fixtures con artefactos:
+
+```rust
+fn compile_input(target: &str, input: PathBuf) -> PathBuf {
+    let output = temp_file("out.hex");
+    let options = CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: target.to_string(),
+            input,
+            output: output.clone(),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O2,
+            artifacts: OutputArtifacts {
+                emit_ast: true,
+                emit_ir: true,
+                emit_asm: true,
+                map: true,
+                list_file: true,
+                ..OutputArtifacts::default()
+            },
+            verbose: false,
+            opt_report: false,
+            warning_profile: WarningProfile {
+                wall: true,
+                wextra: true,
+                werror: false,
+            },
+        }),
+    };
+    execute(options).expect("compile example");
+    output
+}
+```
+
+Este helper de test, leído con calma, ya te dice cuál es la manera canónica de observar compilación completa.
+
+## Test específico que explica ABI mejor que muchas páginas
+
+Por ejemplo:
+
+```rust
+fn assert_phase4_stack_metadata(output: &Path) {
+    let asm = read_artifact(output, "asm");
+    let map = read_artifact(output, "map");
+    let listing = read_artifact(output, "lst");
+
+    assert!(asm.contains("frame args="));
+    assert!(asm.contains("stack base="));
+    assert!(map.contains("__abi.stack_ptr.lo"));
+    assert!(map.contains("__abi.frame_ptr.lo"));
+    assert!(map.contains("__stack.base"));
+    assert!(map.contains("__stack.end"));
+    assert!(listing.contains("frame args="));
+}
+```
+
+Esto es pedagógico por dos razones:
+
+1. muestra qué huellas concretas deja Phase 4
+2. enseña cómo verificar ABI sin leer todo el asm manualmente
+
+## Nombres de tests que conviene leer como índice temático
+
+Algunos especialmente útiles:
+
+- `compiles_phase4_stack_abi_example`
+- `compiles_phase4_nested_call_regression_fixture`
+- `compiles_phase5_helper_nested_expression_fixture`
+- `phase7_avoids_helper_for_unsigned_power_of_two_division`
+- `reports_interrupt_function_calls`
+- `reports_unsupported_recursion`
+- `reports_returning_stack_local_address`
+
+Sólo leyendo esos nombres ya puedes reconstruir mapa conceptual del proyecto.
+
+## Método de estudio de 90 minutos
+
+Sesión recomendada:
+
+1. compila `blink.c` con artefactos
+2. compila `stack_abi.c` con artefactos
+3. compila `expression_test.c` con `--opt-report`
+4. compila `timer_interrupt.c` con artefactos
+5. compara `.ir` y `.asm` entre los cuatro
+
+Resultado:
+
+- en poco tiempo recorres casi todo diseño del compilador
+- sin perderte en miles de líneas seguidas
+
+---
+
+# 42. Apéndice M: errores reales y prohibiciones conscientes
+
+## Por qué este apéndice importa
+
+Muchos lectores entienden un compilador sólo por lo que acepta.
+
+Eso es insuficiente.
+
+En un compilador serio también hay que entender:
+
+- qué rechaza
+- por qué lo rechaza
+- en qué fase lo rechaza
+
+## Caso 1: inicializadores de arrays no implementados en Phase 3
+
+Regla visible en semántica:
+
+```rust
+                    diagnostics.error(
+                        "semantic",
+                        Some(decl.span),
+                        "array initializers are not implemented in phase 3",
+                        Some("declare the array without an initializer and fill it in code".to_string()),
+                    );
+```
+
+Ejemplo rechazado:
+
+```c
+unsigned char table[3] = {1, 2, 3};
+```
+
+Por qué probablemente está prohibido:
+
+- obliga a modelar inicialización compuesta
+- afecta globals y locals
+- complica lowering y layout
+
+Lección:
+
+```text
+limitar subset temprano puede ser decisión correcta, no carencia vergonzosa
+```
+
+## Caso 2: recursión
+
+Nombre de test útil:
+
+```text
+reports_unsupported_recursion
+```
+
+Ejemplo:
+
+```c
+unsigned int f(unsigned int x) {
+    if (x == 0) {
+        return 0;
+    }
+    return f(x - 1);
+}
+```
+
+Por qué se rechaza aquí:
+
+- stack de software con profundidad estática
+- análisis de profundidad necesita grafo acíclico
+
+No es “porque PIC16 no pueda llamar funciones”.
+
+Es porque este diseño concreto quiere mantener cálculo estático de stack simple y seguro.
+
+## Caso 3: devolver dirección de local
+
+Nombre de test útil:
+
+```text
+reports_returning_stack_local_address
+```
+
+Ejemplo:
+
+```c
+unsigned int *bad(void) {
+    unsigned int local = 7;
+    return &local;
+}
+```
+
+Razón profunda:
+
+- el frame muere al salir
+- puntero quedaría colgando
+- en este compilador, además, la restricción se expresa explícitamente para mantener modelo sano
+
+## Caso 4: llamadas dentro de ISR
+
+Nombre de test útil:
+
+```text
+reports_interrupt_function_calls
+```
+
+Ejemplo:
+
+```c
+void blink_once(void) {
+    PORTB = PORTB ^ 0x01;
+}
+
+void __interrupt isr(void) {
+    blink_once();
+}
+```
+
+Por qué se rechaza:
+
+- ISR de Phase 6 es deliberadamente conservadora
+- no debe depender de ABI normal
+- no debe invocar helpers ni llamadas ordinarias
+
+Aquí se ve coordinación entre semántica y backend:
+
+- semántica prohíbe forma fuente
+- backend ya puede asumir cuerpo ISR inline-safe
+
+## Caso 5: narrowing problemático
+
+Nombres de tests útiles:
+
+```text
+rejects_out_of_range_constant_to_unsigned_char
+rejects_non_constant_int_to_unsigned_char_under_werror
+```
+
+Ejemplos:
+
+```c
+unsigned char a = 260;
+```
+
+```c
+unsigned int big = 300;
+unsigned char b = big;
+```
+
+Qué enseña este caso:
+
+- no todo narrowing es igual
+- literal representable no es mismo caso que valor no constante potencialmente truncado
+- warnings también forman parte del diseño del compilador
+
+## Caso 6: firma ISR inválida
+
+Nombres de tests útiles:
+
+```text
+reports_interrupt_return_type_mismatch
+reports_interrupt_parameter_mismatch
+reports_multiple_interrupt_handlers
+```
+
+Ejemplos:
+
+```c
+unsigned int __interrupt isr(void) {
+    return 0;
+}
+```
+
+```c
+void __interrupt timer_isr(unsigned char reason) {
+}
+```
+
+```c
+void __interrupt isr0(void) {
+}
+
+void __interrupt isr1(void) {
+}
+```
+
+Todo esto enseña misma lección:
+
+```text
+subset bien definido = reglas visibles + diagnósticos precisos + tests que fijan contrato
+```
+
+## Lo importante no es sólo rechazo, sino momento del rechazo
+
+Pregunta formativa excelente:
+
+```text
+¿esta restricción se detecta mejor en parser, semántica, IR o backend?
+```
+
+Ejemplos:
+
+- `__interrupt` sobre variable: parser o semántica temprana
+- firma ISR: semántica
+- helper no permitido en ISR: semántica
+- falta de RAM para stack: backend
+- write final fallido: I/O final
+
+Ésta es una de las mejores formas de aprender diseño por capas.
+
+---
+
+# 43. Apéndice N: autoevaluación seria para comprobar comprensión real
+
+## Cómo usar este apéndice
+
+No lo leas como trivialidades de memoria.
+
+Úsalo así:
+
+1. intenta responder sin mirar código
+2. luego verifica en archivo real
+3. si tu respuesta no apunta a archivo y motivo, aún no dominas concepto
+
+## Pregunta 1
+
+¿Por qué `PORTB` puede analizarse como símbolo normal y no como caso especial del parser?
+
+Pista:
+
+- mira `seed_device_registers`
+- piensa en `fixed_address` + `volatile`
+
+## Pregunta 2
+
+¿En qué momento exacto `while` deja de existir como construcción de alto nivel?
+
+Pista:
+
+- no ocurre en lexer
+- no ocurre en parser
+- observa `lower_stmt`
+
+## Pregunta 3
+
+¿Por qué Phase 4 necesita rechazar recursión aunque PIC16 sí tenga pila hardware para retornos?
+
+Pista:
+
+- distingue pila hardware de return addresses
+- distingue stack de software para locals y args
+
+## Pregunta 4
+
+¿Qué gana el proyecto al emitir `.ir` textual además de `.asm`?
+
+Pista:
+
+- piensa en depuración de decisiones antes de backend
+- piensa en optimización
+
+## Pregunta 5
+
+¿Por qué `ArrayDecay` merece nodo semántico explícito?
+
+Pista:
+
+- en C parece implícito
+- en compilador pequeño, hacerlo explícito simplifica mucha lógica posterior
+
+## Pregunta 6
+
+¿Qué diferencia conceptual hay entre `SymbolStorage::Absolute` y `SymbolStorage::Frame`?
+
+Pista:
+
+- uno describe dirección fija global o SFR
+- otro describe offset relativo a frame activo
+
+## Pregunta 7
+
+¿Por qué un helper runtime tiene `arg_bytes`, `local_bytes` y `frame_bytes` como metadata?
+
+Pista:
+
+- no basta nombre de rutina
+- backend necesita coste estructural
+
+## Pregunta 8
+
+¿Qué dos capas cooperan para que una ISR termine con `retfie` correcto?
+
+Pista:
+
+- semántica restringe cuerpo
+- backend emite prólogo, epílogo y vector
+
+## Pregunta 9
+
+¿Qué tipo de optimización es más fácil justificar primero en proyecto como éste: folding de constantes o register allocation global?
+
+Pista:
+
+- piensa en coste de implementación
+- piensa en riesgo de romper corrección
+
+## Pregunta 10
+
+Si ves en `.asm` comentario `frame args=8 saved_fp=8 locals=4 temps=6 frame_bytes=12`, ¿qué te está diciendo realmente?
+
+Pista:
+
+- no lo leas como decoración
+- léelo como radiografía del ABI de esa función
+
+## Pregunta 11
+
+¿Por qué `tests/compiler_pipeline.rs` es casi un manual del proyecto?
+
+Pista:
+
+- nombres de tests
+- helpers de compilación
+- asserts sobre artefactos
+
+## Pregunta 12
+
+Si tuvieras que ampliar este compilador con una feature nueva, ¿qué tres sitios mirarías primero?
+
+Pista de respuesta razonable:
+
+1. AST o parser, si cambia sintaxis
+2. semántica, si cambia significado o restricciones
+3. IR/backend, si cambia cómo se ejecuta
+
+## Señal de comprensión real
+
+Has entendido bien el proyecto cuando puedes hacer esto sin improvisar:
+
+```text
+tomar una línea C concreta,
+nombrar qué estructura produce cada fase,
+decir qué archivo la transforma,
+y justificar por qué esa fase es la correcta para hacerlo.
+```
+
+---
+
+# 44. Epílogo pedagógico
 
 Si has llegado hasta aquí, ya puedes mirar este repositorio de otra forma.
 

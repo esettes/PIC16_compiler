@@ -24,6 +24,9 @@ pub enum Keyword {
     If,
     Int,
     Interrupt,
+    Typedef,
+    Enum,
+    Struct,
     Return,
     Static,
     Unsigned,
@@ -45,6 +48,7 @@ pub enum Symbol {
     RBrace,
     Comma,
     Semicolon,
+    Dot,
     Assign,
     Plus,
     Minus,
@@ -66,6 +70,7 @@ pub enum Symbol {
     GreaterGreater,
     AndAnd,
     OrOr,
+    Arrow,
 }
 
 #[derive(Clone, Debug)]
@@ -184,6 +189,7 @@ impl<'a> Lexer<'a> {
                     '}' => TokenKind::Symbol(Symbol::RBrace),
                     ',' => TokenKind::Symbol(Symbol::Comma),
                     ';' => TokenKind::Symbol(Symbol::Semicolon),
+                    '.' => TokenKind::Symbol(Symbol::Dot),
                     '=' => TokenKind::Symbol(Symbol::Assign),
                     '+' => TokenKind::Symbol(Symbol::Plus),
                     '-' => TokenKind::Symbol(Symbol::Minus),
@@ -228,6 +234,7 @@ impl<'a> Lexer<'a> {
             (">>", Symbol::GreaterGreater),
             ("&&", Symbol::AndAnd),
             ("||", Symbol::OrOr),
+            ("->", Symbol::Arrow),
         ];
         for (text, symbol) in table {
             if rest.starts_with(text) {
@@ -288,6 +295,9 @@ fn keyword_or_ident(text: &str) -> TokenKind {
         "if" => Some(Keyword::If),
         "int" => Some(Keyword::Int),
         "__interrupt" => Some(Keyword::Interrupt),
+        "typedef" => Some(Keyword::Typedef),
+        "enum" => Some(Keyword::Enum),
+        "struct" => Some(Keyword::Struct),
         "return" => Some(Keyword::Return),
         "sizeof" => Some(Keyword::Sizeof),
         "static" => Some(Keyword::Static),

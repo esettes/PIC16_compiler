@@ -2,16 +2,26 @@ use crate::common::source::{PreprocessedSource, Span};
 use crate::diagnostics::DiagnosticBag;
 
 use super::ast::{
-    BinaryOp, Expr, ExprKind, FunctionDecl, Item, Stmt, TranslationUnit, UnaryOp, VarDecl,
+    BinaryOp, EnumConstant, Expr, ExprKind, FunctionDecl, Initializer, Item, Stmt, StructDef,
+    StructField, TranslationUnit, UnaryOp, VarDecl,
 };
 use super::lexer::{Keyword, Symbol, Token, TokenKind};
-use super::types::{Qualifiers, ScalarType, StorageClass, Type};
+use super::types::{Qualifiers, ScalarType, StorageClass, StructId, Type};
+
+use std::collections::{BTreeMap, BTreeSet};
 
 pub struct Parser<'a> {
     tokens: Vec<Token>,
     diagnostics: &'a mut DiagnosticBag,
     index: usize,
     _source: &'a PreprocessedSource,
+    typedefs: BTreeMap<String, Type>,
+    struct_tags: BTreeMap<String, StructId>,
+    struct_defs: Vec<StructDef>,
+    enum_tags: BTreeSet<String>,
+    enum_constants: Vec<EnumConstant>,
+    enum_constant_by_name: BTreeMap<String, i64>,
+    global_value_names: BTreeSet<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -19,6 +29,8 @@ struct DeclSpecifiers {
     storage_class: StorageClass,
     ty: Type,
     is_interrupt: bool,
+    is_typedef: bool,
+    allows_omitted_declarator: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -33,6 +45,13 @@ impl<'a> Parser<'a> {
             diagnostics,
             index: 0,
             _source: source,
+            typedefs: BTreeMap::new(),
+            struct_tags: BTreeMap::new(),
+            struct_defs: Vec::new(),
+            enum_tags: BTreeSet::new(),
+            enum_constants: Vec::new(),
+            enum_constant_by_name: BTreeMap::new(),
+            global_value_names: BTreeSet::new(),
         }
     }
 
@@ -40,23 +59,72 @@ impl<'a> Parser<'a> {
     pub fn parse_translation_unit(&mut self) -> TranslationUnit {
         let mut items = Vec::new();
         while !self.is_eof() {
-            items.push(self.parse_item());
+            if let Some(item) = self.parse_item() {
+                items.push(item);
+            }
         }
-        TranslationUnit { items }
+        TranslationUnit {
+            items,
+            struct_defs: self.struct_defs.clone(),
+            enum_constants: self.enum_constants.clone(),
+        }
     }
 
     /// Parses one top-level declaration or function definition.
-    fn parse_item(&mut self) -> Item {
+    fn parse_item(&mut self) -> Option<Item> {
         let start = self.current_span().start;
         let decl = self.parse_decl_specifiers();
+
+        if self.match_symbol(Symbol::Semicolon) {
+            if decl.is_typedef {
+                self.diagnostics.error(
+                    "parser",
+                    Some(Span::new(start, self.previous_span().end)),
+                    "typedef declaration requires an alias name",
+                    None,
+                );
+                return None;
+            }
+            if !decl.allows_omitted_declarator {
+                self.diagnostics.error(
+                    "parser",
+                    Some(Span::new(start, self.previous_span().end)),
+                    "declaration requires a declarator",
+                    None,
+                );
+            }
+            return None;
+        }
+
         let (name, name_span, ty) = self.parse_declarator(decl.ty);
+
+        if decl.is_typedef {
+            if self.match_symbol(Symbol::LParen) {
+                self.diagnostics.error(
+                    "parser",
+                    Some(Span::new(start, self.previous_span().end)),
+                    "typedef of function types is not supported in phase 8",
+                    Some("typedef scalar, pointer, array, or struct object types only".to_string()),
+                );
+                while !self.check_symbol(Symbol::Semicolon) && !self.is_eof() {
+                    self.advance();
+                }
+                self.expect_symbol(Symbol::Semicolon);
+                return None;
+            }
+            self.expect_symbol(Symbol::Semicolon);
+            self.register_typedef(name, ty, Span::new(start, self.previous_span().end));
+            return None;
+        }
+
+        self.register_global_value_name(&name, Span::new(start, name_span.end));
 
         if self.match_symbol(Symbol::LParen) {
             let params = self.parse_params();
             let span = Span::new(start, self.previous_span().end);
             if self.match_symbol(Symbol::LBrace) {
                 let body = self.parse_block_after_open(span.start);
-                return Item::Function(FunctionDecl {
+                return Some(Item::Function(FunctionDecl {
                     name,
                     return_type: ty,
                     storage_class: decl.storage_class,
@@ -64,10 +132,10 @@ impl<'a> Parser<'a> {
                     params,
                     body: Some(body),
                     span: Span::new(start, self.previous_span().end),
-                });
+                }));
             }
             self.expect_symbol(Symbol::Semicolon);
-            Item::Function(FunctionDecl {
+            Some(Item::Function(FunctionDecl {
                 name,
                 return_type: ty,
                 storage_class: decl.storage_class,
@@ -75,7 +143,7 @@ impl<'a> Parser<'a> {
                 params,
                 body: None,
                 span: Span::new(start, self.previous_span().end),
-            })
+            }))
         } else {
             if decl.is_interrupt {
                 self.diagnostics.error(
@@ -86,18 +154,18 @@ impl<'a> Parser<'a> {
                 );
             }
             let initializer = if self.match_symbol(Symbol::Assign) {
-                Some(self.parse_expression())
+                Some(self.parse_initializer())
             } else {
                 None
             };
             self.expect_symbol(Symbol::Semicolon);
-            Item::Global(VarDecl {
+            Some(Item::Global(VarDecl {
                 name,
                 ty,
                 storage_class: decl.storage_class,
                 initializer,
                 span: Span::new(start, self.previous_span().end.max(name_span.end)),
-            })
+            }))
         }
     }
 
@@ -121,6 +189,14 @@ impl<'a> Parser<'a> {
                     "parser",
                     Some(Span::new(start, self.previous_span().end)),
                     "`__interrupt` is not valid on parameters",
+                    None,
+                );
+            }
+            if decl.is_typedef {
+                self.diagnostics.error(
+                    "parser",
+                    Some(Span::new(start, self.previous_span().end)),
+                    "`typedef` is not valid in parameter declarations",
                     None,
                 );
             }
@@ -281,6 +357,14 @@ impl<'a> Parser<'a> {
     fn parse_local_decl(&mut self) -> VarDecl {
         let start = self.current_span().start;
         let decl = self.parse_decl_specifiers();
+        if decl.is_typedef {
+            self.diagnostics.error(
+                "parser",
+                Some(Span::new(start, self.previous_span().end)),
+                "block-scope typedef declarations are not supported in phase 8",
+                Some("declare typedef names at file scope".to_string()),
+            );
+        }
         let (name, _, ty) = self.parse_declarator(decl.ty);
         if decl.is_interrupt {
             self.diagnostics.error(
@@ -291,7 +375,7 @@ impl<'a> Parser<'a> {
             );
         }
         let initializer = if self.match_symbol(Symbol::Assign) {
-            Some(self.parse_expression())
+            Some(self.parse_initializer())
         } else {
             None
         };
@@ -308,6 +392,50 @@ impl<'a> Parser<'a> {
     /// Parses the highest-level expression grammar entrypoint.
     fn parse_expression(&mut self) -> Expr {
         self.parse_assignment()
+    }
+
+    /// Parses one initializer, supporting scalar expressions and aggregate initializer lists.
+    fn parse_initializer(&mut self) -> Initializer {
+        if self.match_symbol(Symbol::LBrace) {
+            return self.parse_initializer_list(self.previous_span().start);
+        }
+        Initializer::Expr(self.parse_expression())
+    }
+
+    /// Parses one brace-enclosed initializer list for arrays and structs.
+    fn parse_initializer_list(&mut self, start: usize) -> Initializer {
+        let mut items = Vec::new();
+        if self.match_symbol(Symbol::RBrace) {
+            return Initializer::List(items, Span::new(start, self.previous_span().end));
+        }
+
+        loop {
+            if self.match_symbol(Symbol::Dot) {
+                self.diagnostics.error(
+                    "parser",
+                    Some(self.previous_span()),
+                    "designated initializers are not supported in phase 8",
+                    Some("use positional initializer order for now".to_string()),
+                );
+                let _ = self.expect_identifier();
+                self.expect_symbol(Symbol::Assign);
+                let _ = self.parse_initializer();
+            } else {
+                items.push(self.parse_initializer());
+            }
+
+            if self.match_symbol(Symbol::Comma) {
+                if self.check_symbol(Symbol::RBrace) {
+                    self.advance();
+                    break;
+                }
+                continue;
+            }
+            self.expect_symbol(Symbol::RBrace);
+            break;
+        }
+
+        Initializer::List(items, Span::new(start, self.previous_span().end))
     }
 
     /// Parses right-associative assignment expressions.
@@ -465,6 +593,19 @@ impl<'a> Parser<'a> {
                 span: Span::new(start, self.previous_span().end),
             };
         }
+        if self.looks_like_cast() {
+            self.expect_symbol(Symbol::LParen);
+            let ty = self.parse_type_name();
+            self.expect_symbol(Symbol::RParen);
+            let expr = self.parse_unary();
+            return Expr {
+                kind: ExprKind::Cast {
+                    ty,
+                    expr: Box::new(expr),
+                },
+                span: Span::new(start, self.previous_span().end),
+            };
+        }
         if self.match_symbol(Symbol::Minus) {
             let expr = self.parse_unary();
             return Expr {
@@ -564,6 +705,32 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
+            if self.match_symbol(Symbol::Dot) {
+                let start = expr.span.start;
+                let (field, _) = self.expect_identifier();
+                expr = Expr {
+                    kind: ExprKind::Member {
+                        base: Box::new(expr),
+                        field,
+                    },
+                    span: Span::new(start, self.previous_span().end),
+                };
+                continue;
+            }
+
+            if self.match_symbol(Symbol::Arrow) {
+                let start = expr.span.start;
+                let (field, _) = self.expect_identifier();
+                expr = Expr {
+                    kind: ExprKind::PointerMember {
+                        base: Box::new(expr),
+                        field,
+                    },
+                    span: Span::new(start, self.previous_span().end),
+                };
+                continue;
+            }
+
             break;
         }
         expr
@@ -611,16 +778,24 @@ impl<'a> Parser<'a> {
         let mut qualifiers = Qualifiers::default();
         let mut saw_unsigned = false;
         let mut is_interrupt = false;
+        let mut is_typedef = false;
         let mut scalar = None::<ScalarType>;
+        let mut explicit_type = None::<Type>;
+        let mut allows_omitted_declarator = false;
 
         loop {
-            match &self.current().kind {
+            let current_kind = self.current().kind.clone();
+            match current_kind {
                 TokenKind::Keyword(Keyword::Static) => {
                     storage = StorageClass::Static;
                     self.advance();
                 }
                 TokenKind::Keyword(Keyword::Extern) => {
                     storage = StorageClass::Extern;
+                    self.advance();
+                }
+                TokenKind::Keyword(Keyword::Typedef) => {
+                    is_typedef = true;
                     self.advance();
                 }
                 TokenKind::Keyword(Keyword::Const) => {
@@ -638,6 +813,32 @@ impl<'a> Parser<'a> {
                 TokenKind::Keyword(Keyword::Interrupt) => {
                     is_interrupt = true;
                     self.advance();
+                }
+                TokenKind::Keyword(Keyword::Struct) => {
+                    if scalar.is_some() || explicit_type.is_some() {
+                        self.diagnostics.error(
+                            "parser",
+                            Some(self.current_span()),
+                            "duplicate type specifier",
+                            None,
+                        );
+                    }
+                    let (ty, omittable) = self.parse_struct_specifier();
+                    explicit_type = Some(ty);
+                    allows_omitted_declarator = omittable;
+                }
+                TokenKind::Keyword(Keyword::Enum) => {
+                    if scalar.is_some() || explicit_type.is_some() {
+                        self.diagnostics.error(
+                            "parser",
+                            Some(self.current_span()),
+                            "duplicate type specifier",
+                            None,
+                        );
+                    }
+                    let (ty, omittable) = self.parse_enum_specifier();
+                    explicit_type = Some(ty);
+                    allows_omitted_declarator = omittable;
                 }
                 TokenKind::Keyword(Keyword::Void) => {
                     if scalar.is_some() {
@@ -675,24 +876,384 @@ impl<'a> Parser<'a> {
                     scalar = Some(if saw_unsigned { ScalarType::U16 } else { ScalarType::I16 });
                     self.advance();
                 }
+                TokenKind::Identifier(name) if self.typedefs.contains_key(&name) => {
+                    if scalar.is_some() || explicit_type.is_some() {
+                        break;
+                    }
+                    explicit_type = self.typedefs.get(&name).copied();
+                    self.advance();
+                }
                 _ => break,
             }
         }
 
-        let scalar = scalar.unwrap_or_else(|| {
-            self.diagnostics.error(
-                "parser",
-                Some(self.current_span()),
-                "expected type specifier",
-                Some("supported types: void, char, unsigned char, int, unsigned int".to_string()),
-            );
-            ScalarType::I16
-        });
+        let mut ty = if let Some(ty) = explicit_type {
+            if saw_unsigned {
+                self.diagnostics.error(
+                    "parser",
+                    Some(self.current_span()),
+                    "`unsigned` cannot be combined with this type specifier",
+                    None,
+                );
+            }
+            ty
+        } else {
+            let scalar = scalar.unwrap_or_else(|| {
+                self.diagnostics.error(
+                    "parser",
+                    Some(self.current_span()),
+                    "expected type specifier",
+                    Some(
+                        "supported types: void, char, unsigned char, int, unsigned int, typedef names, enum, struct"
+                            .to_string(),
+                    ),
+                );
+                ScalarType::I16
+            });
+            Type::new(scalar)
+        };
+        ty = ty.with_qualifiers(qualifiers);
+
         DeclSpecifiers {
             storage_class: storage,
-            ty: Type::new(scalar).with_qualifiers(qualifiers),
+            ty,
             is_interrupt,
+            is_typedef,
+            allows_omitted_declarator,
         }
+    }
+
+    /// Parses one `struct` specifier and records field layout metadata.
+    fn parse_struct_specifier(&mut self) -> (Type, bool) {
+        let start = self.current_span().start;
+        self.expect_keyword(Keyword::Struct);
+
+        let tag = if let TokenKind::Identifier(name) = self.current().kind.clone() {
+            self.advance();
+            Some(name)
+        } else {
+            None
+        };
+
+        if !self.match_symbol(Symbol::LBrace) {
+            if let Some(tag) = tag {
+                if let Some(struct_id) = self.struct_tags.get(&tag).copied() {
+                    let size = self.struct_defs[struct_id].size;
+                    return (Type::struct_type(struct_id, size), false);
+                }
+                self.diagnostics.error(
+                    "parser",
+                    Some(Span::new(start, self.previous_span().end)),
+                    format!("unknown struct tag `{tag}`"),
+                    Some("define the struct before using it".to_string()),
+                );
+                return (Type::new(ScalarType::I16), false);
+            }
+            self.diagnostics.error(
+                "parser",
+                Some(Span::new(start, self.previous_span().end)),
+                "anonymous struct type requires a field list",
+                None,
+            );
+            return (Type::new(ScalarType::I16), false);
+        }
+
+        let mut fields = Vec::new();
+        let mut seen_field_names = BTreeSet::new();
+        let mut offset = 0usize;
+
+        while !self.check_symbol(Symbol::RBrace) && !self.is_eof() {
+            let field_start = self.current_span().start;
+            let decl = self.parse_decl_specifiers();
+            if decl.is_interrupt || decl.is_typedef || decl.storage_class != StorageClass::Auto {
+                self.diagnostics.error(
+                    "parser",
+                    Some(Span::new(field_start, self.previous_span().end)),
+                    "struct fields do not support storage classes, typedef, or interrupt qualifiers",
+                    None,
+                );
+            }
+            if decl.allows_omitted_declarator && self.check_symbol(Symbol::Semicolon) {
+                self.diagnostics.error(
+                    "parser",
+                    Some(Span::new(field_start, self.current_span().end)),
+                    "nested struct declarations are not supported in phase 8",
+                    Some("use pointer fields or flatten the struct".to_string()),
+                );
+                self.advance();
+                continue;
+            }
+
+            let (name, _, ty) = self.parse_declarator(decl.ty);
+            self.expect_symbol(Symbol::Semicolon);
+
+            if !seen_field_names.insert(name.clone()) {
+                self.diagnostics.error(
+                    "parser",
+                    Some(Span::new(field_start, self.previous_span().end)),
+                    format!("duplicate struct field `{name}`"),
+                    None,
+                );
+                continue;
+            }
+
+            if ty.is_array() {
+                self.diagnostics.error(
+                    "parser",
+                    Some(Span::new(field_start, self.previous_span().end)),
+                    "arrays inside structs are not supported in phase 8",
+                    Some("store a pointer instead, or flatten the layout".to_string()),
+                );
+                continue;
+            }
+            if ty.is_struct() {
+                self.diagnostics.error(
+                    "parser",
+                    Some(Span::new(field_start, self.previous_span().end)),
+                    "nested struct fields are not supported in phase 8",
+                    Some("use pointer fields or flatten the struct".to_string()),
+                );
+                continue;
+            }
+
+            fields.push(StructField {
+                name,
+                ty,
+                offset,
+                span: Span::new(field_start, self.previous_span().end),
+            });
+            offset += ty.byte_width();
+        }
+        self.expect_symbol(Symbol::RBrace);
+
+        let end = self.previous_span().end;
+        if let Some(tag) = tag.clone()
+            && let Some(existing) = self.struct_tags.get(&tag).copied()
+        {
+            self.diagnostics.error(
+                "parser",
+                Some(Span::new(start, end)),
+                format!("redefinition of struct `{tag}`"),
+                None,
+            );
+            let size = self.struct_defs[existing].size;
+            return (Type::struct_type(existing, size), true);
+        }
+
+        let id = self.struct_defs.len();
+        let struct_name = tag
+            .clone()
+            .unwrap_or_else(|| format!("__anon_struct_{id}"));
+        self.struct_defs.push(StructDef {
+            id,
+            name: struct_name.clone(),
+            fields,
+            size: offset,
+            span: Span::new(start, end),
+        });
+        if let Some(tag) = tag {
+            self.struct_tags.insert(tag, id);
+        }
+
+        (Type::struct_type(id, offset), true)
+    }
+
+    /// Parses one `enum` specifier and captures global enumerator constants.
+    fn parse_enum_specifier(&mut self) -> (Type, bool) {
+        let start = self.current_span().start;
+        self.expect_keyword(Keyword::Enum);
+
+        let tag = if let TokenKind::Identifier(name) = self.current().kind.clone() {
+            self.advance();
+            Some(name)
+        } else {
+            None
+        };
+
+        let mut defined_here = false;
+        if self.match_symbol(Symbol::LBrace) {
+            defined_here = true;
+            let mut next_value = 0i64;
+            while !self.check_symbol(Symbol::RBrace) && !self.is_eof() {
+                let (name, span) = self.expect_identifier();
+                let value = if self.match_symbol(Symbol::Assign) {
+                    let expr = self.parse_expression();
+                    if let Some(value) = self.eval_enum_const_expr(&expr) {
+                        value
+                    } else {
+                        self.diagnostics.error(
+                            "parser",
+                            Some(expr.span),
+                            "enum explicit value must be an integer constant expression",
+                            None,
+                        );
+                        next_value
+                    }
+                } else {
+                    next_value
+                };
+
+                if self.enum_constant_by_name.contains_key(&name) {
+                    self.diagnostics.error(
+                        "parser",
+                        Some(span),
+                        format!("duplicate enumerator `{name}`"),
+                        None,
+                    );
+                } else {
+                    if !(i64::from(i16::MIN)..=i64::from(i16::MAX)).contains(&value) {
+                        self.diagnostics.error(
+                            "parser",
+                            Some(span),
+                            format!("enumerator `{name}` value {value} is out of range for 16-bit enum representation"),
+                            None,
+                        );
+                    }
+                    self.enum_constant_by_name.insert(name.clone(), value);
+                    self.enum_constants.push(EnumConstant { name, value, span });
+                }
+                next_value = value.saturating_add(1);
+
+                if self.match_symbol(Symbol::Comma) {
+                    if self.check_symbol(Symbol::RBrace) {
+                        self.advance();
+                        break;
+                    }
+                    continue;
+                }
+                self.expect_symbol(Symbol::RBrace);
+                break;
+            }
+
+            if self.check_symbol(Symbol::RBrace) {
+                self.advance();
+            }
+
+            if let Some(tag) = tag.clone() {
+                if !self.enum_tags.insert(tag.clone()) {
+                    self.diagnostics.error(
+                        "parser",
+                        Some(Span::new(start, self.previous_span().end)),
+                        format!("redefinition of enum `{tag}`"),
+                        None,
+                    );
+                }
+            }
+        } else if let Some(tag) = tag {
+            if !self.enum_tags.contains(&tag) {
+                self.diagnostics.error(
+                    "parser",
+                    Some(Span::new(start, self.previous_span().end)),
+                    format!("unknown enum tag `{tag}`"),
+                    Some("define the enum before using it".to_string()),
+                );
+            }
+        } else {
+            self.diagnostics.error(
+                "parser",
+                Some(Span::new(start, self.previous_span().end)),
+                "anonymous enum type requires an enumerator list",
+                None,
+            );
+        }
+
+        (Type::new(ScalarType::I16), defined_here)
+    }
+
+    /// Evaluates an enum constant expression with integer-only operators.
+    fn eval_enum_const_expr(&self, expr: &Expr) -> Option<i64> {
+        match &expr.kind {
+            ExprKind::IntLiteral(value) => Some(*value),
+            ExprKind::Name(name) => self.enum_constant_by_name.get(name).copied(),
+            ExprKind::Cast { expr, .. } => self.eval_enum_const_expr(expr),
+            ExprKind::Unary { op, expr } => {
+                let value = self.eval_enum_const_expr(expr)?;
+                Some(match op {
+                    UnaryOp::Negate => value.wrapping_neg(),
+                    UnaryOp::LogicalNot => i64::from(value == 0),
+                    UnaryOp::BitwiseNot => !value,
+                })
+            }
+            ExprKind::Binary { op, lhs, rhs } => {
+                let lhs = self.eval_enum_const_expr(lhs)?;
+                let rhs = self.eval_enum_const_expr(rhs)?;
+                Some(match op {
+                    BinaryOp::Add => lhs.wrapping_add(rhs),
+                    BinaryOp::Sub => lhs.wrapping_sub(rhs),
+                    BinaryOp::Multiply => lhs.wrapping_mul(rhs),
+                    BinaryOp::Divide => {
+                        if rhs == 0 {
+                            return None;
+                        }
+                        lhs.wrapping_div(rhs)
+                    }
+                    BinaryOp::Modulo => {
+                        if rhs == 0 {
+                            return None;
+                        }
+                        lhs.wrapping_rem(rhs)
+                    }
+                    BinaryOp::ShiftLeft => lhs.wrapping_shl(rhs as u32),
+                    BinaryOp::ShiftRight => lhs.wrapping_shr(rhs as u32),
+                    BinaryOp::BitAnd => lhs & rhs,
+                    BinaryOp::BitOr => lhs | rhs,
+                    BinaryOp::BitXor => lhs ^ rhs,
+                    BinaryOp::LogicalAnd => i64::from(lhs != 0 && rhs != 0),
+                    BinaryOp::LogicalOr => i64::from(lhs != 0 || rhs != 0),
+                    BinaryOp::Equal => i64::from(lhs == rhs),
+                    BinaryOp::NotEqual => i64::from(lhs != rhs),
+                    BinaryOp::Less => i64::from(lhs < rhs),
+                    BinaryOp::LessEqual => i64::from(lhs <= rhs),
+                    BinaryOp::Greater => i64::from(lhs > rhs),
+                    BinaryOp::GreaterEqual => i64::from(lhs >= rhs),
+                })
+            }
+            ExprKind::AddressOf(_)
+            | ExprKind::Deref(_)
+            | ExprKind::Index { .. }
+            | ExprKind::Assign { .. }
+            | ExprKind::Call { .. }
+            | ExprKind::Member { .. }
+            | ExprKind::PointerMember { .. }
+            | ExprKind::SizeOfExpr(_)
+            | ExprKind::SizeOfType(_) => None,
+        }
+    }
+
+    /// Records a typedef alias and emits duplicate/conflict diagnostics.
+    fn register_typedef(&mut self, name: String, ty: Type, span: Span) {
+        if self.typedefs.contains_key(&name) {
+            self.diagnostics.error(
+                "parser",
+                Some(span),
+                format!("duplicate typedef `{name}`"),
+                None,
+            );
+            return;
+        }
+        if self.global_value_names.contains(&name) {
+            self.diagnostics.error(
+                "parser",
+                Some(span),
+                format!("typedef `{name}` conflicts with object/function name"),
+                Some("use a distinct typedef identifier in this phase".to_string()),
+            );
+            return;
+        }
+        self.typedefs.insert(name, ty);
+    }
+
+    /// Tracks one global object/function identifier to detect typedef conflicts.
+    fn register_global_value_name(&mut self, name: &str, span: Span) {
+        if self.typedefs.contains_key(name) {
+            self.diagnostics.error(
+                "parser",
+                Some(span),
+                format!("declaration `{name}` conflicts with typedef name"),
+                Some("use a distinct object/function name in this phase".to_string()),
+            );
+        }
+        self.global_value_names.insert(name.to_string());
     }
 
     /// Parses a named declarator with Phase 3 pointer and one-dimensional array suffixes.
@@ -702,7 +1263,7 @@ impl<'a> Parser<'a> {
             self.diagnostics.error(
                 "parser",
                 Some(span),
-                "function pointer declarators are not supported in phase 3",
+                "function pointer declarators are not supported in phase 8",
                 Some("use direct function calls only for now".to_string()),
             );
             while !self.check_symbol(Symbol::RParen) && !self.is_eof() {
@@ -729,7 +1290,90 @@ impl<'a> Parser<'a> {
                 None,
             );
         }
+        if decl.is_typedef {
+            self.diagnostics.error(
+                "parser",
+                Some(self.previous_span()),
+                "`typedef` storage class is not valid in type names",
+                None,
+            );
+        }
+        if decl.storage_class != StorageClass::Auto {
+            self.diagnostics.error(
+                "parser",
+                Some(self.previous_span()),
+                "storage-class specifiers are not valid in type names",
+                None,
+            );
+        }
         self.parse_abstract_declarator(decl.ty)
+    }
+
+    /// Returns true when the next tokens match a cast-style `(type-name)` prefix.
+    fn looks_like_cast(&self) -> bool {
+        if !self.check_symbol(Symbol::LParen) {
+            return false;
+        }
+        let mut cursor = self.index + 1;
+        let mut saw_type = false;
+
+        loop {
+            let Some(token) = self.tokens.get(cursor) else {
+                return false;
+            };
+            match &token.kind {
+                TokenKind::Keyword(Keyword::Const)
+                | TokenKind::Keyword(Keyword::Volatile)
+                | TokenKind::Keyword(Keyword::Unsigned) => {
+                    cursor += 1;
+                }
+                TokenKind::Keyword(Keyword::Void)
+                | TokenKind::Keyword(Keyword::Char)
+                | TokenKind::Keyword(Keyword::Int) => {
+                    saw_type = true;
+                    cursor += 1;
+                }
+                TokenKind::Keyword(Keyword::Struct) | TokenKind::Keyword(Keyword::Enum) => {
+                    saw_type = true;
+                    cursor += 1;
+                    if self
+                        .tokens
+                        .get(cursor)
+                        .is_some_and(|next| matches!(next.kind, TokenKind::Identifier(_)))
+                    {
+                        cursor += 1;
+                    }
+                    if self
+                        .tokens
+                        .get(cursor)
+                        .is_some_and(|next| matches!(next.kind, TokenKind::Symbol(Symbol::LBrace)))
+                    {
+                        return false;
+                    }
+                }
+                TokenKind::Identifier(name) if self.typedefs.contains_key(name) => {
+                    saw_type = true;
+                    cursor += 1;
+                }
+                _ => break,
+            }
+        }
+
+        if !saw_type {
+            return false;
+        }
+
+        while self
+            .tokens
+            .get(cursor)
+            .is_some_and(|token| matches!(token.kind, TokenKind::Symbol(Symbol::Star)))
+        {
+            cursor += 1;
+        }
+
+        self.tokens
+            .get(cursor)
+            .is_some_and(|token| matches!(token.kind, TokenKind::Symbol(Symbol::RParen)))
     }
 
     /// Parses the pointer and array suffix pieces of an abstract declarator.
@@ -750,7 +1394,7 @@ impl<'a> Parser<'a> {
                 self.diagnostics.error(
                     "parser",
                     Some(self.previous_span()),
-                    "multidimensional arrays are not supported in phase 3",
+                    "multidimensional arrays are not supported in phase 8",
                     Some("use one-dimensional arrays only for now".to_string()),
                 );
                 let _ = self.parse_array_len();
@@ -801,14 +1445,17 @@ impl<'a> Parser<'a> {
             self.current().kind,
             TokenKind::Keyword(Keyword::Static)
                 | TokenKind::Keyword(Keyword::Extern)
+                | TokenKind::Keyword(Keyword::Typedef)
                 | TokenKind::Keyword(Keyword::Const)
                 | TokenKind::Keyword(Keyword::Volatile)
                 | TokenKind::Keyword(Keyword::Unsigned)
                 | TokenKind::Keyword(Keyword::Void)
                 | TokenKind::Keyword(Keyword::Char)
                 | TokenKind::Keyword(Keyword::Int)
+                | TokenKind::Keyword(Keyword::Enum)
+                | TokenKind::Keyword(Keyword::Struct)
                 | TokenKind::Keyword(Keyword::Interrupt)
-        )
+        ) || matches!(&self.current().kind, TokenKind::Identifier(name) if self.typedefs.contains_key(name))
     }
 
     /// Consumes an identifier token or reports a parser error and synthesizes one.

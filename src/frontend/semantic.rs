@@ -6,9 +6,10 @@ use crate::common::source::Span;
 use crate::diagnostics::DiagnosticBag;
 
 use super::ast::{
-    BinaryOp, Expr, ExprKind, FunctionDecl, Item, Stmt, TranslationUnit, UnaryOp, VarDecl,
+    BinaryOp, Expr, ExprKind, FunctionDecl, Initializer, Item, Stmt, StructDef, TranslationUnit,
+    UnaryOp, VarDecl,
 };
-use super::types::{CastKind, Qualifiers, ScalarType, StorageClass, Type};
+use super::types::{CastKind, Qualifiers, ScalarType, StorageClass, StructId, Type};
 
 pub type SymbolId = usize;
 
@@ -32,6 +33,7 @@ pub struct Symbol {
     pub is_defined: bool,
     pub is_referenced: bool,
     pub parameter_types: Vec<Type>,
+    pub enum_const_value: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,12 +43,19 @@ pub enum SymbolKind {
     Local,
     Param,
     DeviceRegister,
+    EnumConstant,
+}
+
+#[derive(Clone, Debug)]
+pub enum TypedGlobalInitializer {
+    Scalar(TypedExpr),
+    Bytes(Vec<u8>),
 }
 
 #[derive(Clone, Debug)]
 pub struct TypedGlobal {
     pub symbol: SymbolId,
-    pub initializer: Option<TypedExpr>,
+    pub initializer: Option<TypedGlobalInitializer>,
 }
 
 #[derive(Clone, Debug)]
@@ -137,11 +146,25 @@ pub enum TypedExprKind {
     },
 }
 
+#[derive(Clone, Debug)]
+struct AggregateAssignment {
+    offset: usize,
+    ty: Type,
+    value: TypedExpr,
+}
+
+#[derive(Clone, Debug)]
+enum AnalyzedInitializer {
+    Scalar(TypedExpr),
+    Aggregate(Vec<AggregateAssignment>),
+}
+
 pub struct SemanticAnalyzer<'a> {
     target: &'a TargetDevice,
     symbols: Vec<Symbol>,
     globals: Vec<TypedGlobal>,
     functions: Vec<TypedFunction>,
+    struct_defs: Vec<StructDef>,
     globals_by_name: BTreeMap<String, SymbolId>,
     scopes: Vec<BTreeMap<String, SymbolId>>,
     current_function: Option<SymbolId>,
@@ -162,6 +185,7 @@ impl<'a> SemanticAnalyzer<'a> {
             symbols: Vec::new(),
             globals: Vec::new(),
             functions: Vec::new(),
+            struct_defs: Vec::new(),
             globals_by_name: BTreeMap::new(),
             scopes: Vec::new(),
             current_function: None,
@@ -177,6 +201,11 @@ impl<'a> SemanticAnalyzer<'a> {
         unit: TranslationUnit,
         diagnostics: &mut DiagnosticBag,
     ) -> Option<TypedProgram> {
+        self.struct_defs = unit.struct_defs;
+        for constant in unit.enum_constants {
+            self.declare_enum_constant(constant.name, constant.value, constant.span, diagnostics);
+        }
+
         for item in &unit.items {
             self.declare_item(item, diagnostics);
         }
@@ -224,9 +253,45 @@ impl<'a> SemanticAnalyzer<'a> {
                 is_defined: true,
                 is_referenced: false,
                 parameter_types: Vec::new(),
+                enum_const_value: None,
             });
             self.globals_by_name.insert(register.name.to_string(), symbol);
         }
+    }
+
+    /// Seeds enum constants as immutable global compile-time symbols.
+    fn declare_enum_constant(
+        &mut self,
+        name: String,
+        value: i64,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        if self.globals_by_name.contains_key(&name) {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("redefinition of symbol `{name}`"),
+                Some("enum constants must use unique global names".to_string()),
+            );
+            return;
+        }
+
+        let symbol = self.insert_symbol(Symbol {
+            id: self.symbols.len(),
+            name: name.clone(),
+            ty: Type::new(ScalarType::I16),
+            storage_class: StorageClass::Extern,
+            is_interrupt: false,
+            kind: SymbolKind::EnumConstant,
+            span,
+            fixed_address: None,
+            is_defined: true,
+            is_referenced: false,
+            parameter_types: Vec::new(),
+            enum_const_value: Some(value),
+        });
+        self.globals_by_name.insert(name, symbol);
     }
 
     /// Registers one top-level declaration before bodies and initializers are analyzed.
@@ -256,14 +321,6 @@ impl<'a> SemanticAnalyzer<'a> {
         }
 
         self.validate_object_type(global.ty, global.span, &global.name, "global", diagnostics);
-        if global.ty.is_array() && global.initializer.is_some() {
-            diagnostics.error(
-                "semantic",
-                Some(global.span),
-                "array initializers are not implemented in phase 3",
-                Some("declare the array without an initializer and fill it in code".to_string()),
-            );
-        }
 
         let symbol = self.insert_symbol(Symbol {
             id: self.symbols.len(),
@@ -277,6 +334,7 @@ impl<'a> SemanticAnalyzer<'a> {
             is_defined: global.initializer.is_none(),
             is_referenced: false,
             parameter_types: Vec::new(),
+                enum_const_value: None,
         });
         self.globals_by_name.insert(global.name.clone(), symbol);
     }
@@ -334,6 +392,7 @@ impl<'a> SemanticAnalyzer<'a> {
             is_defined: function.body.is_none(),
             is_referenced: function.is_interrupt,
             parameter_types,
+            enum_const_value: None,
         });
         self.globals_by_name.insert(function.name.clone(), symbol);
     }
@@ -348,31 +407,9 @@ impl<'a> SemanticAnalyzer<'a> {
         }
 
         self.symbols[symbol].is_defined = true;
-        let initializer = if self.symbols[symbol].ty.is_array() {
-            None
-        } else {
-            global.initializer.as_ref().and_then(|expr| {
-                let expr = self.analyze_expr(expr, diagnostics)?;
-                let coerced = self.coerce_expr(
-                    expr,
-                    global.ty,
-                    diagnostics,
-                    "global initializer",
-                    false,
-                );
-                Some(coerced)
-            })
-        };
-        if let Some(initializer) = initializer.as_ref()
-            && !is_constant_expression(initializer)
-        {
-            diagnostics.error(
-                "semantic",
-                Some(initializer.span),
-                "global initializer must be a constant expression in phase 3",
-                Some("use literals, casts, and integer operators only".to_string()),
-            );
-        }
+        let initializer = global.initializer.as_ref().and_then(|init| {
+            self.analyze_global_initializer(global.ty, init, global.span, diagnostics)
+        });
 
         self.globals.push(TypedGlobal {
             symbol,
@@ -414,6 +451,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 is_defined: true,
                 is_referenced: false,
                 parameter_types: Vec::new(),
+                enum_const_value: None,
             });
             self.scopes
                 .last_mut()
@@ -462,14 +500,6 @@ impl<'a> SemanticAnalyzer<'a> {
             }
             Stmt::VarDecl(decl) => {
                 self.validate_object_type(decl.ty, decl.span, &decl.name, "local", diagnostics);
-                if decl.ty.is_array() && decl.initializer.is_some() {
-                    diagnostics.error(
-                        "semantic",
-                        Some(decl.span),
-                        "array initializers are not implemented in phase 3",
-                        Some("declare the array without an initializer and fill it in code".to_string()),
-                    );
-                }
                 let symbol = self.insert_scoped_symbol(
                     decl.name.clone(),
                     decl.ty,
@@ -477,15 +507,53 @@ impl<'a> SemanticAnalyzer<'a> {
                     SymbolKind::Local,
                     decl.span,
                 );
-                let initializer = if decl.ty.is_array() {
-                    None
-                } else {
-                    decl.initializer.as_ref().and_then(|expr| {
-                        let expr = self.analyze_expr(expr, diagnostics)?;
-                        Some(self.coerce_expr(expr, decl.ty, diagnostics, "local initializer", true))
-                    })
+                let Some(initializer) = decl.initializer.as_ref() else {
+                    return TypedStmt::VarDecl(symbol, None, decl.span);
                 };
-                TypedStmt::VarDecl(symbol, initializer, decl.span)
+
+                if self.current_function_is_interrupt()
+                    && (decl.ty.is_array() || decl.ty.is_struct())
+                {
+                    diagnostics.error(
+                        "semantic",
+                        Some(decl.span),
+                        "aggregate initializers are not allowed inside interrupt handlers in phase 8",
+                        Some("initialize aggregates outside ISR code and pass scalar values into the handler".to_string()),
+                    );
+                    return TypedStmt::VarDecl(symbol, None, decl.span);
+                }
+
+                match self.analyze_initializer_value(
+                    decl.ty,
+                    initializer,
+                    "local initializer",
+                    diagnostics,
+                ) {
+                    Some(AnalyzedInitializer::Scalar(expr)) => {
+                        TypedStmt::VarDecl(symbol, Some(expr), decl.span)
+                    }
+                    Some(AnalyzedInitializer::Aggregate(assignments)) => {
+                        let mut statements = Vec::with_capacity(assignments.len() + 1);
+                        statements.push(TypedStmt::VarDecl(symbol, None, decl.span));
+                        for assignment in assignments {
+                            let target =
+                                self.build_symbol_offset_lvalue(symbol, decl.ty, assignment.offset, assignment.ty, decl.span);
+                            let value = assignment.value;
+                            let expr = TypedExpr {
+                                kind: TypedExprKind::Assign {
+                                    target: Box::new(target),
+                                    value: Box::new(value),
+                                },
+                                ty: assignment.ty,
+                                span: decl.span,
+                                value_category: ValueCategory::RValue,
+                            };
+                            statements.push(TypedStmt::Expr(expr, decl.span));
+                        }
+                        TypedStmt::Block(statements, decl.span)
+                    }
+                    None => TypedStmt::VarDecl(symbol, None, decl.span),
+                }
             }
             Stmt::Expr(expr, span) => TypedStmt::Expr(
                 self.analyze_expr(expr, diagnostics)
@@ -646,6 +714,9 @@ impl<'a> SemanticAnalyzer<'a> {
                 value_category: ValueCategory::RValue,
             },
             ExprKind::Name(name) => self.analyze_name(name, expr.span, diagnostics)?,
+            ExprKind::Cast { ty, expr: value } => {
+                self.analyze_explicit_cast_expr(*ty, value, expr.span, diagnostics)?
+            }
             ExprKind::Unary { op, expr: value } => {
                 self.analyze_unary_expr(*op, value, expr.span, diagnostics)?
             }
@@ -662,6 +733,12 @@ impl<'a> SemanticAnalyzer<'a> {
             }
             ExprKind::Call { callee, args } => {
                 self.analyze_call_expr(callee, args, expr.span, diagnostics)?
+            }
+            ExprKind::Member { base, field } => {
+                self.analyze_member_expr(base, field, false, expr.span, diagnostics)?
+            }
+            ExprKind::PointerMember { base, field } => {
+                self.analyze_member_expr(base, field, true, expr.span, diagnostics)?
             }
             ExprKind::SizeOfExpr(value) => self.analyze_sizeof_expr(value, expr.span, diagnostics)?,
             ExprKind::SizeOfType(ty) => self.analyze_sizeof_type(*ty, expr.span, diagnostics)?,
@@ -702,6 +779,17 @@ impl<'a> SemanticAnalyzer<'a> {
             );
             return None;
         }
+
+        if self.symbols[symbol].kind == SymbolKind::EnumConstant {
+            self.symbols[symbol].is_referenced = true;
+            return Some(TypedExpr {
+                kind: TypedExprKind::IntLiteral(self.symbols[symbol].enum_const_value.unwrap_or(0)),
+                ty: self.symbols[symbol].ty,
+                span,
+                value_category: ValueCategory::RValue,
+            });
+        }
+
         self.symbols[symbol].is_referenced = true;
         Some(TypedExpr {
             kind: TypedExprKind::Symbol(symbol),
@@ -841,6 +929,247 @@ impl<'a> SemanticAnalyzer<'a> {
             span,
             value_category: ValueCategory::LValue,
         })
+    }
+
+    /// Analyzes an explicit C-style cast with Phase 8 scalar and pointer restrictions.
+    fn analyze_explicit_cast_expr(
+        &mut self,
+        target_ty: Type,
+        expr: &Expr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        if target_ty.is_array() || target_ty.is_struct() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("explicit cast target `{}` is not supported", target_ty),
+                Some("cast to scalar values or supported data pointers only".to_string()),
+            );
+            return None;
+        }
+
+        let value = self.analyze_expr(expr, diagnostics)?;
+        if value.ty == target_ty {
+            return Some(value);
+        }
+
+        if value.ty.is_integer() && target_ty.is_integer() {
+            return Some(self.coerce_expr(
+                value,
+                target_ty,
+                diagnostics,
+                "explicit cast",
+                false,
+            ));
+        }
+
+        if value.ty.is_pointer() && target_ty.is_pointer() {
+            if value.ty.pointer_depth > 1 || target_ty.pointer_depth > 1 {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    "pointer-to-pointer casts are not supported in phase 8",
+                    Some("use one-level data pointers only".to_string()),
+                );
+                return None;
+            }
+
+            return Some(TypedExpr {
+                kind: TypedExprKind::Cast {
+                    kind: CastKind::Bitcast,
+                    expr: Box::new(value),
+                },
+                ty: target_ty,
+                span,
+                value_category: ValueCategory::RValue,
+            });
+        }
+
+        if value.ty.is_integer() && target_ty.is_pointer() {
+            if !self.is_integer_zero_constant_expr(&value) {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    "only integer zero may be cast to a pointer in phase 8",
+                    Some("use `(T*)0` for null pointer constants".to_string()),
+                );
+                return None;
+            }
+            return Some(TypedExpr {
+                kind: TypedExprKind::IntLiteral(0),
+                ty: target_ty,
+                span,
+                value_category: ValueCategory::RValue,
+            });
+        }
+
+        if value.ty.is_pointer() && target_ty.is_integer() {
+            if target_ty.bit_width() != 16 {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    "pointer-to-integer casts are only supported for 16-bit integer targets",
+                    Some("cast pointers to `int` or `unsigned int` in phase 8".to_string()),
+                );
+                return None;
+            }
+            return Some(TypedExpr {
+                kind: TypedExprKind::Cast {
+                    kind: CastKind::Bitcast,
+                    expr: Box::new(value),
+                },
+                ty: target_ty,
+                span,
+                value_category: ValueCategory::RValue,
+            });
+        }
+
+        diagnostics.error(
+            "semantic",
+            Some(span),
+            format!("unsupported explicit cast from `{}` to `{}`", value.ty, target_ty),
+            None,
+        );
+        None
+    }
+
+    /// Analyzes `.` and `->` access by lowering to byte-address arithmetic plus dereference.
+    fn analyze_member_expr(
+        &mut self,
+        base: &Expr,
+        field: &str,
+        through_pointer: bool,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        let base = if through_pointer {
+            self.analyze_expr(base, diagnostics)?
+        } else {
+            self.analyze_expr_with_decay(base, diagnostics, false)?
+        };
+
+        let struct_ty = if through_pointer {
+            if !base.ty.is_pointer() {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    "`->` requires a pointer-to-struct operand",
+                    None,
+                );
+                return None;
+            }
+            base.ty.element_type()
+        } else {
+            if !base.ty.is_struct() || base.value_category != ValueCategory::LValue {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    "`.` requires a struct lvalue operand",
+                    None,
+                );
+                return None;
+            }
+            base.ty
+        };
+
+        let Some(struct_id) = struct_ty.struct_id else {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "member access requires a struct type",
+                None,
+            );
+            return None;
+        };
+
+        let Some(field_def) = self.struct_field(struct_id, field) else {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("unknown struct field `{field}`"),
+                None,
+            );
+            return None;
+        };
+
+        Some(self.build_member_lvalue(base, through_pointer, field_def.offset, field_def.ty, span))
+    }
+
+    /// Builds an lvalue expression that references one scalar field at `base + offset`.
+    fn build_member_lvalue(
+        &self,
+        base: TypedExpr,
+        through_pointer: bool,
+        offset: usize,
+        field_ty: Type,
+        span: Span,
+    ) -> TypedExpr {
+        let byte_ptr_ty = Type::new(ScalarType::U8).pointer_to();
+        let mut base_ptr = if through_pointer {
+            base
+        } else {
+            TypedExpr {
+                kind: TypedExprKind::AddressOf(Box::new(base.clone())),
+                ty: base.ty.pointer_to(),
+                span,
+                value_category: ValueCategory::RValue,
+            }
+        };
+
+        if base_ptr.ty != byte_ptr_ty {
+            base_ptr = TypedExpr {
+                kind: TypedExprKind::Cast {
+                    kind: CastKind::Bitcast,
+                    expr: Box::new(base_ptr),
+                },
+                ty: byte_ptr_ty,
+                span,
+                value_category: ValueCategory::RValue,
+            };
+        }
+
+        let raw_ptr = if offset == 0 {
+            base_ptr
+        } else {
+            TypedExpr {
+                kind: TypedExprKind::Binary {
+                    op: BinaryOp::Add,
+                    lhs: Box::new(base_ptr),
+                    rhs: Box::new(TypedExpr {
+                        kind: TypedExprKind::IntLiteral(offset as i64),
+                        ty: Type::new(ScalarType::U16),
+                        span,
+                        value_category: ValueCategory::RValue,
+                    }),
+                },
+                ty: byte_ptr_ty,
+                span,
+                value_category: ValueCategory::RValue,
+            }
+        };
+
+        let field_ptr_ty = field_ty.pointer_to();
+        let field_ptr = if raw_ptr.ty == field_ptr_ty {
+            raw_ptr
+        } else {
+            TypedExpr {
+                kind: TypedExprKind::Cast {
+                    kind: CastKind::Bitcast,
+                    expr: Box::new(raw_ptr),
+                },
+                ty: field_ptr_ty,
+                span,
+                value_category: ValueCategory::RValue,
+            }
+        };
+
+        TypedExpr {
+            kind: TypedExprKind::Deref(Box::new(field_ptr)),
+            ty: field_ty,
+            span,
+            value_category: ValueCategory::LValue,
+        }
     }
 
     /// Analyzes one binary expression, including pointer arithmetic and comparisons.
@@ -1104,6 +1433,15 @@ impl<'a> SemanticAnalyzer<'a> {
         }
         let value = self.analyze_expr(value, diagnostics)?;
         let target_ty = target.ty;
+        if target_ty.is_struct() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "struct assignment is not supported in phase 8",
+                Some("assign struct fields individually".to_string()),
+            );
+            return None;
+        }
         let value = self.coerce_expr(value, target_ty, diagnostics, "assignment", true);
         Some(TypedExpr {
             kind: TypedExprKind::Assign {
@@ -1178,6 +1516,279 @@ impl<'a> SemanticAnalyzer<'a> {
             span,
             value_category: ValueCategory::RValue,
         })
+    }
+
+    /// Analyzes one object initializer and flattens aggregates into byte-offset assignments.
+    fn analyze_initializer_value(
+        &mut self,
+        target_ty: Type,
+        initializer: &Initializer,
+        context: &str,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<AnalyzedInitializer> {
+        if target_ty.is_array() {
+            let Initializer::List(items, _) = initializer else {
+                diagnostics.error(
+                    "semantic",
+                    Some(match initializer {
+                        Initializer::Expr(expr) => expr.span,
+                        Initializer::List(_, span) => *span,
+                    }),
+                    format!("{context} for array type requires a brace initializer list"),
+                    None,
+                );
+                return None;
+            };
+
+            let Some(len) = target_ty.array_len else {
+                return None;
+            };
+            let element_ty = target_ty.element_type();
+            if element_ty.is_array() || element_ty.is_struct() {
+                diagnostics.error(
+                    "semantic",
+                    Some(match initializer {
+                        Initializer::Expr(expr) => expr.span,
+                        Initializer::List(_, span) => *span,
+                    }),
+                    "nested aggregate initializers are not supported in phase 8",
+                    Some("initialize nested aggregates manually".to_string()),
+                );
+                return None;
+            }
+
+            if items.len() > len {
+                diagnostics.error(
+                    "semantic",
+                    Some(match initializer {
+                        Initializer::Expr(expr) => expr.span,
+                        Initializer::List(_, span) => *span,
+                    }),
+                    "too many initializer elements for array",
+                    None,
+                );
+            }
+
+            let mut assignments = Vec::with_capacity(len);
+            for index in 0..len {
+                let value = if let Some(item) = items.get(index) {
+                    self.analyze_scalar_initializer_expr(item, element_ty, context, diagnostics)?
+                } else {
+                    TypedExpr {
+                        kind: TypedExprKind::IntLiteral(0),
+                        ty: element_ty,
+                        span: match initializer {
+                            Initializer::Expr(expr) => expr.span,
+                            Initializer::List(_, span) => *span,
+                        },
+                        value_category: ValueCategory::RValue,
+                    }
+                };
+                assignments.push(AggregateAssignment {
+                    offset: index * element_ty.byte_width(),
+                    ty: element_ty,
+                    value,
+                });
+            }
+            return Some(AnalyzedInitializer::Aggregate(assignments));
+        }
+
+        if target_ty.is_struct() {
+            let Initializer::List(items, span) = initializer else {
+                diagnostics.error(
+                    "semantic",
+                    Some(match initializer {
+                        Initializer::Expr(expr) => expr.span,
+                        Initializer::List(_, span) => *span,
+                    }),
+                    format!("{context} for struct type requires a positional brace initializer list"),
+                    None,
+                );
+                return None;
+            };
+
+            let Some(struct_id) = target_ty.struct_id else {
+                return None;
+            };
+            let Some(def) = self.struct_defs.get(struct_id) else {
+                diagnostics.error(
+                    "semantic",
+                    Some(*span),
+                    "unknown struct layout during initializer analysis",
+                    None,
+                );
+                return None;
+            };
+            let fields = def.fields.clone();
+
+            if items.len() > fields.len() {
+                diagnostics.error(
+                    "semantic",
+                    Some(*span),
+                    "too many initializer elements for struct",
+                    None,
+                );
+            }
+
+            let mut assignments = Vec::with_capacity(fields.len());
+            for (index, field) in fields.iter().enumerate() {
+                if field.ty.is_array() || field.ty.is_struct() {
+                    diagnostics.error(
+                        "semantic",
+                        Some(field.span),
+                        "nested aggregate fields are not supported in phase 8 initializers",
+                        None,
+                    );
+                    return None;
+                }
+
+                let value = if let Some(item) = items.get(index) {
+                    self.analyze_scalar_initializer_expr(item, field.ty, context, diagnostics)?
+                } else {
+                    TypedExpr {
+                        kind: TypedExprKind::IntLiteral(0),
+                        ty: field.ty,
+                        span: *span,
+                        value_category: ValueCategory::RValue,
+                    }
+                };
+                assignments.push(AggregateAssignment {
+                    offset: field.offset,
+                    ty: field.ty,
+                    value,
+                });
+            }
+
+            return Some(AnalyzedInitializer::Aggregate(assignments));
+        }
+
+        let value = self.analyze_scalar_initializer_expr(initializer, target_ty, context, diagnostics)?;
+        Some(AnalyzedInitializer::Scalar(value))
+    }
+
+    /// Analyzes one scalar initializer element and applies implicit coercion rules.
+    fn analyze_scalar_initializer_expr(
+        &mut self,
+        initializer: &Initializer,
+        target_ty: Type,
+        context: &str,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        match initializer {
+            Initializer::Expr(expr) => {
+                let value = self.analyze_expr(expr, diagnostics)?;
+                Some(self.coerce_expr(value, target_ty, diagnostics, context, true))
+            }
+            Initializer::List(items, span) => {
+                if items.len() != 1 {
+                    diagnostics.error(
+                        "semantic",
+                        Some(*span),
+                        "nested initializer lists are not supported in phase 8",
+                        Some("use flat positional initializer elements".to_string()),
+                    );
+                    return None;
+                }
+                self.analyze_scalar_initializer_expr(&items[0], target_ty, context, diagnostics)
+            }
+        }
+    }
+
+    /// Analyzes one global initializer and materializes scalar or aggregate startup representation.
+    fn analyze_global_initializer(
+        &mut self,
+        target_ty: Type,
+        initializer: &Initializer,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedGlobalInitializer> {
+        match self.analyze_initializer_value(target_ty, initializer, "global initializer", diagnostics)? {
+            AnalyzedInitializer::Scalar(expr) => {
+                if !is_constant_expression(&expr) {
+                    diagnostics.error(
+                        "semantic",
+                        Some(expr.span),
+                        "global initializer must be a constant expression",
+                        Some("use literals, casts, and integer operators only".to_string()),
+                    );
+                    return None;
+                }
+                Some(TypedGlobalInitializer::Scalar(expr))
+            }
+            AnalyzedInitializer::Aggregate(assignments) => {
+                let mut bytes = vec![0u8; target_ty.byte_width()];
+                let mut valid = true;
+                for assignment in assignments {
+                    let Some(value) = eval_integer_constant_expr(&assignment.value) else {
+                        diagnostics.error(
+                            "semantic",
+                            Some(assignment.value.span),
+                            "global aggregate initializer elements must be constant expressions",
+                            None,
+                        );
+                        valid = false;
+                        continue;
+                    };
+                    let value = normalize_value(value, assignment.ty) as u64;
+                    for byte in 0..assignment.ty.byte_width() {
+                        let index = assignment.offset + byte;
+                        if index >= bytes.len() {
+                            diagnostics.error(
+                                "semantic",
+                                Some(span),
+                                "initializer element exceeded object size during layout",
+                                None,
+                            );
+                            valid = false;
+                            break;
+                        }
+                        bytes[index] = ((value >> (8 * byte)) & 0xFF) as u8;
+                    }
+                }
+                if valid {
+                    Some(TypedGlobalInitializer::Bytes(bytes))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Builds an lvalue that refers to one scalar slot inside a declared aggregate object.
+    fn build_symbol_offset_lvalue(
+        &self,
+        symbol: SymbolId,
+        object_ty: Type,
+        offset: usize,
+        field_ty: Type,
+        span: Span,
+    ) -> TypedExpr {
+        let base = TypedExpr {
+            kind: TypedExprKind::Symbol(symbol),
+            ty: object_ty,
+            span,
+            value_category: ValueCategory::LValue,
+        };
+        self.build_member_lvalue(base, false, offset, field_ty, span)
+    }
+
+    /// Returns one struct-field descriptor by id/name.
+    fn struct_field(&self, struct_id: StructId, field: &str) -> Option<super::ast::StructField> {
+        let def = self.struct_defs.get(struct_id)?;
+        def.fields.iter().find(|entry| entry.name == field).cloned()
+    }
+
+    /// Returns true when analyzing statements inside the active interrupt handler.
+    fn current_function_is_interrupt(&self) -> bool {
+        self.current_function
+            .is_some_and(|symbol| self.symbols[symbol].is_interrupt)
+    }
+
+    /// Returns true when an integer expression is a compile-time zero constant.
+    fn is_integer_zero_constant_expr(&self, expr: &TypedExpr) -> bool {
+        expr.ty.is_integer()
+            && eval_integer_constant_expr(expr)
+                .is_some_and(|value| normalize_value(value, expr.ty) == 0)
     }
 
     /// Analyzes `sizeof(expr)` without triggering array decay on the operand.
@@ -1714,7 +2325,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 Some(span),
                 format!("{context} `{name}` uses unsupported type `{ty}`"),
                 Some(
-                    "phase 3 supports char, unsigned char, int, unsigned int, pointers to them, and one-dimensional arrays of them"
+                    "phase 8 supports scalar objects, one-dimensional arrays of supported scalar targets, and basic named structs"
                         .to_string(),
                 ),
             );
@@ -2202,6 +2813,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 is_defined: true,
                 is_referenced: false,
                 parameter_types: Vec::new(),
+                enum_const_value: None,
             });
         }
 
@@ -2217,6 +2829,7 @@ impl<'a> SemanticAnalyzer<'a> {
             is_defined: true,
             is_referenced: false,
             parameter_types: Vec::new(),
+            enum_const_value: None,
         });
         self.scopes
             .last_mut()

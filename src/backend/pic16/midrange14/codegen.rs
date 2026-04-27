@@ -6,7 +6,9 @@ use crate::common::integer::{
 };
 use crate::diagnostics::DiagnosticBag;
 use crate::frontend::ast::{BinaryOp, UnaryOp};
-use crate::frontend::semantic::{SymbolId, SymbolKind, TypedExpr, TypedExprKind, TypedProgram};
+use crate::frontend::semantic::{
+    SymbolId, SymbolKind, TypedExpr, TypedExprKind, TypedGlobalInitializer, TypedProgram,
+};
 use crate::frontend::types::{CastKind, ScalarType, Type};
 use crate::ir::model::{IrCondition, IrFunction, IrInstr, IrProgram, IrTerminator, Operand};
 use crate::linker::map::MapFile;
@@ -502,8 +504,18 @@ impl<'a> CodegenContext<'a> {
                 continue;
             };
             if let Some(initializer) = &global.initializer {
-                let value = eval_const_expr(initializer);
-                self.store_const_value(base, symbol.ty, value);
+                match initializer {
+                    TypedGlobalInitializer::Scalar(initializer) => {
+                        let value = eval_const_expr(initializer);
+                        self.store_const_value(base, symbol.ty, value);
+                    }
+                    TypedGlobalInitializer::Bytes(bytes) => {
+                        for (index, byte) in bytes.iter().enumerate() {
+                            self.emit_const_to_w(*byte);
+                            self.store_w_to_addr(base + index as u16);
+                        }
+                    }
+                }
             } else {
                 self.clear_slot(base, symbol.ty);
             }
@@ -3653,6 +3665,7 @@ mod tests {
             is_defined: true,
             is_referenced: true,
             parameter_types: Vec::new(),
+            enum_const_value: None,
         }
     }
 }

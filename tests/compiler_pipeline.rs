@@ -1510,39 +1510,286 @@ void main(void) {
 }
 
 #[test]
-/// Verifies array initializers fail explicitly instead of being silently ignored.
-fn reports_unsupported_array_initializer() {
-    let error = execute(CliOptions {
-        command: CliCommand::Compile(CompileCommand {
-            target: "pic16f628a".to_string(),
-            input: {
-                let input = temp_file("array-init.c");
-                fs::write(
-                    &input,
-                    "\
+/// Verifies typedef aliases support scalar/pointer declarations and function signatures.
+fn compiles_phase8_typedef_scalar_pointer_and_signature() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase8-typedef.c",
+        "\
 #include <pic16/pic16f628a.h>
-unsigned char bytes[2] = 0;
+typedef unsigned char u8;
+typedef u8 *u8ptr;
+u8 load_first(u8ptr ptr) {
+    return ptr[0];
+}
+void main(void) {
+    u8 values[2] = {1, 2};
+    u8ptr cursor = values;
+    TRISB = 0x00;
+    PORTB = load_first(cursor);
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    assert_hex_is_programmable(&output);
+    assert!(asm.contains("call fn_load_first"));
+}
+
+#[test]
+/// Verifies duplicate typedef names are rejected with a clear diagnostic.
+fn reports_phase8_duplicate_typedef() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase8-dup-typedef.c",
+        "\
+#include <pic16/pic16f628a.h>
+typedef unsigned char u8;
+typedef unsigned int u8;
 void main(void) {
     TRISB = 0x00;
 }
 ",
-                )
-                .expect("fixture");
-                input
-            },
-            output: temp_file("array-init.hex"),
-            include_dirs: vec![repo("include")],
-            defines: BTreeMap::new(),
-            optimization: OptimizationLevel::O0,
-            artifacts: OutputArtifacts::default(),
-            verbose: false,
-            opt_report: false,
-            warning_profile: WarningProfile::default(),
-        }),
-    })
-    .expect_err("must fail");
+    );
 
-    assert!(format!("{error}").contains("array initializers"));
+    assert!(error.contains("duplicate typedef"));
+}
+
+#[test]
+/// Verifies enum implicit/explicit values compile and are usable in expressions.
+fn compiles_phase8_enum_values_and_expression_use() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase8-enum.c",
+        "\
+#include <pic16/pic16f628a.h>
+enum Mode {
+    MODE_OFF,
+    MODE_ON,
+    MODE_ERROR = 10
+};
+unsigned char encode(enum Mode mode) {
+    if (mode == MODE_ERROR) {
+        return MODE_ON;
+    }
+    return MODE_OFF;
+}
+void main(void) {
+    TRISB = 0x00;
+    PORTB = encode(MODE_ERROR);
+}
+",
+    );
+
+    let ir = read_artifact(&output, "ir");
+    assert_hex_is_programmable(&output);
+    assert!(ir.contains("10"));
+}
+
+#[test]
+/// Verifies duplicate enumerator names are rejected.
+fn reports_phase8_duplicate_enumerator() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase8-dup-enum.c",
+        "\
+#include <pic16/pic16f628a.h>
+enum Mode {
+    MODE_OFF,
+    MODE_OFF
+};
+void main(void) {
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("duplicate enumerator"));
+}
+
+#[test]
+/// Verifies struct field access works for globals/locals and pointer `->` forms.
+fn compiles_phase8_struct_fields_and_arrow() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase8-struct-arrow.c",
+        "\
+#include <pic16/pic16f628a.h>
+struct Pair {
+    unsigned char lo;
+    unsigned int hi;
+};
+struct Pair global_pair;
+unsigned char touch_pair(struct Pair *ptr) {
+    ptr->lo = 3;
+    ptr->hi = 0x1234;
+    return ptr->lo;
+}
+void main(void) {
+    struct Pair local = {1, 2};
+    struct Pair *cursor = &local;
+    TRISB = 0x00;
+    global_pair.lo = touch_pair(cursor);
+    PORTB = global_pair.lo;
+}
+",
+    );
+
+    let ir = read_artifact(&output, "ir");
+    let asm = read_artifact(&output, "asm");
+    assert_hex_is_programmable(&output);
+    assert!(ir.contains("Add 1"));
+    assert!(asm.contains("movwf 0x04"));
+}
+
+#[test]
+/// Verifies whole-struct copy assignment is rejected explicitly.
+fn reports_phase8_unsupported_struct_copy() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase8-struct-copy.c",
+        "\
+#include <pic16/pic16f628a.h>
+struct Pair {
+    unsigned char x;
+    unsigned char y;
+};
+void main(void) {
+    struct Pair a;
+    struct Pair b;
+    a = b;
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("struct assignment is not supported"));
+}
+
+#[test]
+/// Verifies array/struct positional initializers compile with zero-fill for missing values.
+fn compiles_phase8_array_and_struct_initializers() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase8-inits.c",
+        "\
+#include <pic16/pic16f628a.h>
+struct Point {
+    unsigned char x;
+    unsigned char y;
+};
+unsigned char values[3] = {1, 2};
+struct Point point = {7};
+void main(void) {
+    TRISB = 0x00;
+    PORTB = values[2] + point.y;
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies too many aggregate initializer elements emit a diagnostic.
+fn reports_phase8_too_many_initializer_elements() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase8-init-too-many.c",
+        "\
+#include <pic16/pic16f628a.h>
+unsigned char values[2] = {1, 2, 3};
+void main(void) {
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("too many initializer elements"));
+}
+
+#[test]
+/// Verifies designated initializers are rejected clearly when deferred.
+fn reports_phase8_designated_initializer_unsupported() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase8-designated-init.c",
+        "\
+#include <pic16/pic16f628a.h>
+struct Point {
+    unsigned char x;
+    unsigned char y;
+};
+struct Point point = {.x = 1, .y = 2};
+void main(void) {
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("designated initializers"));
+}
+
+#[test]
+/// Verifies explicit narrowing casts avoid implicit-conversion diagnostics under `-Werror`.
+fn allows_phase8_explicit_narrowing_cast_under_werror() {
+    let output = compile_source_with_profile(
+        "pic16f628a",
+        "phase8-explicit-cast.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    unsigned int wide = 300;
+    unsigned char narrow = (unsigned char)wide;
+    TRISB = 0x00;
+    PORTB = narrow;
+}
+",
+        strict_warnings(),
+    )
+    .unwrap_or_else(|error| panic!("unexpected diagnostics: {error}"));
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies signed/unsigned explicit casts compile through Phase 8 typing rules.
+fn compiles_phase8_signed_unsigned_explicit_casts() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase8-signed-casts.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    int signed_value = -1;
+    unsigned int widened = (unsigned int)signed_value;
+    unsigned char low = (unsigned char)widened;
+    TRISB = 0x00;
+    PORTB = low;
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies unsupported integer-to-pointer explicit casts diagnose non-zero constants.
+fn reports_phase8_unsupported_nonzero_integer_to_pointer_cast() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase8-bad-ptr-cast.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    unsigned char *ptr = (unsigned char*)1;
+    TRISB = 0x00;
+    PORTB = ptr[0];
+}
+",
+    );
+
+    assert!(error.contains("integer zero"));
 }
 
 #[test]

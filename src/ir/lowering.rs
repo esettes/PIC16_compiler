@@ -614,6 +614,7 @@ mod tests {
             is_defined: true,
             is_referenced: true,
             parameter_types: Vec::new(),
+            enum_const_value: None,
         }
     }
 }

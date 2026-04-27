@@ -28,16 +28,17 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 7: code generation quality and optimization on top of the Phase 6 interrupt model, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
+Current implementation is **Phase 8: C aggregate types and richer declarations on top of the Phase 7 optimization layer, Phase 6 interrupt model, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
 
-Phase 7 scope:
+Phase 8 scope:
 
-- no new language features
-- no C-subset expansion
-- better IR constant propagation, branch simplification, and dead code cleanup
-- backend peephole cleanup for redundant PIC16 instruction sequences
-- cheaper helper lowering for power-of-two divide/modulo and constant shifts
-- cleaner banking/page handling and clearer `.map` grouping
+- `typedef` aliases for supported scalar/pointer/array/object forms
+- `enum` declarations with implicit and explicit enumerator values
+- named `struct` declarations with packed field layout metadata
+- field access lowering for `.` and `->`
+- array and struct positional initializer lists with zero-fill
+- clearer explicit cast handling for scalar/pointer subsets
+- explicit diagnostics for unsupported aggregate operations
 
 What changed from Phase 3:
 
@@ -51,6 +52,7 @@ What changed from Phase 3:
 - ISR code saves/restores CPU and ABI context conservatively, then returns with `retfie`
 - Phase 6 ISR body rules reject normal calls and runtime-helper-requiring expressions
 - Phase 7 reduces redundant instructions, shrinks temp pressure, and avoids some helper calls entirely
+- Phase 8 adds typedef/enum/struct support, aggregate initializers, and explicit casts for supported forms
 - active docs now describe stack-first behavior; old Phase 2/3 docs remain historical
 
 ## Phase 4 ABI Summary
@@ -84,7 +86,10 @@ More detail:
 - [docs/ir/phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
 - [docs/ir/phase5-arithmetic-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase5-arithmetic-lowering.md:1)
 - [docs/ir/phase6-isr-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase6-isr-lowering.md:1)
+- [docs/ir/phase8-aggregate-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase8-aggregate-lowering.md:1)
 - [docs/frontend/phase6-isr-syntax.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase6-isr-syntax.md:1)
+- [docs/frontend/phase8-types.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase8-types.md:1)
+- [docs/backend/phase8-struct-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase8-struct-layout.md:1)
 - [docs/runtime/phase5-arithmetic-helpers.md](/home/settes/cursus/PIC16_compiler/docs/runtime/phase5-arithmetic-helpers.md:1)
 - [docs/migration/phase3-to-phase4-abi.md](/home/settes/cursus/PIC16_compiler/docs/migration/phase3-to-phase4-abi.md:1)
 
@@ -189,6 +194,45 @@ Current integer-promotion subset:
 - otherwise wider width wins
 - equal-width mixed signedness is rejected unless user adds an explicit cast
 - shift result type is left operand type; right operand is coerced to left operand type
+
+## Phase 8 Type-System Summary
+
+`typedef`:
+
+- file-scope typedef aliases are supported for scalar, pointer, array, and named struct object forms
+- duplicate typedef names are rejected
+- typedef/object-function name conflicts are rejected in this phase
+
+`enum`:
+
+- implicit enumerators start at `0` and increment by `1`
+- explicit enumerator constants are supported
+- enum constants are compile-time integer constants usable in expressions
+- enum representation is fixed to 16-bit `int` in this phase
+
+`struct`:
+
+- named structs are supported
+- layout is packed declaration order with no inserted padding
+- field offsets are byte offsets from base address
+- `.` and `->` lower through base-pointer + constant-offset addressing
+- whole-struct copy assignment is rejected in this phase
+
+Initializers:
+
+- scalar expression initializers remain supported
+- array and struct positional initializer lists are supported
+- missing aggregate elements are zero-filled
+- too many initializer elements are diagnosed
+- designated initializers are currently rejected with an explicit diagnostic
+
+Explicit casts:
+
+- scalar widening/narrowing and signedness casts are supported
+- explicit narrowing suppresses implicit narrowing warnings
+- one-level pointer-to-pointer bitcasts are supported
+- integer-to-pointer is restricted to integer zero (`(T*)0`)
+- pointer-to-integer is restricted to 16-bit integer targets
 
 ## Supported Subset
 
