@@ -56,6 +56,7 @@ fn compile_input(target: &str, input: PathBuf) -> PathBuf {
                 ..OutputArtifacts::default()
             },
             verbose: false,
+            opt_report: false,
             warning_profile: WarningProfile {
                 wall: true,
                 wextra: true,
@@ -79,6 +80,43 @@ fn compile_source(target: &str, name: &str, source: &str) -> PathBuf {
     compile_input(target, input)
 }
 
+/// Compiles one temporary source using an explicit optimization level.
+fn compile_source_with_optimization(
+    target: &str,
+    name: &str,
+    source: &str,
+    optimization: OptimizationLevel,
+) -> PathBuf {
+    let input = temp_file(name);
+    fs::write(&input, source).expect("fixture");
+    let output = temp_file("opt.hex");
+    execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: target.to_string(),
+            input,
+            output: output.clone(),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization,
+            artifacts: OutputArtifacts {
+                emit_asm: true,
+                map: true,
+                list_file: true,
+                ..OutputArtifacts::default()
+            },
+            verbose: false,
+            opt_report: false,
+            warning_profile: WarningProfile {
+                wall: true,
+                wextra: true,
+                werror: false,
+            },
+        }),
+    })
+    .expect("compile fixture");
+    output
+}
+
 /// Compiles one temporary source expecting a diagnostic failure and returns the rendered error text.
 fn compile_error(target: &str, name: &str, source: &str) -> String {
     let input = temp_file(name);
@@ -93,6 +131,7 @@ fn compile_error(target: &str, name: &str, source: &str) -> String {
             optimization: OptimizationLevel::O0,
             artifacts: OutputArtifacts::default(),
             verbose: false,
+            opt_report: false,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -117,6 +156,7 @@ fn compile_path_with_profile(
             optimization: OptimizationLevel::O2,
             artifacts: OutputArtifacts::default(),
             verbose: false,
+            opt_report: false,
             warning_profile,
         }),
     });
@@ -804,6 +844,97 @@ void main(void) {
 }
 
 #[test]
+/// Verifies unsigned power-of-two division lowers inline instead of calling a runtime helper.
+fn phase7_avoids_helper_for_unsigned_power_of_two_division() {
+    let output = compile_source(
+        "pic16f877a",
+        "div-pow2.c",
+        "\
+#include <pic16/pic16f877a.h>
+unsigned int quarter(unsigned int value) {
+    return value / 4;
+}
+void main(void) {
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    PORTB = quarter(0x0040);
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    let map = read_artifact(&output, "map");
+    assert_hex_is_programmable(&output);
+    assert!(!asm.contains("call __rt_div_u16"));
+    assert!(!map.contains("__rt_div_u16"));
+}
+
+#[test]
+/// Verifies unsigned power-of-two modulo lowers to a mask instead of calling a runtime helper.
+fn phase7_avoids_helper_for_unsigned_power_of_two_modulo() {
+    let output = compile_source(
+        "pic16f877a",
+        "mod-pow2.c",
+        "\
+#include <pic16/pic16f877a.h>
+unsigned int mod8(unsigned int value) {
+    return value % 8;
+}
+void main(void) {
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    PORTB = mod8(0x0037);
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    let map = read_artifact(&output, "map");
+    assert_hex_is_programmable(&output);
+    assert!(!asm.contains("call __rt_mod_u16"));
+    assert!(!map.contains("__rt_mod_u16"));
+    assert!(asm.contains("andlw 0x07"));
+}
+
+#[test]
+/// Verifies O2 IR optimization and backend cleanup shrink a trivial constant-branch fixture.
+fn phase7_o2_reduces_instruction_count_for_constant_branch_fixture() {
+    let source = "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    unsigned char value = 0;
+    TRISB = 0x00;
+    if (1) {
+        value = 3;
+    } else {
+        value = 4;
+    }
+    PORTB = value;
+}
+";
+    let o0 =
+        compile_source_with_optimization("pic16f628a", "const-branch-o0.c", source, OptimizationLevel::O0);
+    let o2 =
+        compile_source_with_optimization("pic16f628a", "const-branch-o2.c", source, OptimizationLevel::O2);
+    let o0_asm = read_artifact(&o0, "asm");
+    let o2_asm = read_artifact(&o2, "asm");
+
+    let count_instructions = |asm: &str| {
+        asm.lines()
+            .filter(|line| {
+                let trimmed = line.trim_start();
+                !trimmed.is_empty()
+                    && !trimmed.starts_with(';')
+                    && !trimmed.ends_with(':')
+                    && !trimmed.starts_with("org ")
+            })
+            .count()
+    };
+
+    assert!(count_instructions(&o2_asm) < count_instructions(&o0_asm));
+}
+
+#[test]
 /// Verifies division by constant zero is rejected before lowering.
 fn reports_division_by_constant_zero() {
     let error = execute(CliOptions {
@@ -833,6 +964,7 @@ void main(void) {
             optimization: OptimizationLevel::O0,
             artifacts: OutputArtifacts::default(),
             verbose: false,
+            opt_report: false,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -871,6 +1003,7 @@ void main(void) {
             optimization: OptimizationLevel::O0,
             artifacts: OutputArtifacts::default(),
             verbose: false,
+            opt_report: false,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -909,6 +1042,7 @@ void main(void) {
             optimization: OptimizationLevel::O0,
             artifacts: OutputArtifacts::default(),
             verbose: false,
+            opt_report: false,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -1056,6 +1190,7 @@ void main(void) {
             optimization: OptimizationLevel::O0,
             artifacts: OutputArtifacts::default(),
             verbose: false,
+            opt_report: false,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -1094,6 +1229,7 @@ void main(void) {
             optimization: OptimizationLevel::O0,
             artifacts: OutputArtifacts::default(),
             verbose: false,
+            opt_report: false,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -1134,6 +1270,7 @@ void main(void) {
             optimization: OptimizationLevel::O0,
             artifacts: OutputArtifacts::default(),
             verbose: false,
+            opt_report: false,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -1176,6 +1313,7 @@ void main(void) {
             optimization: OptimizationLevel::O0,
             artifacts: OutputArtifacts::default(),
             verbose: false,
+            opt_report: false,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -1212,6 +1350,7 @@ void main(void) {
             optimization: OptimizationLevel::O0,
             artifacts: OutputArtifacts::default(),
             verbose: false,
+            opt_report: false,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -1248,6 +1387,7 @@ void main(void) {
             optimization: OptimizationLevel::O0,
             artifacts: OutputArtifacts::default(),
             verbose: false,
+            opt_report: false,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -1283,6 +1423,7 @@ void main(void) {
             optimization: OptimizationLevel::O0,
             artifacts: OutputArtifacts::default(),
             verbose: false,
+            opt_report: false,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -1318,6 +1459,7 @@ void main(void) {
             optimization: OptimizationLevel::O0,
             artifacts: OutputArtifacts::default(),
             verbose: false,
+            opt_report: false,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -1358,6 +1500,7 @@ void main(void) {
             optimization: OptimizationLevel::O0,
             artifacts: OutputArtifacts::default(),
             verbose: false,
+            opt_report: false,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -1393,6 +1536,7 @@ void main(void) {
             optimization: OptimizationLevel::O0,
             artifacts: OutputArtifacts::default(),
             verbose: false,
+            opt_report: false,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -1599,6 +1743,39 @@ fn cli_generates_hex_map_and_list_outputs() {
     assert_hex_is_programmable(&out_hex);
     assert!(out_hex.with_extension("map").exists());
     assert!(out_hex.with_extension("lst").exists());
+}
+
+#[test]
+/// Verifies `--opt-report` prints the Phase 7 optimization summary after a successful build.
+fn cli_opt_report_works() {
+    let out_dir = temp_dir_path("cli-opt-report");
+    let out_hex = out_dir.join("blink.hex");
+    let output = Command::new(picc_bin())
+        .current_dir(repo("."))
+        .args([
+            "--target",
+            "pic16f628a",
+            "-Wall",
+            "-Wextra",
+            "-O2",
+            "--opt-report",
+            "-I",
+            "include",
+            "--emit-asm",
+        ])
+        .arg("-o")
+        .arg(&out_hex)
+        .arg("examples/pic16f628a/blink.c")
+        .output()
+        .expect("run picc with --opt-report");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Optimization report (O2)"));
+    assert!(stdout.contains("IR constant propagation/folding"));
+    assert!(stdout.contains("Backend peephole"));
+    assert!(stdout.contains("Helper calls avoided"));
+    assert_hex_is_programmable(&out_hex);
 }
 
 #[test]

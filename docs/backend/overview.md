@@ -10,12 +10,7 @@ Shared backend responsibilities:
 - IR -> PIC16 asm lowering
 - 14-bit word encoding
 
-Current backend phase: **Phase 6 interrupts on top of Phase 5 arithmetic helpers and the Phase 4 Stack-first ABI**
-
-Phase status:
-
-- Phase 6 is the final stabilization phase in this branch
-- no Phase 7 backend scope is active here
+Current backend phase: **Phase 7 code-generation quality and optimization on top of Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**
 
 Backend owns:
 
@@ -28,6 +23,8 @@ Backend owns:
 - Phase 5 runtime helper emission for multiply/divide/modulo and dynamic shifts
 - interrupt vector emission and ISR dispatch
 - ISR-specific save/restore and `retfie` lowering
+- Phase 7 peephole cleanup and helper fast-path selection
+- bank/page reuse tracking
 
 Current call contract:
 
@@ -79,6 +76,18 @@ Phase 6 restrictions:
 - no normal function calls inside ISR
 - no Phase 5 helper calls inside ISR
 - helper-requiring `*`, `/`, `%`, and dynamic shifts are rejected during semantic analysis
+
+Phase 7 optimization responsibilities:
+
+- remove redundant PIC16 instruction pairs and duplicate writes
+- avoid helper calls for unsigned power-of-two divide/modulo when inline cheaper
+- compact visible bank-bit changes to only the bits that actually changed
+- preserve page-selection correctness while dropping duplicate `setpage`
+- improve `.map` readability by grouping user code, helpers, vectors, ABI/stack data, and ISR context
+
+Phase 7 backend docs:
+
+- [optimization.md](/home/settes/cursus/PIC16_compiler/docs/backend/optimization.md:1)
 
 Historical docs:
 

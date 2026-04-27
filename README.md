@@ -28,13 +28,16 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 6: ISR support on top of the Phase 4 Stack-first ABI and Phase 5 arithmetic helpers**.
+Current implementation is **Phase 7: code generation quality and optimization on top of the Phase 6 interrupt model, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
 
-Phase freeze policy:
+Phase 7 scope:
 
-- Phase 6 is the final supported phase for this repository state
-- no Phase 7 work is planned in this branch
-- current work is stabilization, validation, and documentation consistency only
+- no new language features
+- no C-subset expansion
+- better IR constant propagation, branch simplification, and dead code cleanup
+- backend peephole cleanup for redundant PIC16 instruction sequences
+- cheaper helper lowering for power-of-two divide/modulo and constant shifts
+- cleaner banking/page handling and clearer `.map` grouping
 
 What changed from Phase 3:
 
@@ -47,6 +50,7 @@ What changed from Phase 3:
 - `void __interrupt isr(void)` now emits a real interrupt vector at `0x0004`
 - ISR code saves/restores CPU and ABI context conservatively, then returns with `retfie`
 - Phase 6 ISR body rules reject normal calls and runtime-helper-requiring expressions
+- Phase 7 reduces redundant instructions, shrinks temp pressure, and avoids some helper calls entirely
 - active docs now describe stack-first behavior; old Phase 2/3 docs remain historical
 
 ## Phase 4 ABI Summary
@@ -156,6 +160,26 @@ Current ISR interaction model with the stack-first ABI:
 - ISR saves interrupted ABI state first
 - ISR may use locals and IR temps on the software stack
 - ISR restores interrupted ABI state before `retfie`
+
+## Phase 7 Optimization Summary
+
+Current optimization order for `-O1`, `-O2`, and `-Os`:
+
+1. IR constant propagation and folding
+2. IR dead code elimination
+3. IR temp-slot compaction
+4. backend helper fast paths and bank/page cleanup
+5. backend peephole cleanup
+
+Current Phase 7 wins:
+
+- constant branches fold to direct jumps before backend lowering
+- unreachable IR blocks are cleared before codegen
+- unused temp ids are compacted to shrink frame pressure
+- unsigned `/ 2^n` lowers to right shift instead of helper call
+- unsigned `% 2^n` lowers to `andlw` mask instead of helper call
+- redundant `movf x,w` + `movwf x`, duplicate `movwf`, duplicate bit ops, duplicate `setpage`, and overwritten W loads are removed
+- `--opt-report` prints a compact optimization summary after a successful compile
 
 Current integer-promotion subset:
 
@@ -350,6 +374,7 @@ picc \
   --target pic16f628a \
   -I include \
   -O2 -Wall -Wextra \
+  --opt-report \
   --emit-ast --emit-ir --emit-asm \
   --map --list-file \
   -o build/blink.hex \
@@ -423,6 +448,7 @@ picc --list-targets
 - [CONTRIBUTING.md](/home/settes/cursus/PIC16_compiler/CONTRIBUTING.md:1)
 - [docs/architecture/overview.md](/home/settes/cursus/PIC16_compiler/docs/architecture/overview.md:1)
 - [docs/backend/overview.md](/home/settes/cursus/PIC16_compiler/docs/backend/overview.md:1)
+- [docs/backend/optimization.md](/home/settes/cursus/PIC16_compiler/docs/backend/optimization.md:1)
 - [docs/backend/phase4-stack-first-abi.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-first-abi.md:1)
 - [docs/backend/phase4-stack-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-model.md:1)
 - [docs/ir/phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
@@ -432,7 +458,6 @@ picc --list-targets
 - [docs/migration/phase3-to-phase4-abi.md](/home/settes/cursus/PIC16_compiler/docs/migration/phase3-to-phase4-abi.md:1)
 - [docs/developer-guide/adding-device.md](/home/settes/cursus/PIC16_compiler/docs/developer-guide/adding-device.md:1)
 
-## Phase Freeze
+## Current Limits
 
-This repository is intentionally frozen at **Phase 6** for stabilization and production hardening.
-Future feature phases are out of scope for this freeze cycle.
+Phase 7 does not add new language features. It only improves code quality within the existing Phase 6 language/runtime surface.

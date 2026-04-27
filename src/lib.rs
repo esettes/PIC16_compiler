@@ -27,13 +27,21 @@ use frontend::preprocessor::Preprocessor;
 use frontend::semantic::SemanticAnalyzer;
 use hex::intel_hex::IntelHexWriter;
 use ir::lowering::IrLowerer;
-use ir::passes::{constant_fold, dead_code_elimination};
+use ir::passes::{compact_temps, constant_fold, dead_code_elimination};
 use linker::map::render_map;
 
 #[derive(Debug)]
 pub struct CompilationOutput {
     pub hex_path: PathBuf,
     pub generated_files: Vec<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct OptimizationReport {
+    constant_fold: ir::passes::ConstantFoldStats,
+    dead_code: ir::passes::DeadCodeStats,
+    temp_compaction: ir::passes::TempCompactionStats,
+    backend: backend::pic16::midrange14::codegen::BackendOptimizationReport,
 }
 
 /// Executes the selected CLI command and returns generated output paths on success.
@@ -150,11 +158,13 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
         return Err(diagnostics);
     }
 
+    let mut optimization_report = OptimizationReport::default();
     match command.optimization {
         OptimizationLevel::O0 => {}
         OptimizationLevel::O1 | OptimizationLevel::O2 | OptimizationLevel::Os => {
-            constant_fold(&mut ir_program);
-            dead_code_elimination(&mut ir_program);
+            optimization_report.constant_fold = constant_fold(&mut ir_program);
+            optimization_report.dead_code = dead_code_elimination(&mut ir_program);
+            optimization_report.temp_compaction = compact_temps(&mut ir_program);
         }
     }
 
@@ -167,6 +177,7 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
         return Err(diagnostics);
     }
     let assembled = assembled.expect("backend result checked");
+    optimization_report.backend = assembled.optimization;
 
     if command.artifacts.emit_asm {
         write_artifact(&command.output, "asm", &assembled.program.render())?;
@@ -220,6 +231,10 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
         return Err(diagnostics);
     }
 
+    if command.opt_report {
+        print_optimization_report(command.optimization, &optimization_report);
+    }
+
     let mut generated_files = vec![command.output.clone()];
     if let Some(path) = map_path {
         generated_files.push(path);
@@ -258,6 +273,40 @@ fn write_artifact(output: &Path, extension: &str, contents: &str) -> StageResult
 /// Replaces the output path extension while preserving the parent directory.
 fn change_extension(path: &Path, extension: &str) -> PathBuf {
     path.with_extension(extension)
+}
+
+/// Prints a compact optimization summary suitable for `--opt-report`.
+fn print_optimization_report(level: OptimizationLevel, report: &OptimizationReport) {
+    println!("Optimization report ({level})");
+    println!(
+        "  IR constant propagation/folding: propagated={} folded={} simplified_branches={} pruned_unreachable={}",
+        report.constant_fold.operands_propagated,
+        report.constant_fold.expressions_folded,
+        report.constant_fold.branches_simplified,
+        report.constant_fold.unreachable_blocks_pruned
+    );
+    println!(
+        "  IR dead code elimination: removed_instructions={} cleared_unreachable_blocks={}",
+        report.dead_code.instructions_removed,
+        report.dead_code.unreachable_blocks_cleared
+    );
+    println!(
+        "  Temp compaction: removed_temp_slots={}",
+        report.temp_compaction.temp_slots_removed
+    );
+    println!(
+        "  Backend peephole: removed_instructions={} self_moves={} duplicate_writes={} duplicate_bit_ops={} duplicate_setpages={} overwritten_w_loads={}",
+        report.backend.peephole.removed_instructions,
+        report.backend.peephole.self_moves_removed,
+        report.backend.peephole.duplicate_writes_removed,
+        report.backend.peephole.duplicate_bit_ops_removed,
+        report.backend.peephole.duplicate_setpages_removed,
+        report.backend.peephole.overwritten_w_loads_removed
+    );
+    println!(
+        "  Helper calls avoided: {}",
+        report.backend.helper_calls_avoided
+    );
 }
 
 /// Returns predefined macros that describe the compiler and active target.

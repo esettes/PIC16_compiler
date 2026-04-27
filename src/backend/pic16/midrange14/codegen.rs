@@ -11,7 +11,7 @@ use crate::frontend::types::{CastKind, ScalarType, Type};
 use crate::ir::model::{IrCondition, IrFunction, IrInstr, IrProgram, IrTerminator, Operand};
 use crate::linker::map::MapFile;
 
-use super::asm::{AsmInstr, AsmLine, AsmProgram, Dest};
+use super::asm::{AsmInstr, AsmLine, AsmProgram, Dest, PeepholeStats};
 use super::encoder::encode_program;
 use super::runtime::{binary_helper, RuntimeHelper, RuntimeHelperInfo};
 
@@ -29,6 +29,13 @@ pub struct BackendOutput {
     pub program: AsmProgram,
     pub words: BTreeMap<u16, u16>,
     pub map: MapFile,
+    pub optimization: BackendOptimizationReport,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BackendOptimizationReport {
+    pub peephole: PeepholeStats,
+    pub helper_calls_avoided: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -109,12 +116,15 @@ pub fn compile_program(
         return None;
     }
 
+    let optimization = codegen.optimize_program();
+
     let encoded = encode_program(&codegen.program, diagnostics)?;
     let map = build_map(typed_program, &layout, &encoded.labels);
     Some(BackendOutput {
         program: codegen.program,
         words: encoded.words,
         map,
+        optimization,
     })
 }
 
@@ -406,6 +416,7 @@ struct CodegenContext<'a> {
     current_bank: u8,
     label_counter: usize,
     used_helpers: BTreeSet<RuntimeHelper>,
+    helper_calls_avoided: usize,
 }
 
 impl<'a> CodegenContext<'a> {
@@ -419,6 +430,7 @@ impl<'a> CodegenContext<'a> {
             current_bank: UNKNOWN_BANK,
             label_counter: 0,
             used_helpers: BTreeSet::new(),
+            helper_calls_avoided: 0,
         }
     }
 
@@ -430,6 +442,14 @@ impl<'a> CodegenContext<'a> {
             self.emit_function(function, diagnostics);
         }
         self.emit_runtime_helpers();
+    }
+
+    /// Applies backend-local optimization passes and returns a summary for reporting.
+    fn optimize_program(&mut self) -> BackendOptimizationReport {
+        BackendOptimizationReport {
+            peephole: self.program.peephole_optimize(),
+            helper_calls_avoided: self.helper_calls_avoided,
+        }
     }
 
     /// Emits reset and interrupt vector stubs for the current target descriptor.
@@ -1237,38 +1257,60 @@ impl<'a> CodegenContext<'a> {
             BinaryOp::Multiply => {
                 if lhs_const == Some(0) || rhs_const == Some(0) {
                     self.clear_temp(function_symbol, dst_temp, ty);
+                    self.helper_calls_avoided += 1;
                     return;
                 }
                 if lhs_const == Some(1) {
                     self.copy_operand_to_temp(function_symbol, rhs, ty, dst_temp);
+                    self.helper_calls_avoided += 1;
                     return;
                 }
                 if rhs_const == Some(1) {
                     self.copy_operand_to_temp(function_symbol, lhs, ty, dst_temp);
+                    self.helper_calls_avoided += 1;
                     return;
                 }
                 if let Some(shift) = normalized_power_of_two_shift(lhs_const, ty) {
                     self.emit_constant_shift(function_symbol, rhs, ty, dst_temp, shift, false);
+                    self.helper_calls_avoided += 1;
                     return;
                 }
                 if let Some(shift) = normalized_power_of_two_shift(rhs_const, ty) {
                     self.emit_constant_shift(function_symbol, lhs, ty, dst_temp, shift, false);
+                    self.helper_calls_avoided += 1;
                     return;
                 }
             }
             BinaryOp::Divide => {
                 if lhs_const == Some(0) {
                     self.clear_temp(function_symbol, dst_temp, ty);
+                    self.helper_calls_avoided += 1;
                     return;
                 }
                 if rhs_const == Some(1) {
                     self.copy_operand_to_temp(function_symbol, lhs, ty, dst_temp);
+                    self.helper_calls_avoided += 1;
+                    return;
+                }
+                if ty.is_unsigned()
+                    && let Some(shift) = normalized_power_of_two_shift(rhs_const, ty)
+                {
+                    self.emit_constant_shift(function_symbol, lhs, ty, dst_temp, shift, true);
+                    self.helper_calls_avoided += 1;
                     return;
                 }
             }
             BinaryOp::Modulo => {
                 if lhs_const == Some(0) || rhs_const == Some(1) {
                     self.clear_temp(function_symbol, dst_temp, ty);
+                    self.helper_calls_avoided += 1;
+                    return;
+                }
+                if ty.is_unsigned()
+                    && let Some(mask) = normalized_power_of_two_mask(rhs_const, ty)
+                {
+                    self.emit_constant_mask(function_symbol, lhs, ty, dst_temp, mask);
+                    self.helper_calls_avoided += 1;
                     return;
                 }
             }
@@ -1276,9 +1318,11 @@ impl<'a> CodegenContext<'a> {
                 if let Some(count) = rhs_const.map(|value| normalize_value(value, ty) as usize) {
                     if count == 0 {
                         self.copy_operand_to_temp(function_symbol, lhs, ty, dst_temp);
+                        self.helper_calls_avoided += 1;
                         return;
                     }
                     self.emit_constant_shift(function_symbol, lhs, ty, dst_temp, count, op == BinaryOp::ShiftRight);
+                    self.helper_calls_avoided += 1;
                     return;
                 }
             }
@@ -1306,6 +1350,29 @@ impl<'a> CodegenContext<'a> {
             } else {
                 self.shift_current_frame_value_left(offset, ty);
             }
+        }
+    }
+
+    /// Emits an unsigned power-of-two modulo as a constant mask instead of a helper call.
+    fn emit_constant_mask(
+        &mut self,
+        function_symbol: SymbolId,
+        src: Operand,
+        ty: Type,
+        dst_temp: usize,
+        mask: i64,
+    ) {
+        for byte in 0..ty.byte_width() {
+            self.load_operand_byte_to_w(function_symbol, src, ty, byte);
+            let mask_byte = if byte == 0 {
+                low_byte(mask, ty)
+            } else {
+                high_byte(mask, ty)
+            };
+            if mask_byte != 0xFF {
+                self.program.push(AsmLine::Instr(AsmInstr::Andlw(mask_byte)));
+            }
+            self.store_w_to_temp_byte(function_symbol, dst_temp, byte);
         }
     }
 
@@ -2168,11 +2235,17 @@ impl<'a> CodegenContext<'a> {
     fn store_w_to_addr(&mut self, addr: u16) {
         self.select_bank(addr);
         self.program.push(AsmLine::Instr(AsmInstr::Movwf(low7(addr))));
+        if addr == STATUS_ADDR {
+            self.current_bank = UNKNOWN_BANK;
+        }
     }
 
     /// Stores the current `W` value into a mirrored/common address without bank selection.
     fn store_w_to_direct_addr(&mut self, addr: u16) {
         self.program.push(AsmLine::Instr(AsmInstr::Movwf(low7(addr))));
+        if addr == STATUS_ADDR {
+            self.current_bank = UNKNOWN_BANK;
+        }
     }
 
     /// Stores the current `W` value into a shared ISR-context byte without changing `STATUS`.
@@ -2238,15 +2311,19 @@ impl<'a> CodegenContext<'a> {
             return;
         }
         let status = low7(STATUS_ADDR);
-        if (bank & 0x01) == 0 {
-            self.program.push(AsmLine::Instr(AsmInstr::Bcf { f: status, b: 5 }));
-        } else {
-            self.program.push(AsmLine::Instr(AsmInstr::Bsf { f: status, b: 5 }));
+        if self.current_bank == UNKNOWN_BANK || ((self.current_bank ^ bank) & 0x01) != 0 {
+            if (bank & 0x01) == 0 {
+                self.program.push(AsmLine::Instr(AsmInstr::Bcf { f: status, b: 5 }));
+            } else {
+                self.program.push(AsmLine::Instr(AsmInstr::Bsf { f: status, b: 5 }));
+            }
         }
-        if (bank & 0x02) == 0 {
-            self.program.push(AsmLine::Instr(AsmInstr::Bcf { f: status, b: 6 }));
-        } else {
-            self.program.push(AsmLine::Instr(AsmInstr::Bsf { f: status, b: 6 }));
+        if self.current_bank == UNKNOWN_BANK || ((self.current_bank ^ bank) & 0x02) != 0 {
+            if (bank & 0x02) == 0 {
+                self.program.push(AsmLine::Instr(AsmInstr::Bcf { f: status, b: 6 }));
+            } else {
+                self.program.push(AsmLine::Instr(AsmInstr::Bsf { f: status, b: 6 }));
+            }
         }
         self.current_bank = bank;
     }
@@ -2254,6 +2331,11 @@ impl<'a> CodegenContext<'a> {
     /// Emits every internal arithmetic helper that codegen marked as used.
     fn emit_runtime_helpers(&mut self) {
         let helpers = self.used_helpers.iter().copied().collect::<Vec<_>>();
+        if !helpers.is_empty() {
+            self.program.push(AsmLine::Comment(
+                "runtime helpers (Phase 7 optimized section)".to_string(),
+            ));
+        }
         for helper in helpers {
             self.emit_runtime_helper(helper);
         }
@@ -2830,6 +2912,19 @@ fn normalized_power_of_two_shift(value: Option<i64>, ty: Type) -> Option<usize> 
         return None;
     }
     Some(value.trailing_zeros() as usize)
+}
+
+/// Returns the `(divisor - 1)` mask when a normalized constant is an exact power of two.
+fn normalized_power_of_two_mask(value: Option<i64>, ty: Type) -> Option<i64> {
+    let value = normalize_value(value?, ty);
+    if value == 0 {
+        return None;
+    }
+    let unsigned = value as u64;
+    if !unsigned.is_power_of_two() {
+        return None;
+    }
+    Some(normalize_value(value - 1, ty))
 }
 
 /// Returns the low seven address bits used by direct-register PIC16 instructions.

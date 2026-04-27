@@ -266,7 +266,35 @@ Backend lowers:
 
 Per-call IR temps now live in frame storage, not static absolute RAM.
 
-## Phase Freeze
+## Phase 7 Optimization Layer
 
-This design is frozen at Phase 6 for stabilization and consistency work.
-No Phase 7 feature scope is defined in this branch.
+Phase 7 does not change the language subset or the frontend contract. It adds optimization work in two places:
+
+- IR optimization passes before backend lowering
+- backend cleanup and helper-fast-path decisions after lowering
+
+Current pass order for `-O1`, `-O2`, and `-Os`:
+
+1. constant propagation and folding
+2. dead code elimination
+3. temp-slot compaction
+4. backend helper avoidance and bank/page reuse
+5. backend peephole cleanup
+
+Optimization invariants:
+
+- Stack-first ABI is unchanged
+- ISR lowering is unchanged
+- runtime helpers still obey the normal call ABI
+- optimizations must preserve bank/page correctness
+- correctness wins over code size
+
+Current backend quality work includes:
+
+- constant branch simplification before codegen
+- removal of unreachable IR blocks
+- temp-id compaction to reduce frame pressure
+- power-of-two unsigned divide lowered as inline right shift
+- power-of-two unsigned modulo lowered as inline mask
+- selective RP0/RP1 updates instead of blind bank rewrites
+- peephole cleanup for redundant self-moves, duplicate writes, duplicate bit operations, duplicate `setpage`, and overwritten W loads

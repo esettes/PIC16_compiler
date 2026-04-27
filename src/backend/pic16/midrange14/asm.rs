@@ -11,6 +11,16 @@ pub struct AsmProgram {
     pub lines: Vec<AsmLine>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PeepholeStats {
+    pub removed_instructions: usize,
+    pub self_moves_removed: usize,
+    pub duplicate_writes_removed: usize,
+    pub duplicate_bit_ops_removed: usize,
+    pub duplicate_setpages_removed: usize,
+    pub overwritten_w_loads_removed: usize,
+}
+
 #[derive(Clone, Debug)]
 pub enum AsmLine {
     Org(u16),
@@ -59,6 +69,88 @@ impl AsmProgram {
     /// Appends one assembly line without altering label or address state.
     pub fn push(&mut self, line: AsmLine) {
         self.lines.push(line);
+    }
+
+    /// Applies conservative backend peephole cleanups that preserve observable behavior.
+    pub fn peephole_optimize(&mut self) -> PeepholeStats {
+        let mut stats = PeepholeStats::default();
+        let mut optimized = Vec::with_capacity(self.lines.len());
+        let mut index = 0usize;
+        while index < self.lines.len() {
+            if let Some(next) = self.lines.get(index + 1) {
+                if matches!(
+                    (&self.lines[index], next),
+                    (
+                        AsmLine::Instr(AsmInstr::Movf { f, d: Dest::W }),
+                        AsmLine::Instr(AsmInstr::Movwf(g))
+                    ) if f == g
+                ) {
+                    optimized.push(self.lines[index].clone());
+                    index += 2;
+                    stats.removed_instructions += 1;
+                    stats.self_moves_removed += 1;
+                    continue;
+                }
+
+                if matches!(
+                    (&self.lines[index], next),
+                    (AsmLine::Instr(AsmInstr::Movwf(f)), AsmLine::Instr(AsmInstr::Movwf(g))) if f == g
+                ) {
+                    optimized.push(self.lines[index].clone());
+                    index += 2;
+                    stats.removed_instructions += 1;
+                    stats.duplicate_writes_removed += 1;
+                    continue;
+                }
+
+                if matches!(
+                    (&self.lines[index], next),
+                    (AsmLine::Instr(AsmInstr::Bcf { f, b }), AsmLine::Instr(AsmInstr::Bcf { f: g, b: c }))
+                        if f == g && b == c
+                ) || matches!(
+                    (&self.lines[index], next),
+                    (AsmLine::Instr(AsmInstr::Bsf { f, b }), AsmLine::Instr(AsmInstr::Bsf { f: g, b: c }))
+                        if f == g && b == c
+                ) {
+                    optimized.push(self.lines[index].clone());
+                    index += 2;
+                    stats.removed_instructions += 1;
+                    stats.duplicate_bit_ops_removed += 1;
+                    continue;
+                }
+
+                if matches!(
+                    (&self.lines[index], next),
+                    (AsmLine::Instr(AsmInstr::SetPage(lhs)), AsmLine::Instr(AsmInstr::SetPage(rhs))) if lhs == rhs
+                ) {
+                    optimized.push(self.lines[index].clone());
+                    index += 2;
+                    stats.removed_instructions += 1;
+                    stats.duplicate_setpages_removed += 1;
+                    continue;
+                }
+
+                if matches!(
+                    (&self.lines[index], next),
+                    (AsmLine::Instr(AsmInstr::Movlw(_)), AsmLine::Instr(AsmInstr::Movlw(_)))
+                        | (AsmLine::Instr(AsmInstr::Movlw(_)), AsmLine::Instr(AsmInstr::Clrw))
+                        | (AsmLine::Instr(AsmInstr::Clrw), AsmLine::Instr(AsmInstr::Movlw(_)))
+                        | (AsmLine::Instr(AsmInstr::Clrw), AsmLine::Instr(AsmInstr::Clrw))
+                ) {
+                    optimized.push(next.clone());
+                    index += 2;
+                    stats.removed_instructions += 1;
+                    stats.overwritten_w_loads_removed += 1;
+                    continue;
+                }
+            }
+
+            optimized.push(self.lines[index].clone());
+            index += 1;
+        }
+
+        self.lines = optimized;
+        stats
     }
 
     /// Renders assembly lines into the textual `.asm` artifact format.
@@ -139,5 +231,71 @@ fn render_dest(dest: Dest) -> &'static str {
     match dest {
         Dest::W => "w",
         Dest::F => "f",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AsmInstr, AsmLine, AsmProgram, Dest};
+
+    #[test]
+    /// Verifies peephole cleanup removes `movf X,w` followed by `movwf X`.
+    fn peephole_removes_self_move_roundtrip() {
+        let mut program = AsmProgram {
+            lines: vec![
+                AsmLine::Instr(AsmInstr::Movf { f: 0x20, d: Dest::W }),
+                AsmLine::Instr(AsmInstr::Movwf(0x20)),
+            ],
+        };
+
+        let stats = program.peephole_optimize();
+        assert_eq!(program.lines.len(), 1);
+        assert_eq!(stats.self_moves_removed, 1);
+    }
+
+    #[test]
+    /// Verifies adjacent duplicate `movwf` instructions collapse to one store.
+    fn peephole_removes_duplicate_movwf() {
+        let mut program = AsmProgram {
+            lines: vec![
+                AsmLine::Instr(AsmInstr::Movwf(0x21)),
+                AsmLine::Instr(AsmInstr::Movwf(0x21)),
+            ],
+        };
+
+        let stats = program.peephole_optimize();
+        assert_eq!(program.lines.len(), 1);
+        assert_eq!(stats.duplicate_writes_removed, 1);
+    }
+
+    #[test]
+    /// Verifies repeated `setpage` pseudo-ops for the same target collapse to one.
+    fn peephole_removes_duplicate_setpage() {
+        let mut program = AsmProgram {
+            lines: vec![
+                AsmLine::Instr(AsmInstr::SetPage("fn_main".to_string())),
+                AsmLine::Instr(AsmInstr::SetPage("fn_main".to_string())),
+            ],
+        };
+
+        let stats = program.peephole_optimize();
+        assert_eq!(program.lines.len(), 1);
+        assert_eq!(stats.duplicate_setpages_removed, 1);
+    }
+
+    #[test]
+    /// Verifies an overwritten W literal load is dropped before the final load.
+    fn peephole_removes_overwritten_w_load() {
+        let mut program = AsmProgram {
+            lines: vec![
+                AsmLine::Instr(AsmInstr::Movlw(0x12)),
+                AsmLine::Instr(AsmInstr::Movlw(0x34)),
+            ],
+        };
+
+        let stats = program.peephole_optimize();
+        assert_eq!(program.lines.len(), 1);
+        assert!(matches!(program.lines[0], AsmLine::Instr(AsmInstr::Movlw(0x34))));
+        assert_eq!(stats.overwritten_w_loads_removed, 1);
     }
 }

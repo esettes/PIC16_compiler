@@ -47,6 +47,7 @@ pub struct CompileCommand {
     pub optimization: OptimizationLevel,
     pub artifacts: OutputArtifacts,
     pub verbose: bool,
+    pub opt_report: bool,
     pub warning_profile: WarningProfile,
 }
 
@@ -63,6 +64,7 @@ impl CliOptions {
         let mut defines = BTreeMap::new();
         let mut optimization = OptimizationLevel::O0;
         let mut verbose = false;
+        let mut opt_report = false;
         let mut artifacts = OutputArtifacts::default();
         let mut warning_profile = WarningProfile::default();
 
@@ -78,6 +80,7 @@ impl CliOptions {
                 "--map" => artifacts.map = true,
                 "--list-file" => artifacts.list_file = true,
                 "--verbose" => verbose = true,
+                "--opt-report" => opt_report = true,
                 "-Wall" => warning_profile.wall = true,
                 "-Wextra" => warning_profile.wextra = true,
                 "-Werror" => warning_profile.werror = true,
@@ -147,6 +150,7 @@ impl CliOptions {
                 optimization,
                 artifacts,
                 verbose,
+                opt_report,
                 warning_profile,
             }),
         })
@@ -197,6 +201,7 @@ pub fn help_text() -> &'static str {
         "  --emit-asm        Write assembly dump next to output\n",
         "  --map             Write map file next to output\n",
         "  --list-file       Write listing file next to output\n",
+        "  --opt-report      Print optimization summary after a successful compile\n",
         "  --verbose         Enable verbose build logs"
     )
 }

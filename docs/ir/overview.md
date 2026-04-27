@@ -8,7 +8,7 @@ Motivation:
 - enable validation and optimization passes
 - keep call and memory lowering explicit
 
-Current Phase 6 IR carries:
+Current IR carries:
 
 - typed casts
 - typed compare conditions
@@ -17,11 +17,15 @@ Current Phase 6 IR carries:
 - direct-call instructions with arbitrary argument lists
 - typed arithmetic and shift instructions for helper-aware lowering
 - per-function interrupt metadata for backend vector/prologue selection
+- optimization-pass-friendly CFG blocks and temp tables
 
-Phase status:
+Phase 7 optimization passes:
 
-- this IR model is frozen at Phase 6 for stabilization
-- no Phase 7 IR extensions are planned in this branch
+- constant propagation and folding
+- constant branch simplification to direct jumps
+- unreachable-block cleanup
+- dead code elimination
+- temp-slot compaction
 
 Current detail:
 

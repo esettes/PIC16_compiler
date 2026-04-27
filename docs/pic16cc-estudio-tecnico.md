@@ -1,1245 +1,3086 @@
-# Estudio Técnico de `pic16cc` / `picc`
+# `pic16cc` / `picc`
 
-Documento de estudio en español para comprender el compilador `pic16cc` en profundidad, como si se preparara una defensa técnica, una entrevista de arquitectura o una revisión de diseño.
+## Estudio Técnico Integral y Didáctico
 
-Estado del proyecto analizado:
-
-- crate: `pic16cc`
-- binario CLI: `picc`
-- fase activa: Phase 6
-- targets soportados: `PIC16F628A` y `PIC16F877A`
-- backend compartido: `src/backend/pic16/midrange14`
-
-Este documento no intenta vender el proyecto; intenta explicarlo con rigor. Cuando una decisión simplifica el problema a costa de recortar C estándar, se dice explícitamente. Cuando una restricción nace del hardware PIC16 y no de una preferencia estética, también se explica.
+### Cómo entender, explicar y usar este compilador como base para construir el tuyo
 
 ---
 
-# 1. Project Overview
+# Prólogo
+
+Este documento está escrito como si fuera el comienzo de un libro técnico serio sobre construcción de compiladores para microcontroladores PIC16 clásicos, usando como caso de estudio concreto el compilador de este repositorio: `pic16cc`, cuyo binario de usuario es `picc`.
+
+La intención no es resumir el proyecto. La intención es enseñarlo.
+
+Más aún: la intención es que una persona que ya sabe programar, que sabe leer código, que sabe lo que es un proyecto software serio, pero que todavía no sabe “pensar como constructor de compiladores”, pueda terminar este texto con tres capacidades reales:
+
+- entender cómo funciona `pic16cc` de extremo a extremo
+- explicar el proyecto con criterio técnico, no sólo con palabras memorizadas
+- usar el proyecto como base conceptual para comenzar a diseñar su propio compilador
+
+Este texto está escrito con una regla pedagógica estricta:
+
+Cada concepto importante se presenta respondiendo siempre cuatro preguntas:
+
+1. qué es
+2. por qué existe
+3. cómo se implementa aquí
+4. ejemplo pequeño
+
+No se asume conocimiento previo de compiladores. Sí se asume que el lector sabe programar y puede seguir razonamientos técnicos.
+
+Estado del proyecto estudiado:
+
+- crate principal: `pic16cc`
+- binario CLI de usuario final: `picc`
+- targets soportados: `PIC16F628A` y `PIC16F877A`
+- backend compartido: `src/backend/pic16/midrange14`
+- fase funcional actual: Phase 7
+
+---
+
+# 1. Cómo leer este documento
+
+## Qué es este documento
+
+Es un texto de estudio, no una referencia mínima ni una lista de archivos.
+
+Por qué existe:
+
+- porque un compilador no se entiende bien leyendo código suelto
+- primero hace falta un modelo mental
+- después ese modelo se conecta con el repositorio
+
+Cómo está construido:
+
+- primero se explica qué hace un compilador, desde cero
+- luego se explica el hardware PIC16, porque sin entender el hardware no se entiende el backend
+- después se recorre el pipeline completo
+- luego se estudia la evolución fase por fase
+- finalmente se profundiza en memoria, ABI, helpers, ISR, optimización, pruebas y trade-offs
+
+Ejemplo:
+
+Si una persona ve una expresión como:
+
+```c
+PORTB = add1(3);
+```
+
+al principio sólo ve “una línea C”.
+
+Tras leer este documento debería poder verla también como:
+
+```text
+1. tokens
+2. árbol sintáctico
+3. expresión tipada
+4. llamada ABI
+5. retorno en W
+6. store a SFR bancarizado
+7. instrucciones PIC16
+8. palabras de 14 bits
+9. registro Intel HEX
+```
+
+## Qué no es este documento
+
+No es:
+
+- un tutorial de C
+- un manual completo de todos los PIC16 existentes
+- un tratado teórico general de compiladores desligado del código real
+- una promesa de soporte de C completo
+
+Su foco es éste:
+
+```text
+explicar un compilador real, con límites reales, sobre una arquitectura difícil
+```
+
+## Qué gana el lector si lo estudia bien
+
+Si se estudia bien este texto, el lector gana algo muy valioso: vocabulario técnico con significado real.
+
+No sólo sabrá decir palabras como:
+
+- AST
+- IR
+- lowering
+- ABI
+- frame
+- stack
+
+Sino que podrá responder:
+
+- qué problema resuelve cada una
+- por qué aparece en este proyecto
+- y qué consecuencias tiene si se diseña mal
+
+---
+
+# 2. Si nunca has construido un compilador antes
+
+## Qué es un compilador
+
+Definición:
+
+Un compilador es un programa que toma código fuente escrito por humanos y lo transforma en instrucciones ejecutables para una máquina concreta.
+
+Por qué existe:
+
+- porque las CPUs no entienden lenguajes de alto nivel como C
+- entienden instrucciones muy concretas, con formatos muy concretos
+
+Cómo se ve eso en `pic16cc`:
+
+- entrada: un subconjunto de C
+- salida: Intel HEX programable para PIC16 clásicos
+
+Ejemplo:
+
+Código fuente:
+
+```c
+PORTB = 1;
+```
+
+Resultado conceptual:
+
+```text
+1. cargar el literal 1 en el acumulador W
+2. escribir W en el registro PORTB
+```
+
+Resultado asm aproximado:
+
+```text
+movlw 0x01
+movwf PORTB
+```
+
+## Por qué un compilador no traduce “de golpe”
+
+Definición:
+
+Traducir “de golpe” sería intentar pasar directamente de texto fuente a código máquina sin etapas intermedias claras.
+
+Por qué no suele funcionar bien:
+
+- el texto tiene demasiada ambigüedad sintáctica
+- el lenguaje fuente tiene reglas de tipos, ámbitos y conversiones
+- el hardware tiene limitaciones muy distintas a las del lenguaje
+- conviene separar problemas
+
+Cómo se refleja en `pic16cc`:
+
+- hay frontend
+- hay análisis semántico
+- hay IR
+- hay backend
+- hay encoder
+- hay writer de Intel HEX
+
+Ejemplo:
+
+La línea:
+
+```c
+x = a + b;
+```
+
+puede verse de muchos modos distintos según la etapa:
+
+```text
+texto:     "x = a + b;"
+tokens:    IDENT(x), '=', IDENT(a), '+', IDENT(b), ';'
+AST:       asignación(x, suma(a, b))
+semántica: x es lvalue, a y b son enteros, la suma devuelve un entero
+IR:        t0 = a + b; x = t0
+backend:   cargar a, sumar b, guardar en x
+```
+
+## Qué es un lenguaje fuente y qué es un lenguaje destino
+
+Definición:
+
+- lenguaje fuente: el lenguaje en que escribe el programador
+- lenguaje destino: el que entiende el hardware o una herramienta posterior
+
+Por qué existe esta distinción:
+
+- compilar siempre es transformar entre dos niveles de representación
+
+Cómo se ve aquí:
+
+- fuente: C acotado
+- destino final: Intel HEX para PIC16
+
+Ejemplo:
+
+```text
+fuente:    unsigned int x = 3;
+destino:   secuencia de instrucciones PIC16 codificadas y empaquetadas en HEX
+```
+
+## Qué es una representación intermedia mental
+
+Antes de hablar de la IR del repositorio, conviene entender la idea general.
+
+Definición:
+
+Una representación intermedia es una forma de representar un programa que es:
+
+- más estructurada que el texto
+- más simple que el lenguaje original
+- todavía no tan concreta como el código máquina final
+
+Por qué existe:
+
+- porque ayuda a separar el problema de entender el programa del problema de generar instrucciones concretas
+
+Ejemplo:
+
+No es cómodo generar directamente código PIC16 desde algo tan abstracto como:
+
+```c
+arr[i] = arr[i] + 1;
+```
+
+Es mucho más cómodo pasarlo antes a una forma que diga explícitamente:
+
+```text
+1. calcular dirección de arr[i]
+2. leer indirectamente
+3. sumar 1
+4. escribir indirectamente
+```
+
+Eso, precisamente, es el tipo de trabajo que hace una IR y su lowering.
+
+## Analogía útil: un compilador como una cadena de traducción profesional
+
+Imagina que tienes una novela en español y quieres imprimirla en japonés.
+
+No haces:
+
+```text
+novela en español -> imprenta japonesa
+```
+
+Haces algo como:
+
+```text
+texto
+-> dividir en palabras
+-> entender la gramática
+-> entender el significado
+-> reexpresar la idea
+-> producir el formato final de impresión
+```
+
+Un compilador hace algo muy parecido:
+
+```text
+C
+-> tokens
+-> árbol
+-> programa tipado
+-> representación intermedia
+-> instrucciones de máquina
+-> archivo grabable
+```
+
+La analogía no es perfecta, pero ayuda mucho al principio.
+
+---
+
+# 3. Qué es `pic16cc` y por qué este proyecto es interesante
 
 ## Qué es `pic16cc`
 
-`pic16cc` es un compilador experimental escrito en Rust para una familia muy concreta de microcontroladores: los PIC16 mid-range clásicos de 14 bits. Su objetivo no es compilar C genérico para cualquier CPU, sino convertir un subconjunto deliberadamente acotado de C en código real para:
+Definición:
 
-- `PIC16F628A`
-- `PIC16F877A`
+`pic16cc` es un compilador experimental escrito en Rust para microcontroladores PIC16 clásicos de 14 bits.
 
-El ejecutable que usa el usuario final es `picc`. La ruta de uso actual es la de un compilador real, no la de una demo interna:
+Por qué existe:
+
+- porque PIC16 es una arquitectura muy instructiva para estudiar diseño de compiladores
+- porque obliga a resolver problemas de ABI, memoria, aritmética e ISR de forma explícita
+- porque el proyecto busca una cadena completa y nativa de C a `.hex`
+
+Cómo se implementa aquí:
+
+- crate `pic16cc`
+- binario `picc`
+- backend compartido `midrange14`
+- targets `PIC16F628A` y `PIC16F877A`
+
+Ejemplo:
+
+Uso real del compilador:
 
 ```bash
-picc --target pic16f877a -Wall -Wextra -Werror -O2 -I include -o build/main.hex src/main.c
+picc --target pic16f628a -Wall -Wextra -Werror -O2 -I include -o build/blink.hex examples/pic16f628a/blink.c
 ```
 
-El resultado principal es un `.hex` programable, acompañado opcionalmente por:
+## Por qué PIC16 es una diana tan interesante para un compilador
 
+Porque es una arquitectura incómoda.
+
+Eso, lejos de ser un defecto para el estudio, es una ventaja enorme.
+
+Problemas interesantes que fuerza:
+
+- muy pocos registros
+- acumulador principal `W`
+- memoria de datos bancarizada
+- llamadas y saltos paginados
+- sin pila de datos de propósito general
+- sin multiplicación o división hardware
+- 16 bits implementados sobre una ALU esencialmente de 8 bits
+
+Por qué eso es bueno para aprender:
+
+- porque obliga a que el compilador sea honesto
+- no puede “apoyarse” en un hardware generoso
+- cada decisión importante se vuelve visible
+
+Ejemplo:
+
+En una arquitectura moderna, llamar a una función con 4 argumentos es rutinario.
+
+En PIC16 clásico, eso obliga a diseñar una convención de llamada seria, porque el hardware no te da una pila de datos estándar.
+
+## Qué problema resuelve el proyecto
+
+Definición del problema:
+
+```text
+compilar un subconjunto útil y coherente de C a PIC16 real,
+sin dejar soporte fingido en el frontend que no exista en el backend
+```
+
+Por qué esa formulación es importante:
+
+- muchos proyectos parsean cosas que luego no saben bajar
+- aquí el objetivo es que el soporte sea extremo a extremo
+
+Cómo se implementa aquí:
+
+- parser reconoce construcciones
+- semántica las valida
+- IR las representa
+- backend las baja a PIC16
+- encoder las convierte a palabras reales
+- Intel HEX writer produce salida programable
+
+Ejemplo:
+
+La multiplicación `a * b` no se considera “soportada” sólo porque el parser entienda el `*`.
+
+Se considera soportada porque:
+
+- la semántica la clasifica
+- la IR la transporta
+- el backend la baja a inline o helper
+- el `.asm` la muestra
+- el `.hex` final sigue siendo válido
+
+## Qué produce el compilador
+
+La salida principal es un `.hex`.
+
+Además puede producir:
+
+- `.ast`
+- `.ir`
+- `.asm`
 - `.map`
 - `.lst`
-- `.asm`
-- `.ir`
-- `.ast`
-- `.tokens`
 
-## Por qué existe
+Por qué existen esos artefactos:
 
-El proyecto existe para construir una cadena nativa y entendible de extremo a extremo para una arquitectura que normalmente se resuelve con toolchains externos, históricos o muy opacos. Hay una motivación técnica clara:
+- el `.hex` sirve para programar
+- el `.asm` sirve para estudiar qué emitió el backend
+- el `.map` sirve para ver símbolos y layout
+- el `.lst` sirve para inspección humana
+- el `.ast` y `.ir` sirven para estudiar el frontend y el lowering
 
-- estudiar cómo se implementa un compilador real para una ISA incómoda
-- validar decisiones de ABI, memoria, lowering y helpers sobre hardware muy restringido
-- disponer de un backend compartido por familia y no de un generador ad hoc por ejemplo
-- aprender qué partes de C son baratas y cuáles son carísimas en una MCU de 8 bits con RAM bancarizada
+Ejemplo:
 
-## Qué problema resuelve
+Si estás depurando un bug de stack ABI, el `.hex` no te ayuda mucho visualmente.
 
-El problema que resuelve no es “hacer C completo”, sino “hacer un subconjunto útil de C que baje de verdad a PIC16 sin fingir”. Eso implica:
-
-- análisis semántico con tipos y diagnósticos reales
-- una IR propia entre frontend y backend
-- lowering explícito para arrays, punteros, llamadas, comparaciones, helpers aritméticos e ISR
-- ensamblado a palabras de 14 bits
-- emisión Intel HEX con config word
-
-## Arquitectura objetivo: PIC16 mid-range de 14 bits
-
-Los PIC16 clásicos son una mala diana si uno quiere que el compilador sea fácil. Precisamente por eso son interesantes.
-
-Características críticas:
-
-- arquitectura Harvard: memoria de programa y de datos separadas
-- palabra de instrucción de 14 bits
-- ALU orientada al registro `W`
-- RAM bancarizada
-- saltos y llamadas paginados con `PCLATH`
-- pila hardware de retorno, pero no pila de datos de propósito general
-- direccionamiento indirecto limitado vía `FSR/INDF`
-
-## Por qué escribir un compilador para PIC16 no es trivial
-
-En una arquitectura moderna, llamar a una función, reservar locales o hacer `a * b` se apoya en una pila hardware rica, registros generales y, a menudo, instrucciones dedicadas. En PIC16 clásico casi nada de eso existe.
-
-Los problemas duros reales son:
-
-- no hay registros generales abundantes; casi todo gira alrededor de `W`
-- el acceso directo a RAM requiere gestionar banco con `STATUS.RP0/RP1`
-- el acceso indirecto requiere `FSR`, `INDF` y `STATUS.IRP`
-- `CALL` y `GOTO` necesitan preparar `PCLATH` si el destino cae en otra página
-- la pila hardware sirve para direcciones de retorno, no para argumentos o variables automáticas
-- las operaciones de 16 bits son siempre sintetizadas byte a byte
-- multiplicación, división, módulo y shifts dinámicos requieren lowering no trivial o helpers
-
-La consecuencia conceptual es importante: el compilador no puede limitarse a “escupir unas pocas instrucciones”. Necesita un modelo interno muy claro de memoria, frame, ABI, temporales, banking y paging.
+El `.asm`, `.map` y `.lst` sí.
 
 ---
 
-# 2. Global Architecture
+# 4. Entender el hardware PIC16 antes de entender el compilador
 
-## Pipeline completo
+Este capítulo es decisivo. Mucha gente intenta entender un backend sin entender el hardware destino. Eso suele llevar a una comprensión superficial.
 
-El punto de entrada del usuario es `src/main.rs`, que parsea la CLI y delega en `pic16cc::execute` en `src/lib.rs`. Desde ahí se encadena todo el pipeline:
+Aquí haremos lo contrario: primero el hardware, luego el compilador.
 
-```text
-input.c
-  |
-  v
-SourceManager
-  |
-  v
-Preprocessor
-  |
-  v
-PreprocessedSource + source-origin mapping
-  |
-  v
-Lexer
-  |
-  v
-Tokens
-  |
-  v
-Parser
-  |
-  v
-AST
-  |
-  v
-SemanticAnalyzer
-  |
-  v
-TypedProgram
-  |
-  v
-IrLowerer
-  |
-  v
-IrProgram
-  |
-  +--> constant_fold
-  +--> dead_code_elimination
-  |
-  v
-PIC16 midrange14 codegen
-  |
-  v
-AsmProgram
-  |
-  v
-Encoder (14-bit words)
-  |
-  +--> render_listing(.lst)
-  +--> render_map(.map)
-  |
-  v
-IntelHexWriter
-  |
-  v
-.hex
-```
+## Qué es una arquitectura Harvard
 
-## Flujo de datos entre etapas
+Definición:
 
-### 2.1 Preprocessing
+Una arquitectura Harvard separa la memoria de programa y la memoria de datos.
 
-`src/frontend/preprocessor.rs` procesa:
+Por qué existe:
 
-- `#include`
-- `#define` de macros objeto
-- `#undef`
-- `#if`
-- `#ifdef`
-- `#ifndef`
-- `#else`
-- `#endif`
+- es una forma clásica de diseñar microcontroladores pequeños
+- simplifica ciertas rutas internas
+- históricamente ha sido común en familias como PIC
 
-Punto fino importante: el preprocesador no sólo produce texto; produce un `PreprocessedSource` que guarda, carácter por carácter, el origen del texto emitido. Eso permite que los diagnósticos posteriores se mapeen de vuelta al archivo y línea originales incluso después de expandir includes y macros simples.
+Cómo se implementa aquí:
 
-### 2.2 Lexing
-
-`src/frontend/lexer.rs` transforma el texto preprocesado en tokens. El lexer reconoce:
-
-- identificadores
-- literales numéricos decimales y hexadecimales
-- keywords del subconjunto soportado
-- símbolos simples y dobles como `==`, `!=`, `<<`, `>>`, `&&`, `||`
-
-También reconoce `__interrupt` como keyword específica de la fase de ISR.
-
-### 2.3 Parsing
-
-`src/frontend/parser.rs` construye un AST explícito:
-
-- `TranslationUnit`
-- `Item`
-- `FunctionDecl`
-- `VarDecl`
-- `Stmt`
-- `Expr`
-
-El parser usa una jerarquía clásica de precedencias:
-
-```text
-assignment
-  -> logical or
-  -> logical and
-  -> bitwise or
-  -> bitwise xor
-  -> bitwise and
-  -> equality
-  -> relational
-  -> shift
-  -> additive
-  -> multiplicative
-  -> unary
-  -> postfix
-  -> primary
-```
-
-Eso importa porque la semántica posterior depende de tener ya separadas expresiones como:
-
-- `a + b * c`
-- `a << n`
-- `*ptr = value`
-- `foo(x, y, z)`
-
-### 2.4 Semantic analysis
-
-`src/frontend/semantic.rs` es el sitio donde el compilador deja de tratar el programa como “texto estructurado” y empieza a tratarlo como programa tipado.
-
-La semántica hace varias cosas a la vez:
-
-- resuelve nombres
-- crea y mantiene tablas de símbolos
-- inyecta registros SFR del dispositivo como símbolos predefinidos
-- clasifica lvalues y rvalues
-- valida tipos soportados
-- inserta casts explícitos (`ZeroExtend`, `SignExtend`, `Truncate`, `Bitcast`)
-- diagnostica conversiones peligrosas
-- valida firmas de función
-- valida reglas de ISR
-- detecta recursión
-- detecta escapes de punteros a locales de stack
-
-El resultado es un `TypedProgram`, no un AST “casi tipado”. Esa frontera es fuerte y útil: el backend no necesita volver a mirar el AST.
-
-### 2.5 IR generation y lowering
-
-`src/ir/model.rs` define una IR propia basada en CFG con:
-
-- bloques básicos
-- instrucciones explícitas
-- terminadores
-- operandos simbólicos o temporales
-- tipos de temporales
-- metadata `is_interrupt` por función
-
-La lowering desde `TypedProgram` a `IrProgram` ocurre en `src/ir/lowering.rs`.
-
-Idea central: la IR no intenta esconder memoria ni llamadas complejas. Al revés, las hace explícitas:
-
-- `AddrOf`
-- `LoadIndirect`
-- `StoreIndirect`
-- `Call`
-- `Cast`
-- `Binary`
-- `Unary`
-
-Eso es clave porque PIC16 castiga mucho la ambigüedad entre acceso directo e indirecto.
-
-### 2.6 IR optimization
-
-`src/ir/passes.rs` aplica dos pases simples:
-
-- `constant_fold`
-- `dead_code_elimination`
-
-No hay una fase de optimización agresiva tipo SSA global, LICM o register allocation avanzado. La estrategia del proyecto es primero obtener lowering correcto sobre PIC16 y luego optimizar sólo donde sea barato y seguro.
-
-### 2.7 Backend PIC16 específico
-
-`src/backend/pic16/midrange14/codegen.rs` toma la IR tipada y genera `AsmProgram`.
-
-El backend conoce:
-
-- banking de RAM
-- paging de código
-- layout de globals
-- helpers ABI (`stack_ptr`, `frame_ptr`, `return_high`, `scratch0`, `scratch1`)
-- frame layout por función
-- lowering de comparaciones 8/16 bits
-- acceso indirecto con `FSR/INDF`
-- helpers aritméticos de Phase 5
-- vector de interrupción y prólogo/epílogo ISR de Phase 6
-
-### 2.8 Assembly encoding
-
-La salida del backend todavía no es binaria; es un ensamblado estructurado (`AsmProgram`) con:
-
-- `Org`
-- `Label`
-- `Instr`
-- `Comment`
-
-Luego `src/backend/pic16/midrange14/encoder.rs`:
-
-- resuelve labels
-- expande pseudo-operaciones como `SetPage(label)`
-- codifica instrucciones a palabras PIC16 de 14 bits
-
-### 2.9 Intel HEX generation
-
-`src/hex/intel_hex.rs` convierte el mapa de palabras a bytes Intel HEX.
-
-Hay una sutileza importante:
-
-- la memoria de programa PIC16 está indexada por palabra
-- Intel HEX trabaja en direcciones de byte
-
-Por eso cada palabra se emite como dos bytes, y además el config word se inyecta en `0x2007` (expresado en bytes como `0x400E`).
-
-## Invariantes globales del diseño
-
-Éstas son las invariantes que conviene memorizar porque explican casi todo el proyecto:
-
-- el frontend no sabe nada de opcodes PIC16
-- el backend no vuelve a mirar el AST
-- cada símbolo SFR viene del descriptor de dispositivo, no de constantes hardcodeadas dispersas
-- todos los valores de 16 bits son little-endian
-- los punteros son punteros de data space, no de code space
-- el ABI activo es stack-first; `arg0/arg1` sólo es historia documental
-- los temporales IR relevantes para una llamada viven en el frame, no en RAM global estática
-- la pila software crece hacia arriba
-- la profundidad máxima de stack se calcula estáticamente; por eso no se permite recursión
-
----
-
-# 3. Phase-by-phase Implementation
-
-La cronología del proyecto es acumulativa. Cada fase no reemplaza el compilador; añade una capacidad nueva y obliga a endurecer algún punto del diseño.
-
-## v0.1
-
-### Goals
-
-Establecer una tubería end-to-end: de un `.c` a un `.hex`.
-
-### Qué se implementó
-
-La documentación histórica de v0.1 no sobrevive como fase separada, así que esta sección es una reconstrucción razonable a partir de la arquitectura actual y de lo que Phase 2 ya da por supuesto. La base mínima que debía existir era:
-
-- CLI
-- carga de fuentes
-- preprocesado simple
-- lexer
-- parser
-- semántica básica
-- backend PIC16 inicial
-- encoder
-- Intel HEX
-
-También es razonable inferir que ya existía un subconjunto operativo con:
-
-- variables escalares simples
-- funciones
-- `if`, `while`, `return`
-- acceso a SFR por nombre
-- ejemplo estilo blink
-
-### Qué cambió en el compilador
-
-Se fijó la separación más importante del proyecto:
-
-- frontend por un lado
-- backend por otro
-- formato intermedio propio
-
-Aunque la IR todavía no tuviera toda la riqueza de fases posteriores, la idea de no mezclar parsing con codegen ya estaba tomada.
-
-### Key design decisions
-
-- no usar LLVM ni un backend genérico
-- apostar por un backend compartido específico de familia `midrange14`
-- usar descriptores de dispositivo para que `PIC16F628A` y `PIC16F877A` compartan lowering
-- producir `.hex` real desde el inicio
-
-### Trade-offs
-
-- subconjunto C muy pequeño
-- sin 16 bits completos
-- sin arrays/punteros reales
-- sin pila software
-- sin ambición de C estándar completo
-
-### Limitations introduced
-
-- capacidad de llamada muy limitada
-- expresiones complejas difíciles
-- poca abstracción sobre memoria
-
-### Examples
-
-Ejemplo representativo del espíritu v0.1:
-
-```c
-#include <pic16/pic16f628a.h>
-
-void main(void) {
-    TRISB = 0x00;
-    PORTB = 0x01;
-}
-```
-
-Lo importante aquí no es la complejidad semántica; es que ya existe una cadena que entiende SFRs y produce un `.hex`.
-
-## Phase 2
-
-### Goals
-
-Hacer reales los enteros de 16 bits y sus comparaciones.
-
-### Qué se implementó
-
-- soporte efectivo para `int` y `unsigned int`
-- casts explícitos en semántica e IR
-- comparaciones firmadas y sin signo
-- normalización booleana a `0`/`1`
-- lowering 16-bit byte a byte
-
-### Qué cambió en el compilador
-
-Frontend:
-
-- inferencia más precisa de literales enteros
-- rechazo de algunos casos de signedness ambiguo
-
-IR:
-
-- `Cast`
-- `IrCondition::NonZero`
-- `IrCondition::Compare`
-
-Backend:
-
-- suma y resta de 16 bits con propagación de carry/borrow
-- comparaciones firmadas y unsigned
-- convención de retorno de 16 bits: `W` + `return_high`
-
-### Key design decisions
-
-La decisión clave de Phase 2 fue no inventar instrucciones especiales en la IR para “compare signed 16-bit”, sino añadir tipado a las condiciones. Eso deja el conocimiento de PIC16 en el backend y el conocimiento de tipos en la IR.
-
-### Trade-offs
-
-- ABI aún fijo por slots
-- máximo dos argumentos
-- sin pila software
-- temporales todavía fuera de cualquier modelo de frame serio
-
-### Limitations introduced
-
-- el salto de complejidad se pagó con un ABI aún muy rígido
-- 16 bits existe, pero llamar funciones complejas sigue siendo difícil
-
-### Examples
-
-```c
-unsigned int add16(unsigned int a, unsigned int b) {
-    return a + b;
-}
-
-if (lhs >= rhs) {
-    PORTB = 0x55;
-}
-```
-
-Conceptualmente, Phase 2 demuestra que el backend ya sabe pensar en dos bytes coordinados y no sólo en bytes aislados.
-
-## Phase 3
-
-### Goals
-
-Introducir un modelo de memoria visible: arrays, punteros, address-of, dereference e indexing.
-
-### Qué se implementó
-
-- arrays unidimensionales fijos
-- punteros de datos de 16 bits
-- `&obj`
-- `*ptr`
-- `a[i]`
-- `p[i]`
-- `sizeof` de tipos soportados
-- `LoadIndirect` y `StoreIndirect`
-
-### Qué cambió en el compilador
-
-Frontend:
-
-- distinción formal lvalue/rvalue
-- decay explícito de arrays
-- compatibilidad limitada de punteros
-
-IR:
-
-- `AddrOf`
-- `LoadIndirect`
-- `StoreIndirect`
-
-Backend:
-
-- programación de `FSR`
-- derivación de `STATUS.IRP`
-- acceso byte a byte vía `INDF`
-
-### Key design decisions
-
-La decisión más importante fue hacer las operaciones de memoria explícitas en IR. En lugar de dejar que el backend adivine si una expresión es “un load indirecto disfrazado”, la IR lo dice.
-
-### Trade-offs
-
-- punteros sólo a data memory
-- nada de function pointers
-- nada de pointer-to-pointer
-- nada de multidimensional arrays
-- punteros relacionales limitados a `==` y `!=`
-
-### Limitations introduced
-
-El modelo de memoria mejora mucho, pero todavía no existe stack software real. Un array local de esta fase todavía no está apoyado sobre el frame per-call que aparecerá después.
-
-### Examples
-
-```c
-unsigned char sum(unsigned char *ptr, unsigned int len) {
-    unsigned int i = 0;
-    unsigned char acc = 0;
-    while (i < len) {
-        acc = acc + ptr[i];
-        i = i + 1;
-    }
-    return acc;
-}
-```
-
-Este tipo de código obliga al compilador a:
-
-- decaer arrays a puntero
-- escalar índices
-- programar `FSR`
-- leer o escribir con `INDF`
-
-## Phase 4
-
-### Goals
-
-Sustituir el ABI rígido de slots por un ABI stack-first coherente y real.
-
-### Qué se implementó
-
-- pila software en RAM
-- `stack_ptr` y `frame_ptr`
-- argumentos por stack
-- limpieza de argumentos por el caller
-- frame por llamada
-- locales y arrays locales sobre stack
-- temporales IR por frame
-- soporte robusto para 3 o más argumentos
-- nested calls no recursivas
-
-### Qué cambió en el compilador
-
-Frontend/semántica:
-
-- rechazo de recursión por profundidad de stack estática
-- mejor rechazo de punteros que escapan a locales de stack
-
-IR:
-
-- `Call { args }` arbitrario
-- confianza en que los temps sobreviven a nested calls porque ya no son globales
-
-Backend:
-
-- `StorageAllocator` reserva helpers ABI y luego calcula frames
-- acceso frame-relative con `FP + offset`
-- prólogo/epílogo por función
-- análisis estático de profundidad máxima de stack
-
-### Key design decisions
-
-La decisión más importante de todo el proyecto probablemente es ésta:
-
-- caller empuja argumentos
-- callee guarda caller `FP`
-- callee establece `FP` sobre el área de argumentos
-- callee reserva locales y temporales
-- caller limpia los argumentos al volver
-
-Esto evita que caller y callee limpien la misma zona y hace el álgebra del stack manejable.
-
-### Trade-offs
-
-- la pila crece hacia arriba, lo cual es poco habitual si vienes de x86/ARM pero perfectamente válido
-- no hay detección dinámica de overflow de stack
-- la profundidad máxima se calcula estáticamente y por tanto la recursión queda prohibida
-
-### Limitations introduced
-
-- si el programa necesita stack dinámico real, el diseño actual no basta
-- el análisis de stack es correcto pero conservador
-
-### Examples
-
-```c
-unsigned int sum4(unsigned int a, unsigned int b,
-                  unsigned int c, unsigned int d) {
-    return a + b + c + d;
-}
-
-unsigned int x = sum4(1, 2, 3, 4);
-```
-
-Y también:
-
-```c
-return a(b(c(1)));
-```
-
-Sin temporales per-call y sin un contrato ABI claro, estas formas se rompen enseguida.
-
-## Phase 5
-
-### Goals
-
-Dar lowering real a:
-
-- `*`
-- `/`
-- `%`
-- `<<`
-- `>>`
-
-### Qué se implementó
-
-- helpers runtime de multiplicación, división, módulo y shifts dinámicos
-- constantes e identidades inline
-- shifts constantes inline
-- signed/unsigned separados por familia de helper
-- documentación explícita del comportamiento de división por cero y signed shift
-
-### Qué cambió en el compilador
-
-Frontend:
-
-- reglas semánticas para estos operadores
-- diagnóstico de división/módulo por cero constante
-- diagnóstico de shift count inválido
-- advertencia `-Wextra` para right shift firmado
-
-IR:
-
-- no se añadió un “helper instruction”; se reutilizó `IrInstr::Binary`
-
-Backend:
-
-- selección entre inline fast path y runtime helper
-- emisión perezosa de helpers sólo si se usan
-- cálculo de profundidad de stack incluyendo llamadas a helpers del compilador
-
-### Key design decisions
-
-La decisión clave fue no contaminar la IR con helpers concretos de PIC16. La IR sigue diciendo “esto es un multiply” y el backend decide si lo emite inline o llama a `__rt_mul_u16`.
-
-Eso mantiene la IR más limpia y concentra la dependencia de target en el backend.
-
-### Trade-offs
-
-- no hay multiplicador hardware, así que el coste en código y ciclos es real
-- división dinámica por cero no hace trap; devuelve `0`
-- el modelo de promociones sigue siendo un subconjunto simplificado de C
-
-### Limitations introduced
-
-- no hay lattice completa de usual arithmetic conversions
-- no hay trap runtime sofisticado para errores aritméticos
-
-### Examples
-
-```c
-unsigned int expression_test(unsigned int a,
-                             unsigned int b,
-                             unsigned int c) {
-    return (a * b) + (c / 3) - (a % 5);
-}
-```
-
-Esta expresión prueba algo muy importante: el ABI stack-first reparado soporta no sólo llamadas del usuario, sino llamadas internas generadas por el compilador a helpers runtime.
-
-## Phase 6
-
-### Goals
-
-Añadir ISR real e integración con el vector de interrupción.
-
-### Qué se implementó
-
-- sintaxis `void __interrupt isr(void)`
-- vector en `0x0004`
-- dispatch ISR
-- prólogo/epílogo ISR
-- `retfie`
-- save/restore conservador de contexto
-- restricciones de seguridad sobre el cuerpo ISR
-
-### Qué cambió en el compilador
-
-Frontend:
-
-- keyword `__interrupt`
-- marca `is_interrupt` en AST y semántica
-- validación de firma ISR
-
-IR:
-
-- `IrFunction.is_interrupt`
-
-Backend:
-
-- reset vector en `0x0000`
-- interrupt vector en `0x0004`
-- contexto ISR en shared GPR
-- restore final de `W` con `swapf`
-
-### Key design decisions
-
-La gran decisión de Phase 6 fue adoptar una política conservadora:
-
-- una sola ISR por programa
-- sin llamadas normales dentro de ISR
-- sin helpers Phase 5 dentro de ISR
-
-Esto es Option A: más simple y más segura que permitir ISR reentrantes o helper-heavy.
-
-### Trade-offs
-
-- el subconjunto ISR es más pequeño que el subconjunto normal
-- el compilador sacrifica expresividad para no corromper estado interrumpido
-
-### Limitations introduced
-
-- no hay llamadas desde ISR
-- no hay varias ISR
-- no hay un modelo de prioridades/interrupciones múltiples
-
-### Examples
-
-```c
-void __interrupt isr(void) {
-    if ((INTCON & 0x04) != 0) {
-        PORTB = PORTB ^ 0x01;
-        INTCON = INTCON & 0xFB;
-    }
-}
-```
-
----
-
-# 4. Memory Model Deep Dive
-
-## PIC16 data memory
-
-Los targets soportados se describen en `src/backend/pic16/devices.rs`. Cada `TargetDevice` declara:
-
-- vectores
-- GPR asignable
-- shared GPR
-- SFRs visibles
-- capabilities
-
-En el estado actual ambos devices usan:
-
-- GPR asignable: `0x20..0x6F`
-- shared GPR: `0x70..0x7F`
-
-Esa shared GPR se usa sobre todo para contexto ISR.
-
-## Banking
-
-El acceso directo a RAM en PIC16 no usa la dirección completa directamente. La instrucción lleva sólo 7 bits de file register y el banco efectivo se selecciona con bits del `STATUS`.
-
-Bits relevantes:
-
-- `RP0` = bit 5
-- `RP1` = bit 6
-
-El backend hace esto en `select_bank(addr)`:
-
-```text
-bank = (addr >> 7) & 0x03
-RP0 = bank bit 0
-RP1 = bank bit 1
-```
-
-Consecuencia: el compilador no puede emitir un simple `movwf addr`. Primero tiene que preparar banco correcto y luego usar `low7(addr)`.
-
-## STATUS bits críticos
-
-Bits del `STATUS` que el compilador usa activamente:
-
-- `C` bit 0: carry/borrow para suma, resta y comparaciones unsigned
-- `Z` bit 2: resultado cero
-- `RP0` bit 5: banking directo
-- `RP1` bit 6: banking directo
-- `IRP` bit 7: banking indirecto
-
-Esto vuelve delicadas tres cosas:
-
-- comparaciones 16-bit
-- direccionamiento indirecto
-- prólogos/epílogos ISR
-
-## FSR/INDF e indirect addressing
-
-Cuando el compilador quiere acceder a un puntero o a una celda del frame:
-
-1. calcula una dirección efectiva
-2. programa `FSR` con el byte bajo
-3. deriva `IRP` del byte alto
-4. lee o escribe vía `INDF`
-
-El patrón conceptual es:
-
-```text
-ptr.lo -> FSR
-ptr.hi bit0 -> STATUS.IRP
-INDF <-> byte apuntado
-```
-
-El proyecto transporta punteros como valores de 16 bits completos por uniformidad, aunque en estos dispositivos el backend explote sobre todo:
-
-- low byte
-- selector IRP
-
-## Cómo modela memoria el compilador
-
-Hay tres clases de almacenamiento:
-
-```text
-1. Absolute
-   - globals
-   - static locals
-   - SFRs
-   - helpers ABI
-
-2. Frame(offset)
-   - parámetros
-   - autos
-   - local arrays
-   - temporales IR
-
-3. Shared interrupt context
-   - __isr_ctx.*
-```
-
-Eso está encapsulado en:
-
-- `SymbolStorage::Absolute(u16)`
-- `SymbolStorage::Frame(u16)`
-
-## Cómo se colocan las variables
-
-### Globals y static locals
-
-Se asignan en RAM absoluta con `AddressAllocator`.
-
-### Parámetros
-
-No tienen dirección absoluta: viven en el frame del callee.
-
-### Autos y arrays locales
-
-Viven por offset respecto a `FP`.
-
-### Temporales IR
-
-Desde la reparación de Phase 4, también viven en el frame, no en RAM estática por función.
-
-## Por qué esto importa
-
-La misma expresión de C:
-
-```c
-ptr[i] = local + global;
-```
-
-puede tocar tres modelos de almacenamiento distintos:
-
-- `ptr[i]`: acceso indirecto
-- `local`: frame-relative
-- `global`: absolute/direct
-
-Un compilador correcto para PIC16 tiene que saber en cada byte de cada operando de dónde sale el valor y qué bits de control debe programar para llegar a él.
-
----
-
-# 5. Stack-first ABI (Phase 4)
-
-## Por qué hacía falta un ABI
-
-Antes del ABI stack-first, el compilador operaba con un modelo tipo `arg0/arg1` heredado de la fase histórica temprana. Eso tiene dos problemas estructurales:
-
-- escala mal a más de dos argumentos
-- complica nested calls porque los argumentos “globales” se pisan entre sí
-
-En cuanto quieres que compile correctamente esto:
-
-```c
-return a(b(c(1)));
-```
-
-ya no basta con slots globales.
-
-## Modelo anterior vs nuevo modelo
-
-### Modelo antiguo
-
-- argumentos en slots fijos
-- sin pila software de datos real
-- temporales más frágiles
-- llamadas complejas mal escalables
-
-### Modelo nuevo
-
-- todos los argumentos por stack software
-- caller-pushed
-- caller-cleanup
-- frame por invocación
-- temporales por invocación
-
-## Layout de stack
-
-La pila crece hacia arriba:
-
-```text
-push byte:
-  [SP] = value
-  SP = SP + 1
-```
-
-En startup:
-
-```text
-SP = stack_base
-FP = stack_base
-```
-
-## Layout de frame
-
-Si una función tiene `A` bytes de argumentos:
-
-```text
-FP + 0 .. A-1       -> argumentos
-FP + A              -> saved caller FP low
-FP + A + 1          -> saved caller FP high
-FP + A + 2 ..       -> locales
-...                 -> arrays locales
-...                 -> temporales IR
-```
-
-Diagrama resumido:
-
-```text
-                direccion creciente
-
-FP --> [arg0...]
-       [arg1...]
-       [argN...]
-       [saved FP lo]
-       [saved FP hi]
-       [local 0]
-       [local 1]
-       [local array...]
-       [temp 0]
-       [temp 1]
-SP --> top del frame actual
-```
-
-## Contrato caller/callee
-
-### Antes de llamar
-
-```text
-SP = caller_top
-```
-
-### Caller
-
-1. evalúa argumentos
-2. empuja bytes de argumentos en orden izquierda -> derecha
-3. hace `CALL`
-4. resta `arg_bytes` a `SP`
-5. captura retorno desde `W` y, si hace falta, `return_high`
-
-### Callee prologue
-
-1. guarda `FP` anterior en scratch
-2. calcula `FP = SP - arg_bytes`
-3. empuja `saved FP`
-4. avanza `SP` para reservar locales y temporales
-
-### Callee epilogue
-
-1. lee `saved FP` desde `FP + arg_bytes`
-2. hace `SP = FP + arg_bytes`
-3. restaura caller `FP`
-4. ejecuta `RETURN`
-
-## Orden de argumentos y retorno
-
-Reglas:
-
-- evaluación según orden actual del lowering
-- bytes low-first dentro de cada escalar
-- 8 bits: retorno en `W`
-- 16 bits y punteros: low en `W`, high en `return_high`
-
-## Nested calls
-
-El motivo por el que el modelo soporta nested calls es doble:
-
-- cada invocación tiene su propio frame
-- los temporales necesarios para sobrevivir a una llamada interna están en ese frame
+- el compilador trata los punteros soportados como punteros a memoria de datos
+- no soporta punteros a código
+- los vectores de reset e interrupción viven en memoria de programa
+- variables y SFR viven en memoria de datos
 
 Ejemplo:
 
 ```c
-return (a + b) + inc(c + d);
+unsigned char *p;
 ```
 
-El compilador puede calcular `a + b`, guardarlo como temp frame-scoped, llamar a `inc`, recuperar el retorno y sumar ambos resultados sin usar RAM global compartida para los temps.
+En `pic16cc`, `p` es un puntero a datos, no un puntero a instrucciones de programa.
 
-## Por qué es difícil en PIC16
+### Intuición práctica
 
-En una CPU con SP hardware y addressing modes ricos, un ABI así sale “gratis”. En PIC16 hay que sintetizarlo:
+Piensa en dos edificios distintos:
 
-- `SP` y `FP` son variables en RAM
-- cada acceso `FP + offset` se convierte en preparar `FSR`
-- cada push es un store indirecto seguido de incremento manual de `SP`
-- no hay `push`, `pop`, `enter`, `leave`
+- edificio A: instrucciones
+- edificio B: datos
 
-Esa es una idea importante para explicar el proyecto: Phase 4 no añade una feature cosmética; añade una infraestructura de ejecución que el hardware no da.
+No puedes tratar una habitación del edificio A como si fuera una habitación del edificio B.
+
+## Qué es la RAM bancarizada
+
+Definición:
+
+La RAM bancarizada es una memoria de datos dividida en bancos. La instrucción no codifica toda la dirección final de forma directa; parte de la dirección depende de bits de selección de banco.
+
+Por qué existe:
+
+- las instrucciones PIC16 son compactas
+- no hay espacio suficiente para meter direcciones grandes directas en todos los formatos
+
+Cómo se implementa aquí:
+
+- el backend usa `STATUS.RP0` y `STATUS.RP1`
+- mantiene un “banco actual”
+- antes de acceder a una dirección directa, decide si necesita cambiar de banco
+
+Ejemplo:
+
+Supón dos variables:
+
+```text
+var_a en banco 0
+var_b en banco 1
+```
+
+Acceder a ambas seguidas puede requerir:
+
+```text
+seleccionar banco 0
+leer/escribir var_a
+seleccionar banco 1
+leer/escribir var_b
+```
+
+### Analogía útil
+
+Imagina una cómoda con varios cajones.
+
+- la dirección codificada por la instrucción te dice “qué posición mirar dentro del cajón”
+- `RP0` y `RP1` te dicen “qué cajón está abierto”
+
+## Qué es el registro `W`
+
+Definición:
+
+`W` es el acumulador principal del PIC16.
+
+Por qué existe:
+
+- muchas instrucciones PIC16 están diseñadas alrededor de un único registro de trabajo
+- el hardware es muy pequeño y no ofrece una colección rica de registros generales
+
+Cómo se implementa aquí:
+
+- gran parte del backend piensa en términos de “cargar algo en `W`”, operar y guardar desde `W`
+- muchas rutas de codegen se organizan alrededor de ese patrón
+
+Ejemplo:
+
+```c
+x = 5;
+```
+
+Puede bajar a:
+
+```text
+movlw 0x05
+movwf x
+```
+
+### Consecuencia importante
+
+Cuando una CPU tiene muy pocos registros, la calidad del compilador depende mucho de:
+
+- cuándo recarga a `W`
+- cuándo puede reutilizar `W`
+- cuándo tiene que derramar a memoria
+
+Eso es justo uno de los focos de Phase 7.
+
+## Qué es la pila hardware del PIC16 y por qué no basta
+
+Definición:
+
+PIC16 sí tiene pila hardware, pero esa pila sirve para guardar direcciones de retorno de llamadas, no datos arbitrarios del programa.
+
+Por qué existe:
+
+- la CPU necesita volver al sitio correcto después de un `CALL`
+
+Por qué no basta para C:
+
+El lenguaje C necesita espacio para:
+
+- argumentos
+- variables locales automáticas
+- temporales
+- frames de llamadas anidadas
+
+La pila hardware del PIC16 no resuelve eso.
+
+Cómo se implementa aquí:
+
+- `pic16cc` construye un stack de software en RAM a partir de Phase 4
+
+Ejemplo:
+
+```c
+return a(b(c(1)));
+```
+
+Sin un stack de datos real, los intermedios de `c`, `b` y `a` se pisan con facilidad.
+
+## Qué es el direccionamiento indirecto
+
+Definición:
+
+Direccionamiento indirecto significa acceder a una posición de memoria mediante una dirección almacenada en otra ubicación, en vez de codificar directamente la dirección fija en la instrucción.
+
+Por qué existe:
+
+- porque los punteros requieren calcular una dirección en tiempo de ejecución
+- porque el stack y los frames se navegan por dirección relativa
+
+Cómo se implementa en PIC16:
+
+- `FSR` contiene la dirección
+- `INDF` es la ventana de acceso al contenido apuntado por `FSR`
+- `STATUS.IRP` ayuda con el banco indirecto
+
+Cómo lo usa `pic16cc`:
+
+- Phase 3: punteros y arrays
+- Phase 4: frame y stack
+- Phase 6: ISR con locales y temporales
+
+Ejemplo:
+
+```c
+*ptr = value;
+```
+
+Pasos conceptuales:
+
+1. leer el valor de `ptr`
+2. poner parte baja en `FSR`
+3. ajustar `IRP`
+4. escribir `value` a través de `INDF`
+
+### Analogía muy útil
+
+Piensa así:
+
+```text
+FSR  = “el dedo señala una caja”
+INDF = “abrir la caja señalada”
+```
+
+## Qué es `PCLATH`
+
+Definición:
+
+`PCLATH` es un registro que ayuda a completar la dirección de ciertas transferencias de control, como `CALL` y `GOTO`.
+
+Por qué existe:
+
+- porque las instrucciones no llevan toda la dirección completa “larga”
+- la CPU toma parte de la dirección de un registro auxiliar
+
+Cómo se implementa aquí:
+
+- el backend emite la preparación de página adecuada antes de llamadas y saltos
+- Phase 7 evita `setpage` redundantes
+
+Ejemplo:
+
+```text
+llamar a una función en otra página no es sólo “call fn”
+también exige preparar `PCLATH`
+```
+
+## Qué es un SFR
+
+Definición:
+
+SFR significa Special Function Register: registro especial del hardware.
+
+Por qué existe:
+
+- porque el hardware del microcontrolador se controla mediante registros mapeados en memoria
+
+Cómo lo implementa aquí `pic16cc`:
+
+- los headers de dispositivo los exponen por nombre
+- la semántica los registra como símbolos válidos
+- el backend usa sus direcciones reales desde el descriptor del dispositivo
+
+Ejemplo:
+
+```c
+TRISB = 0x00;
+PORTB = 0x01;
+```
+
+No estás escribiendo variables normales. Estás configurando y usando hardware real.
+
+## Resumen: por qué este hardware hace difícil escribir un compilador
+
+Ahora ya se puede formular el problema completo:
+
+- poca capacidad de direccionamiento directo
+- bancos de RAM
+- páginas de programa
+- muy pocos registros
+- acumulador `W`
+- sin stack de datos de propósito general
+- sin multiplicación/división hardware
+- 16 bits sobre una máquina muy limitada
+
+Eso convierte a `pic16cc` en un caso de estudio excelente. Obliga a que decisiones como:
+
+- IR
+- ABI
+- frames
+- helpers
+- ISR
+
+sean visibles y necesarias, no simples “ornamentos teóricos”.
 
 ---
 
-# 6. Runtime Helpers (Phase 5)
+# 5. Un programa guía que seguiremos durante el libro
 
-## Por qué hacen falta helpers
+Tener un ejemplo conductor ayuda mucho. Vamos a usar varios ejemplos, pero uno de los más sencillos será éste:
 
-PIC16 clásico no tiene:
+```c
+#include <pic16/pic16f628a.h>
 
-- multiplicación hardware
-- división hardware
-- módulo hardware
-- shifts de 16 bits de alto nivel
+unsigned char add1(unsigned char x) {
+    return x + 1;
+}
 
-Si el compilador quisiera bajar todo inline siempre, el codegen crecería mucho y se volvería más difícil de razonar. La solución adoptada es mixta:
-
-- inline cuando es barato y claro
-- helper runtime cuando la operación es cara o dinámica
-
-## Familias de helpers
-
-El módulo `src/backend/pic16/midrange14/runtime.rs` clasifica helpers por operación, ancho y signedness:
-
-- `__rt_mul_u8`
-- `__rt_mul_i8`
-- `__rt_mul_u16`
-- `__rt_mul_i16`
-- `__rt_div_u8`
-- `__rt_div_i8`
-- `__rt_div_u16`
-- `__rt_div_i16`
-- `__rt_mod_u8`
-- `__rt_mod_i8`
-- `__rt_mod_u16`
-- `__rt_mod_i16`
-- `__rt_shl8`
-- `__rt_shl16`
-- `__rt_shr_u8`
-- `__rt_shr_i8`
-- `__rt_shr_u16`
-- `__rt_shr_i16`
-
-## Multiplicación: algoritmo shift-add
-
-La multiplicación unsigned usa el patrón clásico:
-
-```text
-result = 0
-repeat bit_width times:
-  if (multiplier & 1) result += multiplicand
-  multiplicand <<= 1
-  multiplier >>= 1
+void main(void) {
+    TRISB = 0x00;
+    PORTB = add1(3);
+}
 ```
 
-En la implementación real:
+Por qué este programa es útil:
 
-- el multiplicando vive en el propio slot de argumento
-- el multiplicador también
-- el resultado vive en un local del helper
-- un contador recorre el ancho del tipo
+- tiene una función con parámetro
+- tiene una llamada
+- tiene una suma
+- toca SFR reales
+- acaba siendo fácil de seguir en cada etapa
 
-### Signed multiply
+Más adelante añadiremos ejemplos más ricos:
 
-La signed multiply:
+- arrays y punteros
+- llamadas anidadas
+- multiplicación y división
+- ISR
 
-1. detecta signo de ambos operandos
-2. normaliza a valor absoluto si hace falta
-3. corre el core unsigned
-4. reaplica signo al resultado con negación a complemento a dos
+Pero este programa base es ideal para comprender el pipeline.
 
-## División y módulo: restoring division
+---
 
-La división unsigned usa un esquema de división restauradora:
+# 6. Vista global del pipeline completo
+
+## El pipeline en una sola imagen
 
 ```text
-quotient = dividend
-remainder = 0
-repeat bit_width times:
-  rotate_left(quotient)
-  rotate_left(remainder)
-  if remainder >= divisor:
-    remainder -= divisor
-    quotient bit0 = 1
+archivo .c
+   |
+   v
+preprocesador
+   |
+   v
+lexer
+   |
+   v
+tokens
+   |
+   v
+parser
+   |
+   v
+AST
+   |
+   v
+análisis semántico
+   |
+   v
+programa tipado
+   |
+   v
+IR
+   |
+   v
+optimizaciones IR
+   |
+   v
+backend PIC16
+   |
+   v
+ensamblador interno
+   |
+   v
+codificación a palabras de 14 bits
+   |
+   v
+Intel HEX
 ```
 
-En la implementación:
+## Qué problema resuelve cada etapa
 
-- `arg0` acaba conteniendo el cociente
-- un local del helper contiene el resto
-- módulo devuelve ese resto
+### Preprocesador
 
-### Signed divide / modulo
+Resuelve:
 
-La signed division hace:
+- includes
+- macros simples
+- condicionales del preprocesador
 
-1. capturar signo del dividendo y divisor
-2. normalizar a magnitudes unsigned
-3. ejecutar core unsigned
-4. restaurar signo del cociente o del resto
+### Lexer
 
-El resto firmado sigue el signo del dividendo, no del divisor. Esa distinción es relevante y está codificada con un flag separado.
+Resuelve:
 
-## Shifts
+- pasar de caracteres sueltos a tokens
 
-### Shifts constantes
+### Parser
 
-Se emiten inline en el caller cuando el count es constante y válido.
+Resuelve:
+
+- reconstruir la estructura gramatical del programa
+
+### AST
+
+Sirve para:
+
+- representar la forma del programa sin ruido textual
+
+### Semántica
+
+Resuelve:
+
+- tipos
+- nombres
+- lvalue/rvalue
+- restricciones del lenguaje soportado
+
+### IR
+
+Sirve para:
+
+- separar frontend y backend
+- hacer explícitas operaciones que el backend necesita
+
+### Optimizaciones IR
+
+Sirven para:
+
+- simplificar el programa antes de generar asm
+
+### Backend
+
+Resuelve:
+
+- cómo bajar todo eso a PIC16 real
+
+### Encoder
+
+Resuelve:
+
+- convertir instrucciones simbólicas en palabras binarias válidas
+
+### HEX
+
+Resuelve:
+
+- producir un artefacto programable por herramientas externas
+
+## Cómo se ve esto en el repositorio
+
+Capas principales:
+
+- frontend: `src/frontend`
+- IR: `src/ir`
+- backend PIC16: `src/backend/pic16/midrange14`
+- artefactos de salida: `src/assembler`, `src/linker`, `src/hex`
+- CLI y orquestación: `src/cli`, `src/lib.rs`, `src/main.rs`
+
+Ejemplo:
+
+La función `execute` en `src/lib.rs` es el hilo que encadena todo el pipeline.
+
+---
+
+# 7. Preprocesado: la etapa anterior al lenguaje “real”
+
+## Qué es el preprocesado
+
+Definición:
+
+El preprocesado es una transformación textual previa al análisis gramatical del lenguaje.
+
+Por qué existe:
+
+- C históricamente lo incorpora
+- los headers de microcontroladores dependen muchísimo de `#include` y `#define`
+
+Cómo se implementa aquí:
+
+- en `src/frontend/preprocessor.rs`
+- soporta `#include`
+- soporta macros objeto
+- soporta condicionales del preprocesador básicos
+
+Ejemplo:
+
+```c
+#define LED 0x01
+PORTB = LED;
+```
+
+Tras el preprocesado, el compilador ya trabaja con el valor expandido.
+
+## Qué significa que el preprocesador sea “textual”
+
+Definición:
+
+Significa que opera sobre texto, no sobre AST ni sobre tipos.
+
+Por qué importa:
+
+- porque `#define` no “entiende C” como lo entiende la semántica
+- hace sustituciones previas
+
+Cómo se ve aquí:
+
+La expansión ocurre antes de tokenizar completamente el programa final.
+
+Ejemplo:
+
+```c
+#define X 3
+int a = X + 1;
+```
+
+No es el parser quien decide primero qué es `X`. Antes de eso, el preprocesador ya ha expandido el texto.
+
+## Qué resuelve `#include`
+
+Definición:
+
+`#include` inserta el contenido de un archivo en otro durante el preprocesado.
+
+Por qué existe:
+
+- para reutilizar declaraciones, macros y definiciones de dispositivo
+
+Cómo se implementa aquí:
+
+- el compilador localiza headers según `-I`
+- además conoce include dirs del usuario y del proyecto
+
+Ejemplo:
+
+```c
+#include <pic16/pic16f877a.h>
+```
+
+Ese header es fundamental porque expone nombres como:
+
+- `PORTB`
+- `TRISB`
+- `ADCON1`
+
+## Qué problema extra resuelve `pic16cc`: el origen de los diagnósticos
+
+Cuando expandes includes y macros, el texto final ya no coincide línea por línea con el fichero que escribió el usuario.
+
+Por qué importa:
+
+- si aparece un error, el usuario quiere saber en qué archivo y línea original ocurrió
+
+Cómo se implementa aquí:
+
+- el preprocesador conserva información de origen
+- el emisor de diagnósticos puede mapear errores de vuelta al fichero correcto
+
+Ejemplo:
+
+Si un error viene de un header incluido, el mensaje debe apuntar al header; si viene del archivo principal, debe apuntar allí.
+
+---
+
+# 8. Lexing: de caracteres a tokens
+
+## Qué es el lexing
+
+Definición:
+
+Lexing es el proceso de agrupar caracteres en unidades léxicas significativas llamadas tokens.
+
+Por qué existe:
+
+- porque el parser no quiere trabajar con letras una a una
+- quiere trabajar con piezas ya clasificadas
+
+Cómo se implementa aquí:
+
+- en `src/frontend/lexer.rs`
+
+Ejemplo:
+
+Código:
+
+```c
+int x = 5;
+```
+
+Tokens aproximados:
+
+```text
+KW_INT
+IDENT(x)
+ASSIGN
+INT_LITERAL(5)
+SEMICOLON
+```
+
+## Qué es un token
+
+Definición:
+
+Un token es una unidad mínima con significado sintáctico para el parser.
+
+Por qué existe:
+
+- simplifica mucho la siguiente etapa
+
+Cómo se implementa aquí:
+
+- hay tokens para keywords, identificadores, números, signos y operadores dobles
+
+Ejemplo:
+
+En:
+
+```c
+a << 1
+```
+
+el lexer reconoce `<<` como un único token, no como dos caracteres `<` independientes.
+
+## Qué diferencia hay entre keyword e identificador
+
+### Keyword
+
+Definición:
+
+Palabra reservada del lenguaje.
+
+Ejemplo:
+
+- `int`
+- `void`
+- `return`
+
+### Identificador
+
+Definición:
+
+Nombre definido por el programador o por headers/macros válidos.
+
+Ejemplo:
+
+- `counter`
+- `add1`
+- `PORTB`
+
+Por qué importa la distinción:
+
+- el parser no puede tratar igual `int` y `counter`
+
+## Qué hace el lexer con números
+
+Definición:
+
+Convierte secuencias de dígitos en literales numéricos.
+
+Cómo se implementa aquí:
+
+- reconoce decimales y hexadecimales
+
+Ejemplo:
+
+```c
+0x20
+42
+```
+
+## Qué aporta el lexer al diseñador de compiladores
+
+Le aporta la primera lección importante:
+
+```text
+antes de entender “significado” hay que estabilizar la forma de las piezas
+```
+
+Si estás diseñando tu propio compilador, esta etapa debe ser:
+
+- simple
+- determinista
+- muy fácil de depurar
+
+Porque todo lo demás se apoya en ella.
+
+---
+
+# 9. Parsing: de tokens a estructura
+
+## Qué es el parsing
+
+Definición:
+
+Parsing es el proceso de reconstruir la estructura gramatical del programa a partir de tokens.
+
+Por qué existe:
+
+- los tokens sólo dicen qué piezas hay
+- no dicen cómo se agrupan
+
+Cómo se implementa aquí:
+
+- en `src/frontend/parser.rs`
+- con niveles de precedencia y funciones por categoría sintáctica
+
+Ejemplo:
+
+Tokens:
+
+```text
+IDENT(a) PLUS IDENT(b) STAR IDENT(c)
+```
+
+El parser decide que eso es:
+
+```text
+a + (b * c)
+```
+
+y no:
+
+```text
+(a + b) * c
+```
+
+## Qué es un AST
+
+Definición:
+
+AST significa Abstract Syntax Tree, árbol de sintaxis abstracta.
+
+Por qué existe:
+
+- porque el parser necesita producir una representación estructurada del programa
+- el AST elimina detalles textuales secundarios y conserva relaciones importantes
+
+Cómo se implementa aquí:
+
+- tipos en `src/frontend/ast.rs`
+- nodos para unidad de traducción, declaraciones, sentencias y expresiones
+
+Ejemplo:
+
+Código:
+
+```c
+x = a + b;
+```
+
+AST simplificado:
+
+```text
+   =
+  / \
+ x   +
+    / \
+   a   b
+```
+
+## Qué significa “abstracto” en AST
+
+Definición:
+
+“Abstracto” significa que no conserva todos los detalles superficiales del texto original.
+
+Por qué existe:
+
+- los espacios, saltos, ciertos paréntesis redundantes y formatos visuales no importan para el significado
+
+Cómo se ve aquí:
+
+Estas dos expresiones acaban con la misma estructura:
+
+```c
+x=a+b;
+```
+
+```c
+x = a + b;
+```
+
+## Qué hace el parser con una llamada a función
+
+Ejemplo:
+
+```c
+add1(3)
+```
+
+El parser produce una estructura que ya distingue:
+
+- nombre de función
+- lista de argumentos
+
+Por qué importa:
+
+- más adelante la semántica resolverá si `add1` existe y qué firma tiene
+
+## Qué aporta esta etapa a quien quiera construir su propio compilador
+
+Una lección muy importante:
+
+```text
+el parser no debe intentar resolver todos los problemas del compilador
+```
+
+Su trabajo es reconstruir estructura.
+
+No debería decidir:
+
+- tipos finales
+- ABI
+- cómo se genera el código
+
+Esa separación de responsabilidades es una de las claves del diseño limpio.
+
+---
+
+# 10. Análisis semántico: pasar de “estructura válida” a “programa válido”
+
+## Qué es el análisis semántico
+
+Definición:
+
+Es la etapa que comprueba si el programa tiene sentido desde el punto de vista del lenguaje.
+
+Por qué existe:
+
+- porque un programa puede estar bien parseado y seguir siendo incorrecto
+
+Cómo se implementa aquí:
+
+- en `src/frontend/semantic.rs`
+
+Ejemplo:
+
+```c
+5 = x;
+```
+
+El parser puede reconocer algo con forma de asignación.
+
+La semántica lo rechaza porque `5` no es una ubicación de memoria escribible.
+
+## Qué es un símbolo
+
+Definición:
+
+Un símbolo es la representación interna de una entidad nombrada del programa.
 
 Ejemplos:
 
-- `x << 0 -> x`
-- `x >> 0 -> x`
-- `x << 3` inline
+- variables
+- funciones
+- SFR
 
-### Shifts dinámicos
+Por qué existe:
 
-Van a helper:
+- el compilador necesita asociar un nombre con información concreta
 
-```text
-while (count != 0) {
-  value = value << 1   // o >> 1
-  count--;
-}
+Cómo se implementa aquí:
+
+- la semántica crea símbolos y les asigna ids internos
+
+Ejemplo:
+
+Cuando el usuario escribe:
+
+```c
+unsigned char counter;
 ```
 
-Antes del bucle, el helper clampa `count` al ancho del operando para evitar bucles absurdos o semánticas indefinidas sin control.
+el compilador crea un símbolo para `counter`, con tipo, ámbito y almacenamiento.
 
-## Interacción con el ABI stack-first
+## Qué es un tipo
 
-Éste es uno de los puntos más importantes de Phase 5:
+Definición:
 
-- los helpers usan el mismo ABI que las funciones normales
-- el compilador actúa como caller de sus propios helpers
-- el mismo `SP/FP` y el mismo contrato de limpieza siguen valiendo
+Un tipo describe qué clase de valor es algo y qué operaciones tienen sentido sobre él.
 
-Eso convierte Phase 5 en una prueba de estrés del ABI de Phase 4: si los helpers corrompieran frames, el proyecto se desmoronaría.
+Por qué existe:
 
-## Comportamientos documentados
+- para evitar operaciones absurdas
+- para decidir conversiones
+- para saber cuántos bytes ocupa un valor
 
-- multiplicación 8-bit devuelve sólo el byte bajo
-- multiplicación 16-bit devuelve sólo los 16 bits bajos
-- división/módulo por cero constante: error en compilación
-- división/módulo por cero dinámico: devuelve `0`
-- right shift unsigned: lógico
-- right shift signed: aritmético
+Cómo se implementa aquí:
+
+Tipos soportados:
+
+- `void`
+- `char`
+- `unsigned char`
+- `int`
+- `unsigned int`
+- punteros simples a tipos soportados
+- arrays unidimensionales de tipos soportados
+
+Ejemplo:
+
+```c
+unsigned int x;
+```
+
+Semánticamente, el compilador ya sabe:
+
+- que `x` es entero sin signo
+- que ocupa 2 bytes
+- que ciertas operaciones serán válidas y otras no
+
+## Qué son lvalue y rvalue
+
+### Lvalue
+
+Definición:
+
+Expresión que representa una ubicación de memoria.
+
+Ejemplos:
+
+- `x`
+- `*ptr`
+- `arr[i]`
+
+### Rvalue
+
+Definición:
+
+Valor calculado, no directamente escribible.
+
+Ejemplos:
+
+- `x + 1`
+- `a < b`
+
+Por qué existe esta distinción:
+
+- porque en C no todo lo que puedes leer lo puedes escribir
+
+Cómo lo implementa aquí:
+
+- la semántica conserva esa información
+- es esencial para Phase 3, donde aparecen punteros y arrays
+
+## Qué significa “programa tipado”
+
+Definición:
+
+Es una representación del programa en la que cada expresión ya tiene tipo y categoría semántica conocidas.
+
+Por qué existe:
+
+- el backend no debería tener que “re-descubrir” tipos mirando AST bruto
+
+Cómo se implementa aquí:
+
+- resultado de `SemanticAnalyzer`
+- entrada para el `IrLowerer`
+
+Ejemplo:
+
+La expresión:
+
+```c
+x + 1
+```
+
+ya no es sólo “una suma”.
+
+Pasa a ser algo como:
+
+```text
+suma de tipo unsigned char
+o
+suma de tipo unsigned int
+```
+
+y eso cambia el lowering.
+
+## Qué papel juegan los casts
+
+Definición:
+
+Un cast es una conversión explícita o implícita entre tipos.
+
+Por qué existe:
+
+- porque a menudo hay que extender, truncar o reinterpretar valores
+
+Cómo se implementa aquí:
+
+- la semántica inserta casts explícitos en la representación tipada
+- la IR los convierte en instrucciones `Cast`
+
+Ejemplo:
+
+Si un byte se convierte en entero de 16 bits, la semántica deja clara la intención:
+
+- zero extend
+- sign extend
+
+Eso evita ambigüedad más adelante.
+
+## Qué diagnósticos importantes aparecen aquí
+
+Ejemplos reales del proyecto:
+
+- firma ISR inválida
+- recursión no soportada
+- puntero a local devuelto
+- división por cero constante
+- pointer-to-pointer no soportado
+- conversiones estrechas problemáticas
+
+Por qué esta etapa es ideal para esos diagnósticos:
+
+- porque aquí ya conoces tipos, símbolos y estructura
+- pero aún no has generado código
+
+## Lección para quien quiera construir su propio compilador
+
+No subestimes la semántica.
+
+Mucha gente piensa en el compilador como:
+
+```text
+parser + generador de código
+```
+
+En realidad, sin una semántica buena:
+
+- el backend se vuelve frágil
+- los errores se detectan demasiado tarde
+- la arquitectura se ensucia
 
 ---
 
-# 7. ISR Model (Phase 6)
+# 11. La representación intermedia: IR
 
-## Vector de reset e interrupción
+## Qué es una IR
 
-Layout actual:
+Definición:
+
+IR significa Intermediate Representation: representación intermedia.
+
+Por qué existe:
+
+- porque el AST está demasiado cerca del lenguaje fuente
+- el backend PIC16 necesita operaciones más explícitas
+- además permite introducir optimizaciones antes del código final
+
+Cómo se implementa aquí:
+
+- modelo en `src/ir/model.rs`
+- lowering en `src/ir/lowering.rs`
+- passes en `src/ir/passes.rs`
+
+Ejemplo:
+
+Una llamada a función en AST es todavía una expresión del lenguaje.
+
+En IR se convierte en una operación explícita:
 
 ```text
-0x0000 -> __reset_vector
-0x0004 -> __interrupt_vector
-0x2007 -> config word
+Call { dst, function, args }
 ```
 
-Comportamiento:
+## Qué significa que la IR esté basada en CFG
 
-- reset vector: `goto __reset_dispatch`
-- interrupt vector:
-  - con ISR: `goto __interrupt_dispatch`
-  - sin ISR: `retfie`
+Definición:
 
-Después de los vectores, el backend emite stubs de dispatch que también resuelven el problema de `PCLATH`.
+CFG significa Control Flow Graph, grafo de flujo de control.
 
-## Sintaxis ISR
+Qué significa en lenguaje simple:
 
-La única sintaxis soportada es:
+- una función se representa como bloques
+- cada bloque tiene posibles transiciones a otros
+
+Por qué existe:
+
+- porque `if`, `while`, `break`, `continue`, `return` y comparaciones encajan muy bien en ese modelo
+
+Cómo se implementa aquí:
+
+- `IrFunction`
+- `IrBlock`
+- terminadores como `Jump`, `Branch`, `Return`
+
+Ejemplo:
+
+Código:
 
 ```c
-void __interrupt isr(void) {
-    ...
+if (x) {
+    y = 1;
+} else {
+    y = 0;
 }
 ```
 
-## Restricciones ISR
+CFG simplificado:
 
-La semántica exige:
+```text
+entry -> branch on x
+  -> then
+  -> else
+then -> exit
+else -> exit
+```
 
-- retorno `void`
-- sin parámetros
-- una sola ISR por programa
-- sin `return value`
+## Qué es un temporal IR
+
+Definición:
+
+Un temporal IR es un valor intermedio nombrado por el compilador, no por el usuario.
+
+Por qué existe:
+
+- porque descomponer expresiones complejas en pasos simples facilita el backend
+
+Cómo se implementa aquí:
+
+- como `TempId`
+- cada temporal tiene tipo asociado
+
+Ejemplo:
+
+```c
+return (a + b) + 1;
+```
+
+IR conceptual:
+
+```text
+t0 = a + b
+t1 = t0 + 1
+return t1
+```
+
+## Qué operaciones hace explícitas la IR de este proyecto
+
+Ejemplos importantes:
+
+- `Copy`
+- `Cast`
+- `AddrOf`
+- `LoadIndirect`
+- `StoreIndirect`
+- `Call`
+- comparaciones tipadas
+
+Por qué existe esta explicitud:
+
+- porque el backend no debería deducir punteros, decay de arrays o casts mirando AST ambiguo
+
+Ejemplo:
+
+```c
+*ptr = value;
+```
+
+IR conceptual:
+
+```text
+StoreIndirect(ptr, value)
+```
+
+Eso hace visible el problema real al backend: acceso indirecto.
+
+## Qué significa “lowering a IR”
+
+Definición:
+
+Es traducir el programa tipado a esta representación intermedia.
+
+Por qué existe:
+
+- porque la semántica ya ha resuelto el significado
+- ahora toca expresarlo de forma operable para el backend
+
+Cómo se implementa aquí:
+
+- `IrLowerer::lower`
+
+Ejemplo:
+
+El `sizeof` no llega vivo al backend como una operación “misteriosa”. La semántica lo resuelve y el lowering ya lo convierte en un literal concreto.
+
+## Una idea crucial: la IR no es “una moda”
+
+A veces quien empieza en compiladores oye hablar de AST e IR y piensa que son capas “académicas”.
+
+En un proyecto como éste no lo son.
+
+Aquí la IR es práctica porque resuelve problemas concretos:
+
+- ayuda a bajar comparaciones de 16 bits
+- ayuda a hacer explícitos arrays y punteros
+- ayuda a modelar llamadas
+- permite optimizar antes del backend
+
+---
+
+# 12. Optimizaciones a nivel IR
+
+## Qué es optimizar en un compilador
+
+Definición:
+
+Optimizar es transformar el programa interno para que mantenga el mismo comportamiento observable pero con mejor coste.
+
+Qué significa “mejor coste” aquí:
+
+- menos instrucciones
+- menos temporales
+- menos helpers
+- menos cambios innecesarios de banco o página
+
+## Qué optimizaciones aplica `pic16cc` en la IR
+
+Phase 7 añade varias optimizaciones antes del backend:
+
+- propagación de constantes
+- constant folding
+- simplificación de ramas constantes
+- eliminación de código muerto
+- compactación de temporales
+
+## Propagación de constantes
+
+Definición:
+
+Si el compilador sabe que un temporal vale una constante, intenta sustituir usos posteriores por esa constante.
+
+Por qué existe:
+
+- simplifica expresiones
+- abre la puerta a otras optimizaciones
+
+Cómo se implementa aquí:
+
+- pass `constant_fold` en `src/ir/passes.rs`
+
+Ejemplo:
+
+```text
+t0 = 3
+t1 = t0 + 1
+```
+
+puede convertirse en:
+
+```text
+t1 = 3 + 1
+```
+
+y luego:
+
+```text
+t1 = 4
+```
+
+## Constant folding
+
+Definición:
+
+Es evaluar en tiempo de compilación una expresión cuyos operandos ya son constantes.
+
+Por qué existe:
+
+- evita generar trabajo inútil en tiempo de ejecución
+
+Cómo se implementa aquí:
+
+- también en `constant_fold`
+
+Ejemplo:
+
+```text
+(2 + 3) * 4
+```
+
+puede reducirse a:
+
+```text
+20
+```
+
+## Eliminación de código muerto
+
+Definición:
+
+Es eliminar instrucciones o bloques cuyo resultado no afecta al comportamiento final.
+
+Por qué existe:
+
+- el lowering y otras optimizaciones pueden dejar restos inútiles
+
+Cómo se implementa aquí:
+
+- `dead_code_elimination`
+
+Ejemplo:
+
+```text
+t0 = a + b
+// nadie usa t0
+```
+
+Si `t0` no tiene efectos laterales, puede eliminarse.
+
+## Compactación de temporales
+
+Definición:
+
+Es remapear temporales vivos para usar menos slots efectivos.
+
+Por qué existe:
+
+- en este compilador los temporales viven en el frame
+- menos temporales útiles significa menos presión sobre el frame
+
+Cómo se implementa aquí:
+
+- `compact_temps`
+
+Ejemplo:
+
+Si sobreviven sólo `t0` y `t4`, puede renumerarlos como `t0` y `t1`.
+
+## Lección de diseño
+
+En un compilador pequeño y serio, una buena IR con unas cuantas optimizaciones honestas vale mucho más que intentar hacer magia tarde en el backend.
+
+---
+
+# 13. Backend PIC16: donde la semántica se encuentra con la máquina
+
+## Qué es el backend
+
+Definición:
+
+El backend es la parte del compilador que traduce la IR a operaciones concretas de la arquitectura destino.
+
+Por qué existe:
+
+- porque el frontend no debería conocer detalles de ISA
+- porque el mismo frontend podría, en teoría, reutilizarse con otros backends
+
+Cómo se implementa aquí:
+
+- backend compartido `src/backend/pic16/midrange14`
+
+Piezas relevantes:
+
+- `codegen.rs`
+- `asm.rs`
+- `encoder.rs`
+- `runtime.rs`
+
+## Qué hace exactamente `codegen.rs`
+
+Definición:
+
+Es el corazón del lowering final a instrucciones simbólicas PIC16.
+
+Por qué existe:
+
+- porque alguien tiene que decidir cómo se implementa cada instrucción IR sobre una máquina concreta
+
+Cómo se implementa aquí:
+
+- emite `AsmInstr`
+- decide banking
+- decide paging
+- decide prologues/epilogues
+- integra helpers
+- integra ISR
+
+Ejemplo:
+
+Una suma de 16 bits en IR no es una sola instrucción PIC16. `codegen.rs` la descompone en secuencias byte a byte con carry.
+
+## Qué es el ensamblador interno
+
+Definición:
+
+Es una representación estructurada y legible de instrucciones PIC16 antes de codificarlas como palabras.
+
+Por qué existe:
+
+- permite depuración humana
+- permite generar `.asm`
+- permite optimización peephole
+
+Cómo se implementa aquí:
+
+- `AsmProgram`, `AsmLine`, `AsmInstr` en `asm.rs`
+
+Ejemplo:
+
+```text
+movlw 0x01
+movwf 0x06
+```
+
+Esto ya es “muy cercano” a la máquina, pero todavía no es binario final.
+
+## Qué es el encoder
+
+Definición:
+
+Es la etapa que toma instrucciones simbólicas y las convierte en palabras de 14 bits reales.
+
+Por qué existe:
+
+- porque el microcontrolador ejecuta bits, no strings como `movlw`
+
+Cómo se implementa aquí:
+
+- `encoder.rs`
+
+Ejemplo:
+
+`retfie` tiene una codificación concreta. El encoder debe producir exactamente esa palabra.
+
+## Qué es el Intel HEX writer
+
+Definición:
+
+Es la etapa que empaqueta las palabras de programa en el formato Intel HEX.
+
+Por qué existe:
+
+- porque ése es el artefacto que usan herramientas de grabación y flasheo
+
+Cómo se implementa aquí:
+
+- `src/hex/intel_hex.rs`
+
+Ejemplo:
+
+Además de código, también debe manejar:
+
+- config word
+- EOF
+
+## Qué problema adicional resuelve el backend aquí
+
+En un compilador para arquitectura cómoda, el backend ya es complejo.
+
+Aquí además debe resolver:
+
+- stack de software
+- acceso indirecto a frames
+- runtime helpers
+- ISR con guardado de contexto
+- bank/page management
+- optimizaciones Phase 7
+
+Por eso es el componente más intensamente “arquitectura-dependiente” del proyecto.
+
+---
+
+# 14. Un recorrido pedagógico completo por el pipeline
+
+Vamos a seguir el programa guía desde la fuente hasta la salida final.
+
+Programa:
+
+```c
+#include <pic16/pic16f628a.h>
+
+unsigned char add1(unsigned char x) {
+    return x + 1;
+}
+
+void main(void) {
+    TRISB = 0x00;
+    PORTB = add1(3);
+}
+```
+
+## Etapa 1: preprocesado
+
+Lo primero que ocurre es:
+
+- se resuelve el `#include`
+- el compilador incorpora el header del dispositivo
+- nombres como `TRISB` y `PORTB` ya quedan disponibles
+
+## Etapa 2: lexing
+
+Parte del código se convierte en tokens.
+
+Ejemplo aproximado para:
+
+```c
+return x + 1;
+```
+
+Tokens:
+
+```text
+KW_RETURN
+IDENT(x)
+PLUS
+INT_LITERAL(1)
+SEMICOLON
+```
+
+## Etapa 3: parsing
+
+El parser reconstruye:
+
+```text
+return
+  +
+ / \
+x   1
+```
+
+y además entiende:
+
+- que `add1` es una función
+- que `main` es otra
+- que `PORTB = add1(3)` es una asignación cuyo lado derecho es una llamada
+
+## Etapa 4: análisis semántico
+
+Ahora el compilador decide:
+
+- `x` es `unsigned char`
+- `1` debe adaptarse al tipo correcto de la suma
+- `add1` devuelve `unsigned char`
+- `TRISB` y `PORTB` son SFR válidos del dispositivo
+
+Además clasifica:
+
+- `PORTB` es lvalue
+- `add1(3)` es rvalue
+
+## Etapa 5: lowering a IR
+
+Versión conceptual simplificada:
+
+```text
+fn add1:
+  t0 = x + 1
+  return t0
+
+fn main:
+  TRISB = 0
+  t0 = call add1(3)
+  PORTB = t0
+  return void
+```
+
+Esta IR no es todavía ensamblador, pero ya es muchísimo más explícita que el C original.
+
+## Etapa 6: optimización IR
+
+Si hay optimización activada:
+
+- constantes pueden propagarse
+- temporales muertos pueden desaparecer
+- ramas constantes pueden simplificarse
+
+En este ejemplo concreto las ganancias pueden ser modestas, pero en programas más ricos son importantes.
+
+## Etapa 7: codegen PIC16
+
+Ahora el backend decide:
+
+- cómo pasar el argumento `3` a `add1`
+- cómo leer `x` dentro de `add1`
+- cómo devolver el resultado en `W`
+- cómo escribir a `PORTB`
+
+## Etapa 8: encoder
+
+Las instrucciones simbólicas resultantes se convierten a palabras de 14 bits.
+
+## Etapa 9: Intel HEX
+
+Esas palabras se escriben en registros Intel HEX listos para programar el micro.
+
+## Por qué este recorrido importa
+
+Porque permite responder una pregunta fundamental:
+
+```text
+¿qué parte del compilador es responsable de cada cosa?
+```
+
+Si entiendes esto bien, ya no verás el compilador como una caja negra.
+
+---
+
+# 15. Evolución histórica del compilador: de v0.1 a Phase 7
+
+Este capítulo es central porque enseña algo muy valioso: un compilador no suele nacer “completo”. Crece resolviendo problemas concretos en orden.
+
+## v0.1: establecer la cadena mínima completa
+
+### Problema
+
+Antes de hablar de optimización, arrays o ISR, el proyecto necesitaba demostrar una cosa elemental:
+
+```text
+puedo compilar de C a un artefacto PIC16 real
+```
+
+### Concepto introducido: pipeline completo
+
+Qué es:
+
+la cadena entera desde archivo fuente hasta `.hex`
+
+Por qué existe:
+
+- sin pipeline completo no hay base para validar ninguna fase posterior
+
+Cómo se implementó aquí:
+
+- CLI
+- frontend básico
+- backend mínimo
+- encoding
+- HEX
+
+### Qué se ganó
+
+- estructura del proyecto
+- delimitación entre frontend, IR y backend
+- primeros ejemplos reales
+
+### Ejemplo
+
+Un blink simple ya permite validar:
+
+- lectura de headers
+- uso de SFR
+- generación de salida programable
+
+### Trade-off
+
+Se sacrifica riqueza de lenguaje para ganar infraestructura.
+
+## Phase 2: 16 bits y comparaciones reales
+
+### Problema
+
+El subconjunto inicial no bastaba para trabajar cómodamente con enteros de 16 bits y comparaciones más interesantes.
+
+### Concepto introducido: representación little-endian de 16 bits
+
+Qué es:
+
+representar un valor de 16 bits como dos bytes, bajo primero y alto después
+
+Por qué existe:
+
+- la CPU es de 8 bits, pero el lenguaje necesita valores más anchos
+
+Cómo se implementa aquí:
+
+- layout little-endian uniforme en globals, locals, params y temporales
+
+Ejemplo:
+
+```text
+0x1234 -> low=0x34, high=0x12
+```
+
+### Concepto introducido: ABI por slots fijos
+
+Qué es:
+
+un ABI muy limitado basado en unos pocos slots reservados (`arg0`, `arg1`, etc.)
+
+Por qué existía:
+
+- era una forma simple de arrancar antes de tener stack de software
+
+Cómo se implementó:
+
+- dos argumentos máximos
+- `W + return_high` para retorno 16-bit
+
+### Qué se implementó
+
+- enteros de 16 bits
+- comparaciones signed/unsigned
+- casts explícitos en IR
+- booleanos normalizados a `0` o `1`
+
+### Trade-off
+
+El ABI por slots sirve para comenzar, pero no escala.
+
+## Phase 3: arrays, punteros y modelo de memoria
+
+### Problema
+
+Sin punteros ni arrays reales, el compilador seguía siendo demasiado estrecho para firmware mínimamente interesante.
+
+### Concepto introducido: address-of y dereference
+
+Qué es:
+
+- `&x`: obtener dirección
+- `*ptr`: acceder a través de dirección
+
+Por qué existe:
+
+- es el corazón del modelo de memoria de C
+
+Cómo se implementa aquí:
+
+- `AddrOf`
+- `LoadIndirect`
+- `StoreIndirect`
+- lowering con `FSR/INDF`
+
+### Qué se implementó
+
+- arrays unidimensionales
+- punteros a datos
+- decay de arrays
+- indexación
+- loads/stores indirectos
+
+### Trade-off
+
+Se gana mucho poder expresivo, pero aún sin software stack. Los locales y llamadas complejas siguen pendientes.
+
+## Phase 4: Stack-first ABI y frames
+
+### Problema
+
+El ABI anterior y el modelo de memoria por llamada eran insuficientes para:
+
+- 3+ argumentos
+- llamadas anidadas profundas
+- temporales por invocación
+- locales y arrays locales robustos
+
+### Concepto introducido: ABI
+
+Qué es:
+
+el contrato binario entre caller y callee
+
+Por qué existe:
+
+- para que distintas funciones compiladas por separado cooperen sin corrupción de estado
+
+Cómo se implementa aquí:
+
+- caller-pushed
+- caller-cleanup
+- stack-first
+- upward-growing software stack
+
+### Concepto introducido: stack de software
+
+Qué es:
+
+una pila implementada en RAM por el compilador, no por el hardware
+
+Por qué existe:
+
+- el PIC16 no da una pila de datos general
+
+Cómo se implementa aquí:
+
+- `stack_ptr`
+- `frame_ptr`
+- acceso por `FSR/INDF`
+
+### Qué se implementó
+
+- software stack real
+- frames por llamada
+- 3+ argumentos
+- locals, arrays y temporales por frame
+- nested calls correctas
+
+### Ejemplo crítico
+
+```c
+return a(b(c(1)));
+```
+
+Sin frame model, eso es propenso a corrupción.
+
+Con Phase 4, cada llamada tiene su propio espacio.
+
+### Trade-off
+
+Es una mejora decisiva, pero introduce complejidad backend muy seria y obliga a rechazar recursión.
+
+## Phase 5: helpers aritméticos
+
+### Problema
+
+El lenguaje ya parseaba `*`, `/`, `%` y shifts, pero el backend debía soportarlos de verdad.
+
+### Concepto introducido: helper runtime
+
+Qué es:
+
+una rutina interna del compilador para implementar operaciones complejas
+
+Por qué existe:
+
+- porque la ISA PIC16 no ofrece ciertas operaciones por hardware
+
+Cómo se implementa aquí:
+
+- `__rt_mul_*`
+- `__rt_div_*`
+- `__rt_mod_*`
+- `__rt_sh*`
+
+### Qué se implementó
+
+- multiply/divide/modulo signed y unsigned
+- shifts
+- fast paths simples inline
+
+### Trade-off
+
+Se añade runtime interno, pero se gana soporte aritmético real.
+
+## Phase 6: ISR
+
+### Problema
+
+Un compilador para firmware real necesita una historia clara para interrupciones.
+
+### Concepto introducido: ISR
+
+Qué es:
+
+ruta de ejecución asíncrona disparada por hardware
+
+Por qué existe:
+
+- para responder a eventos sin polling constante
+
+Cómo se implementa aquí:
+
+- `void __interrupt isr(void)`
+- vector `0x0004`
+- `retfie`
+- guardado/restaurado conservador de contexto
+
+### Qué se implementó
+
+- vector de interrupción
+- prologue/epilogue ISR
+- restricciones de seguridad
+
+### Trade-off
+
+Se eligió un modelo restringido pero seguro:
+
+- una ISR
 - sin llamadas normales
-- sin expresiones que requieran helpers runtime
+- sin helpers dentro de ISR
 
-Esto no es un capricho. Está alineado con la elección consciente de un modelo conservador.
+## Phase 7: calidad de código
 
-## Save/restore de contexto
+### Problema
 
-El ISR guarda:
+El compilador ya era funcional, pero todavía podía generar código innecesariamente torpe.
+
+### Concepto introducido: optimización conservadora
+
+Qué es:
+
+mejorar tamaño/claridad/eficiencia sin cambiar semántica
+
+Cómo se implementa aquí:
+
+- constantes
+- DCE
+- compactación de temporales
+- peephole
+- fast paths para potencias de dos
+- `--opt-report`
+
+### Trade-off
+
+No hay optimización global agresiva. Se prioriza corrección.
+
+---
+
+# 16. Modelo de memoria en profundidad
+
+Este capítulo amplía Phase 3 y Phase 4 desde una perspectiva más pedagógica.
+
+## Qué es un modelo de memoria
+
+Definición:
+
+Es la explicación de cómo el compilador representa y organiza los datos en la máquina destino.
+
+Por qué existe:
+
+- porque el lenguaje habla de variables y direcciones
+- pero el hardware sólo ve bytes en ubicaciones concretas
+
+Cómo se implementa aquí:
+
+- globales en RAM
+- SFR por descriptor
+- helper slots ABI
+- contexto ISR
+- stack de software
+- acceso directo e indirecto
+
+Ejemplo:
+
+Una variable global, un local, un temporal y un SFR no son “lo mismo”, aunque desde C todos parezcan nombres.
+
+## Globales
+
+Qué son:
+
+variables con vida durante todo el programa
+
+Por qué existen:
+
+- para estado persistente
+
+Cómo se implementan aquí:
+
+- ocupan direcciones RAM globales
+- aparecen en `.map`
+
+Ejemplo:
+
+```c
+unsigned char counter;
+```
+
+## Locales
+
+Qué son:
+
+variables con vida limitada a una invocación concreta
+
+Por qué existen:
+
+- encapsulan trabajo interno de una función
+
+Cómo se implementan aquí:
+
+- desde Phase 4 viven en el frame del stack de software
+
+Ejemplo:
+
+```c
+void f(void) {
+    unsigned char local;
+}
+```
+
+## Arrays
+
+Qué son:
+
+zonas contiguas de elementos del mismo tipo
+
+Por qué existen:
+
+- permiten almacenamiento secuencial indexado
+
+Cómo se implementan aquí:
+
+- unidimensionales
+- tamaño fijo
+- elementos soportados
+
+Ejemplo:
+
+```c
+unsigned int words[2];
+```
+
+Layout conceptual:
+
+```text
+words[0].low
+words[0].high
+words[1].low
+words[1].high
+```
+
+## Punteros
+
+Qué son:
+
+valores que representan direcciones
+
+Por qué existen:
+
+- para acceso indirecto
+- para pasar referencias
+- para decay de arrays
+
+Cómo se implementan aquí:
+
+- 16 bits
+- little-endian
+- sólo data-space
+
+Ejemplo:
+
+```c
+unsigned int *p;
+```
+
+## Directo vs indirecto
+
+### Acceso directo
+
+Qué es:
+
+acceder a una dirección fija conocida por el compilador
+
+Cómo se implementa aquí:
+
+- selección de banco
+- instrucción directa de fichero
+
+Ejemplo:
+
+```c
+PORTB = 1;
+```
+
+### Acceso indirecto
+
+Qué es:
+
+acceder mediante una dirección calculada
+
+Cómo se implementa aquí:
+
+- `FSR`
+- `INDF`
+- `IRP`
+
+Ejemplo:
+
+```c
+*p = 1;
+```
+
+## Escalado de índices
+
+Qué es:
+
+ajustar un índice por el tamaño del elemento.
+
+Por qué existe:
+
+- `arr[i]` no significa “sumar i bytes” siempre
+- depende del tipo del elemento
+
+Cómo se implementa aquí:
+
+- `char` y `unsigned char`: escala 1
+- `int` y `unsigned int`: escala 2
+
+Ejemplo:
+
+```c
+unsigned int arr[4];
+arr[3]
+```
+
+La dirección real no es `base + 3`, sino `base + 3 * 2`.
+
+## Lección general
+
+Quien diseña un compilador para una máquina pequeña debe dejar de pensar en “variables abstractas” cuanto antes. Debe empezar a pensar en:
+
+- bytes
+- direcciones
+- offsets
+- accesos directos
+- accesos indirectos
+
+Ésa es una de las enseñanzas más valiosas de Phase 3 y Phase 4.
+
+---
+
+# 17. ABI, stack y frames en profundidad
+
+Este capítulo es el corazón conceptual del proyecto.
+
+## Qué es un ABI
+
+Definición:
+
+ABI significa Application Binary Interface.
+
+Por qué existe:
+
+- para que módulos binarios puedan cooperar
+- para que caller y callee hablen el mismo protocolo
+
+Cómo se implementa aquí:
+
+- stack-first ABI
+- caller pushes args
+- caller cleanup
+- retorno 8-bit en `W`
+- retorno 16-bit en `W + return_high`
+
+Ejemplo:
+
+Si una función espera argumentos en stack pero otra los deja en slots fijos, el programa se rompe. Ésa es precisamente la razón de ser del ABI.
+
+## Qué es un stack
+
+Definición:
+
+Estructura LIFO, último en entrar, primero en salir.
+
+Por qué existe en llamadas:
+
+- las llamadas se anidan
+- los retornos se deshacen en orden inverso
+
+Cómo se implementa aquí:
+
+- stack de software en RAM
+
+Ejemplo:
+
+```text
+main
+  -> f
+     -> g
+```
+
+Los datos de `g` se retiran antes que los de `f`, y los de `f` antes que los de `main`.
+
+## Qué es un frame
+
+Definición:
+
+Es la porción del stack que pertenece a una invocación concreta.
+
+Por qué existe:
+
+- separa memoria entre llamadas
+
+Cómo se implementa aquí:
+
+- base estable en `frame_ptr`
+- offsets relativos para args, saved FP, locals y temps
+
+Diagrama:
+
+```text
+FP -> [ args ]
+      [ saved FP ]
+      [ locals ]
+      [ temps ]
+```
+
+## Qué es `SP`
+
+Definición:
+
+Stack Pointer, el tope del stack.
+
+Por qué existe:
+
+- para saber dónde queda espacio libre o dónde termina el frame actual
+
+Cómo se implementa aquí:
+
+- helper slot `stack_ptr`
+
+Ejemplo:
+
+Empujar un argumento significa avanzar `SP`.
+
+## Qué es `FP`
+
+Definición:
+
+Frame Pointer, la base del frame actual.
+
+Por qué existe:
+
+- porque `SP` cambia
+- y los offsets de parámetros/locales deben medirse respecto a un punto estable
+
+Cómo se implementa aquí:
+
+- helper slot `frame_ptr`
+
+Ejemplo:
+
+Leer el primer parámetro es más fácil como `FP + 0` que como “posición relativa al SP actual después de varias reservas”.
+
+## Layout del frame explicado paso a paso
+
+### Paso 1: caller empuja argumentos
+
+Supongamos:
+
+```c
+sum4(1, 2, 3, 4)
+```
+
+El caller hace conceptualmente:
+
+```text
+push 1
+push 2
+push 3
+push 4
+call sum4
+```
+
+### Paso 2: callee guarda el `FP` anterior
+
+Por qué:
+
+- al terminar hay que volver al frame anterior
+
+### Paso 3: callee fija su nuevo `FP`
+
+Por qué:
+
+- necesita una referencia estable
+
+### Paso 4: callee reserva locals y temps
+
+Por qué:
+
+- necesita espacio propio de trabajo
+
+### Resultado
+
+```text
+FP + 0 ... arg_bytes-1     -> argumentos
+FP + arg_bytes             -> saved FP low
+FP + arg_bytes + 1         -> saved FP high
+FP + arg_bytes + 2 ...     -> locals y temps
+```
+
+## Caller vs callee: responsabilidades
+
+### Responsabilidad del caller
+
+- evaluar argumentos
+- empujarlos
+- invocar
+- limpiar bytes de argumentos
+- leer retorno
+
+### Responsabilidad del callee
+
+- guardar FP anterior
+- fijar nuevo FP
+- reservar frame interno
+- ejecutar cuerpo
+- restaurar SP y FP
+- retornar
+
+Por qué esta separación importa:
+
+- porque si ambos limpian la misma zona, el stack se corrompe
+- si ninguno la limpia, el stack crece mal
+
+## Ejemplo detallado: llamada simple
+
+Código:
+
+```c
+unsigned char add1(unsigned char x) {
+    return x + 1;
+}
+```
+
+Flujo conceptual:
+
+```text
+caller:
+  push x
+  call add1
+  cleanup 1 byte
+
+add1:
+  save old FP
+  set new FP
+  reserve temp
+  load x
+  sum 1
+  return in W
+```
+
+## Ejemplo detallado: llamadas anidadas
+
+Código:
+
+```c
+int a(int x);
+int b(int y);
+int c(int z);
+
+int main(void) {
+    return a(b(c(1)));
+}
+```
+
+Mentalmente:
+
+```text
+frame main
+  frame c
+  vuelve c
+  frame b
+  vuelve b
+  frame a
+  vuelve a
+```
+
+Cada invocación tiene espacio lógico propio.
+
+## Por qué se rechaza recursión
+
+Definición:
+
+Recursión es cuando una función se llama a sí misma directa o indirectamente.
+
+Por qué se rechaza:
+
+- el compilador calcula la profundidad máxima de stack estáticamente
+- con recursión, ese cálculo deja de ser un DAG limpio
+- además no hay detección dinámica de overflow
+
+Ejemplo:
+
+```c
+int f(int x) { return f(x); }
+```
+
+Se rechaza semánticamente.
+
+## Qué te enseña esto para construir tu propio compilador
+
+Una lección fundamental:
+
+```text
+si tu arquitectura no te da una pila cómoda,
+tu compilador debe construir un modelo de llamadas extremadamente explícito
+```
+
+No puedes posponer esta decisión demasiado. Cuando el lenguaje empieza a tener:
+
+- arrays locales
+- llamadas anidadas
+- helpers internos
+
+el ABI deja de ser un detalle. Se convierte en la espina dorsal del compilador.
+
+---
+
+# 18. Runtime helpers y aritmética compleja
+
+## Qué es un runtime helper
+
+Definición:
+
+Una rutina auxiliar que el compilador genera para implementar una operación demasiado compleja o demasiado larga para expandirse siempre inline.
+
+Por qué existe:
+
+- porque el hardware PIC16 clásico no ofrece instrucciones cómodas para todo
+
+Cómo se implementa aquí:
+
+- en `src/backend/pic16/midrange14/runtime.rs`
+- emitidos sólo si se usan
+
+Ejemplo:
+
+- `__rt_mul_u16`
+- `__rt_div_i16`
+- `__rt_mod_u8`
+
+## Por qué hacen falta helpers para multiplicar
+
+Definición del problema:
+
+PIC16 no tiene una instrucción nativa de multiplicación clásica del tipo:
+
+```text
+mul a, b
+```
+
+Por qué importa:
+
+- C sí tiene operador `*`
+- por tanto el compilador debe implementarlo de algún modo
+
+Cómo se implementa aquí:
+
+- algoritmo shift-and-add
+
+## Multiplicación shift-and-add, desde cero
+
+### Qué es
+
+Es un algoritmo que combina:
+
+- mirar bits del multiplicador
+- desplazar el multiplicando
+- sumar sólo cuando el bit correspondiente vale 1
+
+### Por qué existe
+
+- es simple
+- funciona bien sin hardware dedicado
+
+### Cómo se implementa aquí
+
+- helpers distintos por signedness y anchura
+
+### Ejemplo paso a paso: `6 * 5`
+
+Valores:
+
+```text
+6 = 0110
+5 = 0101
+```
+
+Proceso:
+
+```text
+bit 0 de 5 = 1 -> sumar 6
+bit 1 de 5 = 0 -> no sumar
+bit 2 de 5 = 1 -> sumar 24
+resultado = 30
+```
+
+La belleza del método es que transforma multiplicar en combinar:
+
+- inspección de bits
+- shifts
+- sumas
+
+operaciones todas ellas razonables para un PIC16.
+
+## Por qué hacen falta helpers para dividir y hacer módulo
+
+Dividir es todavía más incómodo que multiplicar.
+
+Por qué:
+
+- tampoco hay instrucción hardware
+- además el resultado puede requerir:
+  - cociente
+  - resto
+
+Cómo se implementa aquí:
+
+- restoring division
+- helpers `__rt_div_*` y `__rt_mod_*`
+
+## Qué es restoring division, explicado sin sobrecarga matemática
+
+Definición:
+
+Es un algoritmo que va construyendo el cociente bit a bit mientras mantiene un acumulador parcial y compara/resta contra el divisor.
+
+Por qué existe:
+
+- es una receta sistemática y razonable para hardware sin división nativa
+
+Cómo lo implementa aquí:
+
+- núcleo unsigned
+- normalización de signos para casos signed
+
+Ejemplo intuitivo:
+
+```text
+13 / 3 = 4 resto 1
+```
+
+La idea operativa es:
+
+```text
+intentar si el divisor “cabe”
+si cabe, restar y marcar bit del cociente
+si no cabe, dejar ese bit a cero
+repetir
+```
+
+## Signed vs unsigned
+
+Definición:
+
+- unsigned: todos los bits se interpretan como magnitud
+- signed: el bit alto representa signo
+
+Por qué importa:
+
+- el mismo patrón binario no significa lo mismo
+- `>>` no se comporta igual
+- división y módulo necesitan cuidado
+
+Cómo se implementa aquí:
+
+- helpers signed separados
+- normalización de signos
+- restauración final del signo
+
+Ejemplo:
+
+```c
+int div16(int a, int b) {
+    return a / b;
+}
+```
+
+Si `a` es negativo, el helper debe tener en cuenta signo y dos complementos, no sólo magnitudes puras.
+
+## Shifts
+
+## Qué es un shift
+
+Definición:
+
+Desplazar bits a izquierda o derecha.
+
+Por qué existe:
+
+- es una operación del lenguaje
+- y además es útil como bloque básico para otras operaciones
+
+Cómo se implementa aquí:
+
+- counts constantes inline
+- counts dinámicos por helper o bucle
+- `>>` unsigned lógico
+- `>>` signed aritmético
+
+Ejemplo:
+
+```c
+x << 1
+```
+
+equivale conceptualmente a multiplicar por 2, salvo detalles de overflow/truncación de anchura fija.
+
+## Qué casos se evitan inline
+
+Phase 7 añade fast paths importantes:
+
+- `x / 2^n` unsigned -> shift right
+- `x % 2^n` unsigned -> máscara
+
+Ejemplo:
+
+```c
+value / 4
+```
+
+puede bajar a:
+
+```text
+shift right 2
+```
+
+en vez de llamar a `__rt_div_u16`.
+
+## Qué te enseña esto para diseñar tu propio compilador
+
+Una lección crucial:
+
+```text
+no toda operación del lenguaje debe bajar inline
+ni toda operación compleja debe ir siempre a helper
+```
+
+La buena ingeniería está en elegir:
+
+- qué casos son triviales
+- qué casos merecen helper
+- qué casos son ilegales o ambiguos
+
+---
+
+# 19. ISR e interrupciones en profundidad
+
+## Qué es una interrupción
+
+Definición:
+
+Un mecanismo por el cual el hardware interrumpe temporalmente el flujo normal y fuerza a la CPU a ejecutar una rutina especial.
+
+Por qué existe:
+
+- para reaccionar a eventos en tiempo oportuno
+
+Ejemplos:
+
+- timer
+- GPIO
+- periféricos
+
+## Qué es una ISR
+
+Definición:
+
+Interrupt Service Routine: rutina que atiende la interrupción.
+
+Cómo se implementa aquí:
+
+- sintaxis: `void __interrupt isr(void)`
+
+Por qué esa sintaxis:
+
+- es simple
+- encaja bien con el parser actual
+- evita introducir varias formas equivalentes que compliquen el frontend
+
+Ejemplo:
+
+```c
+void __interrupt isr(void) {
+    if (T0IF) {
+        T0IF = 0;
+        PORTB = PORTB ^ 0x01;
+    }
+}
+```
+
+## Qué es un vector
+
+Definición:
+
+Una dirección fija de programa a la que el hardware salta automáticamente ante un evento especial.
+
+Por qué existe:
+
+- porque el hardware necesita un punto de entrada conocido
+
+Cómo se implementa aquí:
+
+- reset vector en `0x0000`
+- interrupt vector en `0x0004`
+
+Ejemplo:
+
+```text
+0x0000 -> camino de arranque
+0x0004 -> camino de interrupción
+```
+
+## Qué significa guardar contexto
+
+Definición:
+
+Copiar el estado relevante antes de entrar a la ISR para poder restaurarlo al salir.
+
+Por qué existe:
+
+- porque la ISR interrumpe cualquier punto arbitrario del programa
+- ese punto podría estar usando registros y slots temporales delicados
+
+Cómo se implementa aquí:
+
+Se guarda:
 
 - `W`
 - `STATUS`
@@ -1251,708 +3092,1892 @@ El ISR guarda:
 - `stack_ptr`
 - `frame_ptr`
 
-Se guarda en shared GPR porque:
+Ejemplo:
 
-- al restaurar `STATUS` se alteran bits de banca
-- `W` debe restaurarse al final sin destruir flags o direcciones
-- `swapf` permite reconstruir `W` desde RAM de forma segura
+Si el programa normal estaba usando `FSR` para navegar un frame y la ISR lo pisa sin restaurar, el retorno al flujo interrumpido sería corrupto.
 
-## Secuencia ISR real
+## Por qué la ISR está restringida
 
-```text
-interrupt vector
-  -> dispatch
-  -> save contexto CPU + ABI
-  -> prologue normal de frame
-  -> cuerpo ISR
-  -> epilogue normal de frame
-  -> restore contexto CPU + ABI
-  -> retfie
+### Regla
+
+`pic16cc` elige una política conservadora:
+
+- una sola ISR
+- no llamadas normales dentro de ISR
+- no helpers aritméticos dentro de ISR
+
+### Por qué existe
+
+- porque las ISR son peligrosas
+- porque una llamada normal o un helper interno introducirían más cambios de contexto y más presión sobre el estado interrumpido
+
+### Cómo se implementa aquí
+
+- el parser reconoce la ISR
+- la semántica valida la firma
+- la semántica recorre el cuerpo y rechaza operaciones prohibidas
+- el backend emite prologue/epilogue ISR distintos de los normales
+
+### Ejemplo
+
+Válido:
+
+```c
+void __interrupt isr(void) {
+    if (T0IF) {
+        T0IF = 0;
+    }
+}
 ```
 
-## Por qué ISR es peligrosa
+No válido:
 
-Una ISR puede interrumpir al programa en cualquier punto:
+```c
+void helper(void) {}
 
-- en mitad de una llamada
-- en mitad de una operación 16-bit
-- con `PCLATH` apuntando a otra página
-- con `FSR` apuntando a un frame o a un puntero
+void __interrupt isr(void) {
+    helper();
+}
+```
 
-Por eso la política de save/restore es deliberadamente conservadora. El compilador asume que interrumpe en el peor momento posible.
+## Qué es `retfie`
 
-## Por qué se restringen llamadas y helpers
+Definición:
 
-Si una ISR pudiera llamar libremente a funciones normales o a helpers runtime, habría que resolver temas mucho más duros:
+La instrucción de retorno de interrupción de PIC16.
 
-- reentrada del runtime
-- reentrada indirecta del ABI
-- helpers que usan scratch y frame en mitad de un contexto interrumpido
-- coste extra de save/restore o convenciones separadas
+Por qué existe:
 
-El proyecto elige no abrir ese frente todavía.
+- volver de una interrupción no es exactamente igual que volver de una llamada normal
+
+Cómo se implementa aquí:
+
+- el backend ISR termina con `retfie`
+- el encoder sabe codificarla
+
+Ejemplo:
+
+En `.asm` y `.lst`, una ISR correcta debe terminar con `retfie`, no con `return`.
+
+## Lección para tu propio compilador
+
+Si alguna vez diseñas soporte de interrupciones:
+
+- no empieces por “qué sintaxis bonita quiero”
+- empieza por “qué estado del hardware y del runtime debo preservar”
+
+Ésa es la pregunta correcta.
 
 ---
 
-# 8. Code Generation for PIC16
+# 20. Optimización y calidad del código generado
 
-## ISA y representación de ensamblado
+## Qué significa “optimizar” en este proyecto
 
-El backend no genera bytes directamente. Primero genera un `AsmProgram` estructurado con:
+No significa “perseguir el código perfecto”.
 
-- `Org`
-- `Label`
-- `Instr`
-- `Comment`
+Significa:
 
-Las instrucciones se modelan en `AsmInstr`, por ejemplo:
+- reducir redundancias
+- evitar helpers innecesarios
+- simplificar la IR
+- no tocar la semántica
+- no romper ISR ni ABI
 
-- `Movlw`
-- `Movwf`
-- `Movf`
-- `Addwf`
-- `Subwf`
-- `Rlf`
-- `Rrf`
-- `Swapf`
-- `Bcf`
-- `Bsf`
-- `Btfsc`
-- `Btfss`
-- `Goto`
-- `Call`
-- `Return`
-- `Retfie`
-- `SetPage`
+## Peephole optimization
 
-## Limitaciones de la ISA PIC16
+Definición:
 
-Las limitaciones que más condicionan el codegen son:
+Optimización local sobre pequeñas ventanas de instrucciones ya emitidas.
 
-- `W` como acumulador dominante
-- operandos memoria/memoria inexistentes
-- branch condicional basado en “skip next instruction”
-- acceso directo de 7 bits + bits de banco externos
-- `CALL/GOTO` con alcance paginado
+Por qué existe:
 
-Eso obliga a secuencias más largas que en arquitecturas con compare+jump ricos.
+- muchas redundancias aparecen sólo al final del codegen
 
-## Cómo mapea constructs de alto nivel
+Cómo se implementa aquí:
 
-### Asignación escalar
-
-```c
-x = y;
-```
-
-Se traduce a:
-
-- cargar `y` en `W`
-- almacenar `W` en `x`
-
-### Suma 16-bit
-
-```c
-a + b
-```
-
-Se traduce a:
-
-- sumar bytes bajos
-- guardar carry
-- sumar bytes altos con carry explícito
-
-### Comparación 16-bit unsigned
-
-```c
-if (lhs >= rhs)
-```
-
-Se traduce a:
-
-- comparar high byte
-- si difiere, decidir por `C`/`Z`
-- si es igual, comparar low byte
-
-### Control flow
-
-Los `if`, `while` y `for` se convierten en CFG en IR y luego en labels + branches page-safe.
-
-## Handling de 16-bit en una máquina de 8 bits
-
-Éste es un mantra que conviene explicar bien en entrevista:
-
-- el compilador nunca “piensa” que el PIC16 sea realmente de 16 bits
-- un valor de 16 bits es un convenio software, no una capacidad nativa de la ALU
-
-Por eso casi toda operación 16-bit se descompone en:
-
-- low byte
-- high byte
-- flags intermedios
-
-## Branching y paging
-
-`SetPage(label)` es una pseudo-instrucción muy importante. El encoder la expande a cuatro palabras:
-
-1. limpiar `PCLATH<3>`
-2. limpiar `PCLATH<4>`
-3. poner bit 3 si hace falta
-4. poner bit 4 si hace falta
-
-Luego se emite el `CALL` o `GOTO` real.
-
-Esa decisión mantiene el codegen legible y concentra el problema de paging en un pseudo-op claro.
-
-## Listing y map como herramientas de comprensión
-
-La salida `.lst` no es adorno. Sirve para estudiar:
-
-- direcciones reales
-- palabras codificadas
-- secuencia de ensamblado
-
-La `.map` expone:
-
-- símbolos de código
-- globals
-- helpers ABI
-- stack base/end
-- contexto ISR
-
-Para defender el proyecto técnicamente, estas dos salidas son casi tan importantes como el `.hex`.
-
----
-
-# 9. CLI and Build System
-
-## Filosofía de la CLI
-
-El binario de usuario es `picc`, definido en `Cargo.toml` como:
-
-- crate: `pic16cc`
-- bin: `picc`
-
-`src/main.rs` hace muy poco: parsea la CLI y llama a `execute`.
-
-## Opciones importantes
-
-La CLI soporta un estilo “compiler-like”:
-
-- `--target`
-- `-o`
-- `-I`
-- `-D`
-- `-Wall`
-- `-Wextra`
-- `-Werror`
-- `-O0`
-- `-O1`
-- `-O2`
-- `-Os`
-- `--emit-tokens`
-- `--emit-ast`
-- `--emit-ir`
-- `--emit-asm`
-- `--map`
-- `--list-file`
-- `--list-targets`
-- `--help`
-- `--version`
-
-## Cómo se genera el `.hex`
-
-La salida principal no es intermedia ni de test. El flujo normal es:
-
-```bash
-picc --target pic16f628a -Wall -Wextra -Werror -O2 -I include -o build/blink.hex examples/pic16f628a/blink.c
-```
-
-Si el directorio de salida no existe, la CLI lo crea.
-
-Los artefactos opcionales se colocan junto al `.hex` cambiando extensión:
-
-- `build/blink.map`
-- `build/blink.lst`
-- `build/blink.asm`
-- `build/blink.ir`
-- `build/blink.ast`
-
-## Makefiles
-
-El proyecto ya incluye plantillas y Makefiles por ejemplo:
-
-- `examples/pic16f628a/Makefile`
-- `examples/pic16f877a/Makefile`
-- `examples/Makefile.template`
-
-La idea es que el usuario no tenga que usar `cargo run` para compilar firmware. `cargo` se usa para construir o instalar `picc`; luego el flujo normal es `picc ...`.
-
-## Flujo típico de usuario
-
-```text
-1. cargo install --path .
-2. picc --list-targets
-3. picc --target ... -o build/foo.hex foo.c
-4. make flash   (si el usuario configura FLASH_CMD)
-```
-
-## Punto conceptual importante
-
-El CLI no es un wrapper superficial. Es la interfaz oficial del compilador. Toda la tubería real está accesible desde `picc`.
-
----
-
-# 10. Diagnostics and Error Handling
-
-## Filosofía de diagnósticos
-
-El proyecto intenta evitar dos fallos clásicos de compiladores experimentales:
-
-- aceptar código que luego se rompe silenciosamente
-- rechazar demasiado sin explicar por qué
-
-El tipo base es `DiagnosticBag`, que acumula:
-
-- severidad
-- stage
-- mensaje
-- span
-- sugerencia opcional
-- código opcional de warning
-
-## Warnings vs errors
-
-`WarningProfile` tiene tres flags:
-
-- `wall`
-- `wextra`
-- `werror`
-
-`-Werror` no es un modo aparte: promueve warnings a errors dentro del mismo `DiagnosticBag`.
-
-## Emisión con contexto de fuente
-
-Gracias al `PreprocessedSource` con mapping de orígenes, `DiagnosticEmitter` puede imprimir:
-
-- archivo real
-- línea
-- columna
-- línea de código
-- caret
-- ayuda sugerida
-
-Eso es mejor que diagnosticar sólo sobre el texto ya preprocesado.
-
-## Casos importantes del proyecto
-
-### Narrowing conversions
-
-Política actual:
-
-- si una constante cabe exactamente, puede estrechar sin warning
-- si no cabe, se diagnostica truncación
-- una conversión no constante que puede truncar también se diagnostica
-- con `-Werror`, eso se convierte en error
+- en `asm.rs`
 
 Ejemplos:
 
-Aceptado:
-
-```c
-unsigned char x = 8;
-PORTB = 0x01;
+```text
+movf X,w
+movwf X
 ```
 
-Rechazado bajo `-Werror`:
+puede simplificarse a:
+
+```text
+movf X,w
+```
+
+Otro ejemplo:
+
+```text
+movwf X
+movwf X
+```
+
+La segunda escritura es redundante.
+
+## Propagación y folding de constantes
+
+Definición:
+
+- propagación: reemplazar usos por constantes ya conocidas
+- folding: evaluar operaciones constantes en compilación
+
+Por qué existe:
+
+- evita trabajo en runtime
+
+Cómo se implementa aquí:
+
+- `constant_fold` en la IR
+
+Ejemplo:
+
+```c
+if (1) {
+    x = 3;
+} else {
+    x = 4;
+}
+```
+
+Puede simplificarse a:
+
+- salto directo al bloque verdadero
+- bloque falso muerto
+
+## Eliminación de código muerto
+
+Definición:
+
+Eliminar instrucciones o bloques que ya no afectan al resultado.
+
+Cómo se implementa aquí:
+
+- `dead_code_elimination`
+
+Ejemplo:
+
+Un temporal calculado pero nunca usado puede desaparecer.
+
+## Compactación de temporales
+
+Definición:
+
+Reducir el número efectivo de temporales usados tras eliminar muertos.
+
+Por qué importa especialmente aquí:
+
+- porque los temporales viven en el frame
+- menos temporales útiles significa menos presión de stack
+
+## Banking y paging más limpios
+
+Phase 7 mejora:
+
+- cambios de `RP0/RP1` sólo cuando hace falta
+- eliminación de `setpage` duplicados
+
+Por qué importa:
+
+- en PIC16 cada instrucción cuenta
+- muchas pérdidas de calidad vienen de bookkeeping redundante
+
+## `--opt-report`
+
+Definición:
+
+Informe textual de optimizaciones aplicadas.
+
+Por qué existe:
+
+- porque cuando ya optimizas de verdad, conviene hacerlo visible
+
+Cómo se implementa aquí:
+
+- opción CLI
+- impresión de estadísticas
+
+Ejemplo:
+
+Puede informar de:
+
+- constantes propagadas
+- instrucciones eliminadas
+- helpers evitados
+
+## Lección importante
+
+Una optimización pequeña pero correcta vale más que una optimización “brillante” que introduce un bug de ABI o de banking.
+
+Eso es exactamente el tono de Phase 7.
+
+---
+
+# 21. CLI, flujo Linux e integración práctica
+
+## Qué es `picc`
+
+Definición:
+
+Es el binario que usa el usuario final del compilador.
+
+Por qué existe:
+
+- separa el nombre del crate del nombre de la herramienta de línea de comandos
+
+Cómo se usa:
+
+```bash
+picc --target pic16f877a -Wall -Wextra -Werror -O2 -I include -o build/main.hex src/main.c
+```
+
+## Qué hace la CLI
+
+Coordina:
+
+- parsing de flags
+- selección de target
+- directorios de include
+- nivel de optimización
+- warnings
+- artefactos opcionales
+- ruta de salida `.hex`
+
+## Opciones importantes
+
+### `--target`
+
+Selecciona dispositivo.
+
+Ejemplo:
+
+```bash
+--target pic16f628a
+```
+
+### `-I`
+
+Añade directorio de include.
+
+### `-o`
+
+Ruta final del `.hex`.
+
+### `--emit-ast`, `--emit-ir`, `--emit-asm`
+
+Piden artefactos de estudio.
+
+### `--map`, `--list-file`
+
+Piden `.map` y `.lst`.
+
+### `--opt-report`
+
+Pide resumen de optimizaciones.
+
+## Qué artefacto es el realmente “programable”
+
+El `.hex`.
+
+Por qué:
+
+- porque el programador externo no consume AST ni IR
+
+Cómo se implementa aquí:
+
+- el path de `-o` es la ruta final del `.hex`
+
+Ejemplo:
+
+```bash
+picc --target pic16f628a -I include -o build/blink.hex examples/pic16f628a/blink.c
+```
+
+## Makefiles
+
+Por qué importan:
+
+- muestran que el compilador encaja en un flujo Linux normal
+
+Ejemplo de forma:
+
+```make
+PIC := picc
+TARGET := pic16f877a
+CFLAGS := -Wall -Wextra -Werror -O2 -I include
+SRC := src/main.c
+OUT := build/main.hex
+
+$(OUT): $(SRC)
+	mkdir -p build
+	$(PIC) --target $(TARGET) $(CFLAGS) -o $(OUT) $(SRC)
+```
+
+## Lección de ingeniería
+
+Un compilador no está terminado cuando “genera código”. Está más cerca de estarlo cuando:
+
+- tiene CLI clara
+- tiene integración reproducible
+- genera artefactos legibles
+- se puede automatizar
+
+---
+
+# 22. Diagnósticos y manejo de errores
+
+## Qué es un diagnóstico
+
+Definición:
+
+Mensaje del compilador sobre algo incorrecto o sospechoso.
+
+Por qué existe:
+
+- porque compilar no es sólo aceptar o rechazar
+- también es enseñar al usuario qué pasa
+
+Cómo se implementa aquí:
+
+- `DiagnosticBag`
+- `DiagnosticEmitter`
+- perfiles de warnings
+
+## Error vs warning
+
+### Error
+
+Impide compilación correcta.
+
+### Warning
+
+Señala algo dudoso o potencialmente peligroso.
+
+### `-Werror`
+
+Convierte warnings en errores.
+
+## Narrowing conversions
+
+Definición:
+
+Pasar de un tipo más ancho a otro más estrecho y potencialmente perder información.
+
+Por qué importa:
+
+- en firmware es muy común mover datos entre `int` y registros byte
+
+Cómo se implementa aquí:
+
+- la semántica diagnostica conversiones problemáticas
+- constantes representables pueden pasar sin warning innecesario
+
+Ejemplo:
 
 ```c
 unsigned char x = 300;
-PORTB = 300;
 ```
 
-### División y módulo por cero
+Eso es sospechoso porque 300 no cabe en un byte.
 
-- divisor constante cero: error semántico
-- divisor dinámico cero: comportamiento documentado del helper, devuelve `0`
+## División por cero constante
 
-### Restricciones ISR
+Por qué se diagnostica:
 
-Se diagnostican explícitamente:
+- el compilador lo sabe en compilación
 
-- retorno no `void`
-- parámetros en ISR
-- más de una ISR
-- llamadas normales desde ISR
-- expresiones que requerirían helpers runtime dentro de ISR
-
-### Escape de dirección de local
-
-Se rechaza:
+Ejemplo:
 
 ```c
-return &local;
+return value / 0;
 ```
 
-y también cadenas alias simples:
+## Restricciones del subconjunto
 
-```c
-p = &local;
-return p;
-```
+Ejemplos diagnosticados:
 
-## Importancia de no esconder trade-offs
+- pointer-to-pointer
+- function pointers
+- arrays multidimensionales
+- array initializers no soportados
+- recursión
 
-Un punto muy defendible del proyecto es que prefiere un error claro a una compilación “optimista” que generaría firmware incorrecto.
+## Restricciones ISR
+
+Ejemplos:
+
+- ISR con retorno no `void`
+- ISR con parámetros
+- dos ISR
+- llamadas normales dentro de ISR
+- helpers dentro de ISR
+
+## Lección para tu propio compilador
+
+Los buenos diagnósticos no son un detalle “de UX”.
+
+Son parte del diseño técnico:
+
+- fuerzan a aclarar reglas
+- obligan a decidir responsabilidades por etapa
+- hacen al compilador más mantenible
 
 ---
 
-# 11. Testing Strategy
+# 23. Estrategia de pruebas
 
-## Tipos de pruebas
+## Qué se prueba en un compilador
 
-El proyecto combina:
+Un compilador puede fallar de muchas formas:
 
-- tests unitarios dentro de módulos
-- tests de integración en `tests/compiler_pipeline.rs`
-- comprobaciones de artefactos `.asm`, `.map`, `.lst`, `.hex`
-- regresiones por fase
+- parsea mal
+- tipa mal
+- baja mal a IR
+- emite asm incorrecto
+- rompe el ABI
+- genera HEX inválido
 
-## Qué se prueba
+Por eso necesita varios niveles de pruebas.
 
-### Frontend y semántica
+## Unit tests
 
-- parsing de `__interrupt`
-- casts
-- signedness
-- rejects de tipos no soportados
-- diagnósticos de shift/division/modulo
+Qué son:
 
-### IR
+tests pequeños de piezas aisladas.
 
-- lowering de condiciones
+Cómo se ven aquí:
+
+- encoder de `retfie`
+- peephole patterns
+- clasificación de helpers
 - constant folding
-- DCE
 
-### Backend
+Por qué existen:
 
-- encoding `retfie`
-- `swapf`
-- emisión de helpers
-- shape del vector de interrupción
-- metadata de stack y map
+- localizan fallos con precisión
 
-### Pipeline end-to-end
+## Integration tests
 
-Se compilan ejemplos reales de cada fase:
+Qué son:
 
-- blink
-- arith16
-- compare16
-- arrays
-- pointers
-- stack ABI
-- runtime helpers
-- ISR
+tests que atraviesan varias etapas o todo el pipeline.
 
-## Golden tests implícitos
+Cómo se ven aquí:
 
-Aunque no haya una infraestructura llamada “golden snapshots” formal para todo, muchos tests ya hacen validación por forma:
+- compilar ejemplos reales
+- comprobar `.map`, `.asm`, `.lst`
+- comprobar helpers y vectores ISR
 
-- presencia de labels concretos
-- `call __rt_mul_u16`
-- `retfie`
-- `__interrupt_vector`
-- `__abi.stack_ptr.lo`
+Por qué existen:
 
-Eso funciona como golden testing ligero.
+- muchos bugs sólo aparecen cuando interactúan varias capas
 
-## Qué no se prueba
+## Regression tests
 
-La limitación más importante:
+Qué son:
 
-- CI no ejecuta firmware en emulador ni en hardware real
+tests que congelan bugs ya arreglados.
 
-Por tanto, la confianza proviene de:
+Ejemplos del proyecto:
 
-- compilación correcta
-- forma correcta del asm/listing/map/hex
-- regresión estructural
+- sequential calls
+- nested calls
+- temps across calls
+- escapes de stack locals
+- helpers prohibidos en ISR
 
-No proviene de medir ejecución sobre silicio.
+## Qué no se prueba automáticamente todavía
 
-## Cómo defender esta estrategia
+No hay validación automática en hardware real o emulador en CI.
 
-Es una estrategia razonable para una fase de estabilización porque:
+Eso significa:
 
-- valida lowering y artefactos
-- protege decisiones ABI
-- evita regresiones de forma
-- mantiene el coste de CI bajo
+- sí hay validación de compilación y forma
+- no hay ejecución automatizada del binario en silicio
 
-Pero no sustituye:
+Por qué es importante decirlo:
 
-- pruebas en simulador
-- pruebas en hardware
-- validación temporal/ciclos
+- porque honestidad técnica también es explicar límites de la validación
+
+## Lección para tu propio compilador
+
+Haz tests por capas.
+
+No dependas sólo de “compilar un ejemplo y mirar si no explota”.
+
+Necesitas:
+
+- microtests
+- tests de integración
+- tests de regresión
 
 ---
 
-# 12. Limitations of the Compiler
+# 24. Limitaciones actuales del compilador
 
-Conviene enumerarlas sin maquillaje.
+## Lenguaje deliberadamente limitado
 
-## Limitaciones del lenguaje
+No soporta:
 
-- no `struct`
-- no `union`
-- no `enum`
-- no `float`
-- no `switch`
-- no function pointers de alto nivel
-- no pointer-to-pointer
-- no multidimensional arrays
-- no array initializers
+- `struct`
+- `union`
+- `enum`
+- `float`
+- `switch`
 
-## Limitaciones del modelo de ejecución
+Por qué:
 
-- no recursión
-- no detección runtime de overflow de stack
-- promotions C incompletas
-- punteros sólo a data memory
-- sin code pointers
+- cada uno multiplicaría mucho la complejidad del diseño actual
 
-## Limitaciones ISR
+## Punteros limitados
 
-- una sola ISR por programa
-- sin llamadas normales desde ISR
-- sin helpers Phase 5 desde ISR
+No soporta:
 
-## Limitaciones aritméticas
+- puntero a puntero
+- punteros a código
+- function pointers
 
-- multiplicación 8-bit devuelve sólo byte bajo
-- multiplicación 16-bit devuelve sólo 16 bits bajos
-- división dinámica por cero devuelve `0`
+Por qué:
 
-## Limitaciones de validación
+- Phase 3 eligió un subconjunto realista y coherente para PIC16
 
-- sin emulación/hardware en CI
+## Recursión no soportada
 
-Estas limitaciones no invalidan el proyecto; definen su frontera actual.
+Por qué:
 
----
+- stack de software con dimensionamiento estático
 
-# 13. Design Trade-offs
+## Sin detección dinámica de overflow del stack
 
-Ésta es una de las secciones más importantes para explicar el proyecto con madurez.
+Por qué:
 
-## Por qué simplicidad sobre C completo
+- el proyecto usa análisis estático de profundidad
+- no implementa comprobación runtime
 
-Porque el coste principal aquí no es “parsear más gramática”, sino sostener la semántica y el lowering correctos sobre un hardware muy pobre. Cada feature nueva multiplica la complejidad de:
+## ISR conservadora
 
-- ABI
-- memoria
-- banking
-- temporales
-- diagnósticos
+Por qué:
 
-## Por qué Stack-first ABI
+- seguridad y corrección antes que flexibilidad
 
-Porque:
+## Optimización todavía moderada
 
-- escala a 3+ argumentos
-- soporta nested calls
-- hace posible un frame por invocación
-- evita slots globales especiales para argumentos
+Qué significa:
 
-No se eligió por parecer moderno; se eligió porque el ABI de slots no aguantaba el crecimiento del compilador.
+- no hay asignación global de registros
+- no hay análisis interprocedimental fuerte
+- no hay milagros de tamaño
 
-## Por qué helpers runtime
+Por qué:
 
-Porque PIC16 no tiene instrucciones para esas operaciones y porque:
-
-- bajar todo inline sería voluminoso
-- el helper encapsula algoritmos complejos
-- los helpers también ejercitan el ABI reparado
-
-## Por qué ISR restringida
-
-Porque permitir llamadas y helpers en ISR requiere un modelo más fuerte de reentrancia y save/restore. El proyecto prefiere un subconjunto seguro antes que una ISR “más expresiva” pero dudosa.
-
-## Qué haría falta para evolucionar el compilador
-
-Algunas direcciones plausibles:
-
-- casts fuente más completos
-- promotions C más cercanas al estándar
-- soporte de `switch`
-- structs simples
-- simulación o tests sobre hardware
-- modelo controlado para llamadas desde ISR
-- detección runtime de overflow de stack
-- quizá un nivel más agresivo de optimización
-
-Pero ninguna de esas extensiones es gratis; todas tensan el núcleo Phase 4/5/6.
+- se prioriza mantener un compilador entendible y correcto
 
 ---
 
-# 14. How to Explain This Project
+# 25. Trade-offs de diseño y por qué son razonables
 
-## Explicación de 2 minutos
+## Subconjunto de C en vez de C completo
 
-“`pic16cc` es un compilador en Rust para PIC16 clásicos de 14 bits. Toma un subconjunto de C y lo compila hasta Intel HEX real. Internamente separa frontend, IR y backend compartido `midrange14`. Lo interesante no es sólo que soporte enteros de 8 y 16 bits, arrays, punteros, helpers aritméticos e ISR, sino que todo eso está adaptado a limitaciones reales de PIC16: RAM bancarizada, un único registro `W`, ausencia de pila de datos hardware y necesidad de paginar llamadas con `PCLATH`. La Phase 4 introduce un ABI stack-first con pila software; la Phase 5 añade helpers runtime para multiplicación/división/módulo/shifts; y la Phase 6 integra ISR con vector en `0x0004`, save/restore conservador y `retfie`.” 
+Trade-off:
 
-## Explicación de 5 minutos
+- menos cobertura del lenguaje
+- más coherencia del sistema
 
-“La arquitectura del compilador es muy limpia. `picc` entra por CLI, hace preprocesado, lexing, parsing, semántica, lowering a una IR propia, aplica constant folding y DCE, y luego pasa a un backend PIC16 que conoce banking, paging, stack software, helpers aritméticos e ISR. El proyecto está diseñado por fases. Phase 2 hace reales los 16 bits y las comparaciones; Phase 3 añade arrays, punteros y acceso indirecto con `FSR/INDF`; Phase 4 cambia el ABI a stack-first y mete un frame por llamada; Phase 5 no finge `* / % << >>`, sino que introduce helpers runtime que usan el mismo ABI que las funciones normales; y Phase 6 añade una ISR única con sintaxis `void __interrupt isr(void)`, vector en `0x0004`, save/restore de `W`, `STATUS`, `PCLATH`, `FSR` y estado ABI, y termina con `retfie`. Lo fuerte del proyecto no es la amplitud del subconjunto C, sino la coherencia entre semántica, IR, backend y artefactos `.hex/.map/.lst`.” 
+Razón:
 
-## Explicación técnica profunda
+- PIC16 ya ofrece suficiente complejidad técnica por sí mismo
 
-Si te piden una explicación larga, estructura la respuesta así:
+## Backend compartido + descriptores
 
-1. Problema: PIC16 clásico no tiene stack de datos, tiene RAM bancarizada y un ISA estrecho.
-2. Solución de arquitectura: frontend tipado + IR explícita + backend compartido por familia + descriptores de dispositivo.
-3. Punto de inflexión: pasar de ABI por slots a ABI stack-first.
-4. Consecuencia: locals, arrays locales y temporales IR pasan a ser frame-scoped.
-5. Prueba de solidez: los helpers Phase 5 son llamadas internas del compilador que ejercitan ese ABI.
-6. Cierre de seguridad: ISR Phase 6 preserva contexto y restringe llamadas/helpers.
+Trade-off:
 
-## Preguntas típicas y respuestas
+- exige diseñar una abstracción familiar
+- evita duplicación por dispositivo
 
-### “¿Por qué no usar LLVM?”
+Razón:
 
-Porque el objetivo aquí no es un compilador retargetable general, sino entender y controlar de forma pedagógica una diana muy específica. LLVM también impondría mucha infraestructura que ocultaría justo las decisiones que aquí se quieren estudiar.
+- los dos chips actuales comparten mucha semántica de backend
 
-### “¿Por qué la pila software crece hacia arriba?”
+## Stack-first ABI
 
-Porque el proyecto eligió ese convenio y luego lo mantuvo coherente en prólogo, epílogo, cálculo de offsets y análisis de profundidad. No hay nada inherentemente incorrecto en ello.
+Trade-off:
 
-### “¿Por qué `return_high` en vez de devolver 16 bits de otra manera?”
+- más complejidad backend
+- mucha más robustez semántica
 
-Porque en PIC16 el retorno de 8 bits por `W` es natural y para 16 bits hace falta un convenio complementario. `W + return_high` es simple, explícito y suficientemente estable para este proyecto.
+Razón:
 
-### “¿Por qué no permitís recursión?”
+- sin eso, las llamadas profundas y temporales por invocación son frágiles
 
-Porque la profundidad de stack se calcula estáticamente y no hay detección runtime de overflow. Permitir recursión con ese modelo sería técnicamente irresponsable.
+## Helpers
 
-### “¿Por qué la ISR no puede llamar funciones?”
+Trade-off:
 
-Porque el proyecto elige un modelo conservador y seguro: salvar suficiente contexto para código inline ISR es manejable; abrir llamadas y helpers dentro de ISR elevaría mucho el riesgo de corrupción del estado interrumpido.
+- más runtime interno
+- soporte aritmético real y reutilizable
 
-### “¿Qué hace difícil compilar arrays y punteros en PIC16?”
+## ISR restringida
 
-Que el acceso indirecto requiere programar `FSR/INDF` e `IRP`, mientras que el acceso directo depende de `RP0/RP1`. El compilador tiene que saber continuamente si un byte sale de memoria absoluta, frame o puntero.
+Trade-off:
 
-### “¿Dónde está la parte más valiosa del diseño?”
+- menos expresividad
+- mayor seguridad del estado interrumpido
 
-En la coherencia de las fronteras: semántica tipada, IR explícita, ABI consistente, backend compartido por familia y artefactos verificables.
+## Optimizaciones conservadoras
+
+Trade-off:
+
+- menos agresividad
+- menos riesgo de miscompilación
+
+## Gran lección de ingeniería
+
+El diseño de un compilador bueno no consiste en añadir la mayor cantidad de features posible.
+
+Consiste en:
+
+- elegir bien el orden
+- cerrar contratos claros
+- no mentir sobre lo que realmente soporta el backend
+
+Ése es uno de los mayores méritos de este repositorio.
 
 ---
 
-# 15. Glossary
+# 26. Cómo usar este proyecto como base para construir tu propio compilador
+
+Ésta es quizá la parte más útil si tu objetivo no es sólo entender `pic16cc`, sino empezar a construir algo inspirado en él.
+
+## Lección 1: separa etapas pronto
+
+No mezcles todo en un único archivo “parser que ya genera asm”.
+
+Aunque el lenguaje sea pequeño, separa:
+
+- lexer
+- parser
+- semántica
+- IR
+- backend
+
+Razón:
+
+- cada fase resuelve un problema distinto
+
+## Lección 2: define tu subconjunto con honestidad
+
+No digas “soporto C” si en realidad soportas unas pocas construcciones.
+
+Haz lo que hace bien este proyecto:
+
+- define límites
+- diagnostica lo no soportado
+- documenta trade-offs
+
+## Lección 3: diseña tu ABI antes de que sea demasiado tarde
+
+En cuanto tu lenguaje tenga:
+
+- funciones
+- argumentos múltiples
+- locales
+- llamadas anidadas
+
+necesitas un ABI coherente.
+
+Si lo pospones demasiado, el backend se llenará de parches.
+
+## Lección 4: trata la memoria como problema de primer orden
+
+Especialmente en micros pequeños:
+
+- dónde viven las cosas
+- cómo se direccionan
+- cuánto ocupan
+
+no es un detalle; es parte central del compilador.
+
+## Lección 5: usa una IR aunque tu compilador sea pequeño
+
+Razón:
+
+- te ayudará a no acoplar frontend y backend
+- te dará un punto natural para optimizar
+
+## Lección 6: empieza con optimizaciones pequeñas y seguras
+
+Ejemplos buenos:
+
+- constant folding
+- DCE simple
+- peephole local
+
+Ejemplos que conviene dejar para después:
+
+- asignación global de registros
+- análisis interprocedimental complejo
+
+## Lección 7: diseña pruebas desde el principio
+
+Un compilador sin tests se degrada muy rápido.
+
+Mínimos recomendables:
+
+- parser tests
+- semantic tests
+- IR tests
+- backend shape tests
+- regression tests
+
+## Lección 8: documenta tus límites
+
+Esto no es “marketing negativo”.
+
+Es diseño profesional.
+
+Un compilador serio debe decir claramente:
+
+- qué soporta
+- qué no
+- por qué
+
+## Arquitectura recomendada si empezaras hoy
+
+Una arquitectura sencilla, inspirada en `pic16cc`, sería:
+
+```text
+frontend/
+  lexer
+  parser
+  semantic
+
+ir/
+  model
+  lowering
+  passes
+
+backend/
+  device descriptors
+  codegen
+  asm
+  encoder
+  runtime helpers
+
+driver/
+  cli
+  orchestration
+```
+
+Ése es un punto de partida excelente para un compilador pequeño pero serio.
+
+---
+
+# 27. Cómo explicar este proyecto en una entrevista o defensa
+
+## Versión de 2 minutos
+
+“`pic16cc` es un compilador en Rust para PIC16 clásicos de 14 bits. Toma un subconjunto acotado de C y genera Intel HEX real. Lo más interesante del proyecto es que no se limita a parsear: tiene frontend, análisis semántico, una IR propia, un backend compartido para la familia `midrange14`, un ABI stack-first con stack de software, runtime helpers para operaciones que el hardware no implementa y soporte de ISR con guardado de contexto. Es un caso de estudio muy bueno porque PIC16 obliga a hacer explícitos problemas que en arquitecturas modernas suelen estar ocultos: banking, paging, falta de pila de datos, aritmética de 16 bits e interrupciones seguras.” 
+
+## Versión de 5 minutos
+
+“El compilador está organizado por capas. El frontend hace preprocesado, lexing, parsing y análisis semántico. Después el programa se baja a una IR basada en bloques y temporales tipados. Esa IR hace explícitas cosas como casts, llamadas y acceso indirecto, y además es el sitio natural para optimizaciones simples. Luego entra el backend compartido PIC16, que traduce esa IR a ensamblador interno, decide banking, paging, prologues, epilogues y helpers runtime, y finalmente codifica a palabras de 14 bits e Intel HEX. La evolución por fases es muy instructiva: primero un pipeline mínimo, luego 16 bits, luego arrays y punteros, luego un ABI serio con stack de software, luego helpers aritméticos, luego ISR y finalmente optimización conservadora. La gran decisión arquitectónica es Phase 4, porque convierte las llamadas en un modelo realmente robusto sobre un hardware que no tiene pila de datos general.” 
+
+## Preguntas habituales y respuestas
+
+### “¿Por qué una IR propia?”
+
+Porque separa frontend y backend y hace explícitas operaciones que el backend PIC16 necesita, como acceso indirecto, casts y llamadas.
+
+### “¿Por qué una pila de software?”
+
+Porque la pila hardware del PIC16 sólo sirve para retorno de llamadas, no para argumentos, locales o temporales.
+
+### “¿Por qué no compilar C completo?”
+
+Porque el objetivo del proyecto es coherencia real extremo a extremo, no cobertura superficial del lenguaje.
+
+### “¿Por qué los helpers usan el mismo ABI?”
+
+Porque mantener un solo contrato de llamada reduce complejidad y evita mezclar dos modelos internos.
+
+### “¿Por qué la ISR es tan conservadora?”
+
+Porque interrumpe cualquier estado parcial del programa. Es una zona donde la corrección vale más que la expresividad.
+
+---
+
+# 28. Glosario
 
 ## ABI
 
-Application Binary Interface. En este proyecto define:
+Contrato binario entre caller y callee.
+
+En este proyecto define:
 
 - cómo se pasan argumentos
 - cómo se devuelven valores
 - quién limpia el stack
-- cómo se organiza el frame
 
-## IR
+Ejemplo:
 
-Intermediate Representation. Forma intermedia entre frontend y backend. En `pic16cc` es una IR propia basada en CFG.
+8 bits retornan en `W`; 16 bits retornan en `W + return_high`.
 
-## Lowering
+## AST
 
-Proceso de transformar una representación más abstracta en otra más cercana al target. Ejemplos:
+Árbol de sintaxis abstracta.
 
-- AST tipado -> IR
-- `a[i]` -> decay + pointer arithmetic + `LoadIndirect`
-- `a * b` -> helper runtime
+Representa la estructura del programa sin el ruido del texto original.
 
-## Frame
+Ejemplo:
 
-Espacio lógico de una invocación de función. Contiene:
+```text
+x = a + b
+```
 
-- argumentos visibles por el callee
-- `saved FP`
-- locales
-- arrays locales
-- temporales IR
+se representa como un árbol con `=` y `+`.
 
-## Stack
+## Backend
 
-Pila software en RAM usada para argumentos, frames y temporales por invocación. No confundir con la pila hardware de retornos del PIC16.
+Parte del compilador que conoce la arquitectura destino y baja la IR a instrucciones reales.
 
-## SFR
+## Banking
 
-Special Function Register. Registros mapeados en memoria para periféricos y control del micro, por ejemplo:
-
-- `STATUS`
-- `PORTB`
-- `TRISB`
-- `INTCON`
-
-## Bank switching
-
-Cambio de banco de RAM directa usando `STATUS.RP0/RP1`.
-
-## Indirect addressing
-
-Acceso a memoria usando `FSR` + `INDF`, con `IRP` para seleccionar banco indirecto.
-
-## PCLATH
-
-Registro auxiliar usado para paginar llamadas y saltos de programa en PIC16.
-
-## `W`
-
-Working register del PIC16. Actúa como acumulador central en gran parte del lowering.
-
-## `return_high`
-
-Slot helper del backend usado para devolver el byte alto de valores de 16 bits o punteros.
-
-## `stack_ptr` / `frame_ptr`
-
-Slots ABI en RAM que implementan la pila software y el frame activo.
+Mecanismo de selección de banco de RAM mediante `STATUS.RP0/RP1`.
 
 ## CFG
 
-Control Flow Graph. Representación por bloques y terminadores usada en la IR.
+Control Flow Graph.
 
-## Constant folding
+Representación de bloques y transiciones de control.
 
-Optimización que evalúa expresiones constantes en IR antes de codegen.
+## Encoder
 
-## Dead code elimination
+Etapa que convierte instrucciones simbólicas en palabras máquina.
 
-Eliminación de instrucciones que producen temporales cuyo resultado nunca se usa.
+## FSR
 
-## `retfie`
+Registro usado para direccionamiento indirecto.
 
-Return From Interrupt Enable. Instrucción PIC16 específica para salir de ISR.
+## Frame
 
-## Shared GPR
+Bloque del stack que pertenece a una invocación concreta de una función.
 
-Zona de RAM común/mirroring usada aquí para contexto ISR, para poder restaurar `W` y otros registros sin depender de un banco activo inestable.
+## IR
+
+Intermediate Representation.
+
+Representación interna entre frontend y backend.
+
+## INDF
+
+Ventana de acceso al contenido apuntado por `FSR`.
+
+## ISR
+
+Interrupt Service Routine.
+
+Rutina ejecutada al atender una interrupción.
+
+## Lexer
+
+Etapa que transforma caracteres en tokens.
+
+## Lowering
+
+Traducción de una representación más abstracta a otra más explícita y cercana a la máquina.
+
+## Lvalue
+
+Expresión que representa una ubicación escribible de memoria.
+
+## PCLATH
+
+Registro usado para completar direcciones de llamadas y saltos entre páginas.
+
+## Peephole optimization
+
+Optimización local sobre ventanas pequeñas de instrucciones ya emitidas.
+
+## Preprocesador
+
+Etapa textual previa al parser que resuelve includes y macros.
+
+## Rvalue
+
+Valor calculado, no escribible directamente.
+
+## Semantic analysis
+
+Etapa que valida nombres, tipos y reglas del lenguaje.
+
+## SFR
+
+Special Function Register.
+
+Registro especial del hardware, como `PORTB`.
+
+## Stack
+
+Estructura LIFO usada aquí como pila de software.
+
+## SP
+
+Stack Pointer.
+
+## FP
+
+Frame Pointer.
+
+## Token
+
+Unidad léxica mínima con sentido para el parser.
 
 ---
 
-# Cierre
+# 29. Conclusión final
 
-Si tuvieras que resumir el valor técnico de `pic16cc` en una sola frase, sería ésta:
+La mejor manera de resumir `pic16cc` es ésta:
 
-> Es un compilador pequeño pero conceptualmente serio, que usa las limitaciones de PIC16 para obligarse a tomar decisiones de ABI, memoria, lowering e ISR que en arquitecturas más cómodas quedan ocultas.
+Es un compilador pequeño, pero no trivial.
 
-Para estudiarlo bien, el mejor orden práctico es:
+Su valor no está en “cuántas features de C soporta”, sino en otra cosa mucho más útil para aprender diseño de compiladores:
 
-1. `src/lib.rs` para ver el pipeline
-2. `src/frontend/semantic.rs` para entender el contrato del lenguaje
-3. `src/ir/model.rs` y `src/ir/lowering.rs` para entender la frontera frontend/backend
-4. `src/backend/pic16/midrange14/codegen.rs` para ver cómo todo aterriza en PIC16
-5. `tests/compiler_pipeline.rs` para entender qué garantiza hoy el proyecto
+- cada capa existe por una razón
+- cada fase resuelve un problema real
+- cada limitación está relacionada con una decisión técnica concreta
+- el hardware PIC16 obliga a hacer visibles los contratos internos
 
-Ese recorrido coincide bastante bien con cómo defenderías el proyecto ante otra persona técnica.
+Si entiendes bien este proyecto, entiendes varias ideas profundas de construcción de compiladores:
+
+- por qué un parser no basta
+- por qué la semántica es crítica
+- por qué la IR no es un lujo académico
+- por qué el ABI es un contrato central y no un detalle
+- por qué el hardware condiciona el diseño
+- por qué optimizar sin romper semántica es un trabajo delicado
+
+Y si además quisieras empezar tu propio compilador, este repositorio te deja una enseñanza especialmente valiosa:
+
+```text
+empieza por definir bien tus contratos internos,
+sé honesto con el subconjunto que soportas,
+y construye cada capa para resolver un problema concreto.
+```
+
+Ésa es una de las mejores formas de pasar de “leer sobre compiladores” a “construir uno de verdad”.
+
+---
+
+# 30. Apéndice A: anatomía del repositorio y cómo leer el código sin perderse
+
+Una de las grandes dificultades de quien empieza a estudiar compiladores no es sólo entender los conceptos. Es saber por dónde entrar en un repositorio real.
+
+Este apéndice existe para resolver justamente eso.
+
+## Qué es “leer un compilador” de forma productiva
+
+Definición:
+
+Leer un compilador de forma productiva no es abrir archivos al azar. Es seguir el flujo real del programa y entender qué responsabilidad tiene cada módulo.
+
+Por qué existe esta necesidad:
+
+- porque un compilador tiene muchas capas
+- porque si empiezas por el archivo equivocado puedes ver detalle sin contexto
+
+Cómo conviene hacerlo aquí:
+
+1. empezar por la entrada CLI
+2. seguir la función que orquesta el pipeline
+3. bajar capa por capa
+4. volver a subir con ejemplos concretos
+
+Ejemplo:
+
+Si empiezas leyendo `codegen.rs` sin haber entendido semántica ni IR, verás muchas decisiones PIC16 pero te faltará el “por qué” de cada una.
+
+## Punto de entrada: `src/main.rs`
+
+Qué es:
+
+el ejecutable real del compilador.
+
+Por qué existe:
+
+- porque alguien tiene que recibir la línea de comandos
+- alguien tiene que decidir código de salida del proceso
+
+Cómo se implementa aquí:
+
+- parsea opciones con `CliOptions::parse`
+- llama a `execute`
+- si hay error de parseo CLI, sale con código `2`
+- si hay diagnóstico de compilación, sale con código `1`
+
+Ejemplo conceptual:
+
+```text
+argv -> parse CLI -> execute(options)
+```
+
+## Orquestación principal: `src/lib.rs`
+
+Qué es:
+
+la pieza que conecta todas las fases.
+
+Por qué existe:
+
+- para centralizar el pipeline
+- para que el `main` sea mínimo
+
+Cómo se implementa aquí:
+
+`execute` decide entre:
+
+- compilar
+- listar targets
+- mostrar ayuda
+- mostrar versión
+
+Y `compile_command` hace el recorrido principal:
+
+1. resolver target
+2. cargar fuente
+3. preprocesar
+4. lexear
+5. parsear
+6. analizar semánticamente
+7. bajar a IR
+8. optimizar IR
+9. compilar backend
+10. emitir artefactos
+11. escribir `.hex`
+
+Ejemplo:
+
+Este archivo es excelente para una primera lectura seria del compilador, porque te da el mapa general sin hundirte todavía en detalles de una sola fase.
+
+## Frontend: `src/frontend`
+
+### `preprocessor.rs`
+
+Responsabilidad:
+
+- includes
+- macros objeto
+- condicionales del preprocesador
+
+### `lexer.rs`
+
+Responsabilidad:
+
+- convertir texto en tokens
+
+### `parser.rs`
+
+Responsabilidad:
+
+- construir AST
+- manejar precedencia
+- reconocer declaraciones, sentencias y expresiones
+
+### `semantic.rs`
+
+Responsabilidad:
+
+- símbolos
+- tipos
+- lvalue/rvalue
+- casts
+- restricciones del subconjunto
+- validaciones Phase 3/4/5/6
+
+## IR: `src/ir`
+
+### `model.rs`
+
+Responsabilidad:
+
+- definir la forma de la IR
+
+### `lowering.rs`
+
+Responsabilidad:
+
+- transformar el programa tipado en IR
+
+### `passes.rs`
+
+Responsabilidad:
+
+- optimizaciones IR
+
+## Backend: `src/backend/pic16`
+
+### `devices.rs`
+
+Responsabilidad:
+
+- describir chips concretos
+
+### `midrange14/codegen.rs`
+
+Responsabilidad:
+
+- bajar IR a asm interno
+- stack ABI
+- helpers
+- ISR
+- banking/paging
+
+### `midrange14/asm.rs`
+
+Responsabilidad:
+
+- representar instrucciones simbólicas
+- peephole optimization
+
+### `midrange14/encoder.rs`
+
+Responsabilidad:
+
+- codificar instrucciones a palabras
+
+### `midrange14/runtime.rs`
+
+Responsabilidad:
+
+- clasificación y soporte de helpers aritméticos
+
+## Salida: otras carpetas clave
+
+### `src/assembler`
+
+Responsabilidad:
+
+- render de listados
+
+### `src/linker`
+
+Responsabilidad:
+
+- `map` de símbolos
+
+### `src/hex`
+
+Responsabilidad:
+
+- Intel HEX
+
+## Tests: `tests/compiler_pipeline.rs`
+
+Qué es:
+
+el sitio donde mejor se ve el comportamiento esperado “de extremo a extremo”.
+
+Por qué es tan valioso:
+
+- porque enseña tanto como la implementación
+- congela regresiones importantes
+
+Cómo conviene leerlo:
+
+- por grupos de fase
+- buscando nombres de fixtures y comentarios
+
+Ejemplo:
+
+Los tests de nested calls, pointer escapes e ISR prohibiendo helpers cuentan la historia de los problemas reales que el proyecto tuvo que cerrar.
+
+## Método recomendado para leer el repositorio
+
+Orden recomendado:
+
+1. `src/main.rs`
+2. `src/lib.rs`
+3. `src/cli/mod.rs`
+4. `src/frontend/*`
+5. `src/ir/model.rs`
+6. `src/ir/lowering.rs`
+7. `src/ir/passes.rs`
+8. `src/backend/pic16/devices.rs`
+9. `src/backend/pic16/midrange14/codegen.rs`
+10. `tests/compiler_pipeline.rs`
+
+Por qué ese orden:
+
+- va de lo general a lo específico
+- primero entiendes flujo
+- luego representación
+- luego detalles de backend
+
+---
+
+# 31. Apéndice B: caso práctico completo 1, de una función sencilla a PIC16
+
+Vamos a seguir este programa con máximo detalle conceptual:
+
+```c
+#include <pic16/pic16f628a.h>
+
+unsigned char add1(unsigned char x) {
+    return x + 1;
+}
+
+void main(void) {
+    TRISB = 0x00;
+    PORTB = add1(3);
+}
+```
+
+## Paso 1: qué ve el usuario
+
+El usuario ve dos funciones:
+
+- `add1`
+- `main`
+
+Y una línea importante:
+
+```c
+PORTB = add1(3);
+```
+
+Intuitivamente eso parece trivial.
+
+Pero para el compilador real contiene varios problemas:
+
+- llamada a función
+- parámetro de 8 bits
+- retorno de 8 bits
+- escritura a SFR
+- manejo de bancos
+
+## Paso 2: qué ve el lexer
+
+Trozo:
+
+```c
+return x + 1;
+```
+
+Tokens:
+
+```text
+KW_RETURN
+IDENT(x)
+PLUS
+INT_LITERAL(1)
+SEMICOLON
+```
+
+Qué se gana:
+
+- ya no trabajas con caracteres
+- trabajas con piezas clasificadas
+
+## Paso 3: qué ve el parser
+
+AST conceptual:
+
+```text
+return
+  +
+ / \
+x   1
+```
+
+Y para la llamada:
+
+```text
+assign
+ /    \
+PORTB  call add1
+          |
+          3
+```
+
+Qué se gana:
+
+- ya hay estructura
+- todavía no hay tipos resueltos del todo
+
+## Paso 4: qué decide la semántica
+
+La semántica determina:
+
+- `x` es `unsigned char`
+- `1` se adapta al ancho correcto
+- `add1` recibe un parámetro
+- `add1` devuelve `unsigned char`
+- `PORTB` es un SFR válido del target
+
+También clasifica:
+
+- `PORTB` es lvalue
+- `add1(3)` es rvalue
+
+## Paso 5: qué forma toma en IR
+
+Versión simplificada, pedagógica:
+
+```text
+fn add1:
+  t0 = x + 1
+  return t0
+
+fn main:
+  TRISB = 0
+  t0 = call add1(3)
+  PORTB = t0
+  return void
+```
+
+Qué se gana:
+
+- la llamada ya es una operación explícita
+- la suma ya es una operación explícita
+- el backend no necesita mirar AST
+
+## Paso 6: qué hace el ABI
+
+`add1` recibe un parámetro de 1 byte.
+
+Con el ABI actual:
+
+- el caller empuja ese byte
+- hace `call`
+- el callee crea frame
+- el retorno de 8 bits sale por `W`
+- el caller limpia el byte del argumento
+
+Diagrama simplificado de la llamada:
+
+```text
+main frame
+  push 3
+  call add1
+
+add1 frame
+  arg x
+  saved FP
+  temp t0
+```
+
+## Paso 7: qué hace el backend con `return x + 1`
+
+Conceptualmente:
+
+1. leer `x` desde el frame
+2. cargarlo en `W`
+3. sumar 1
+4. dejar el resultado en `W`
+5. epilogue
+
+Por qué no hace falta `return_high`:
+
+- porque el valor cabe en un byte
+
+## Paso 8: qué hace el backend con `PORTB = add1(3)`
+
+Conceptualmente:
+
+1. empujar argumento `3`
+2. llamar a `add1`
+3. leer retorno en `W`
+4. seleccionar banco de `PORTB` si hace falta
+5. escribir `W` a `PORTB`
+
+## Paso 9: qué artefactos te ayudan a estudiarlo
+
+### AST
+
+Te enseña estructura.
+
+### IR
+
+Te enseña lowering.
+
+### ASM
+
+Te enseña ABI y codegen.
+
+### MAP
+
+Te enseña símbolos y ubicaciones.
+
+### LST
+
+Te enseña la forma final legible del programa.
+
+## Qué aprender de este caso si quieres construir tu propio compilador
+
+Incluso un ejemplo diminuto ya toca casi todas las capas importantes:
+
+- parser
+- semántica
+- IR
+- ABI
+- backend
+- artefactos finales
+
+Ésa es una lección poderosa: no hace falta un lenguaje grande para aprender problemas reales de compiladores.
+
+---
+
+# 32. Apéndice C: caso práctico completo 2, arrays y punteros
+
+Programa conceptual:
+
+```c
+unsigned int words[2];
+
+void main(void) {
+    unsigned int *p = words;
+    words[0] = 0x0123;
+    words[1] = 0x0040;
+    PORTB = p[0];
+}
+```
+
+## Qué nuevos problemas aparecen
+
+Ya no basta con:
+
+- sumar
+- llamar
+- escribir un símbolo fijo
+
+Ahora aparecen:
+
+- array global
+- decay a puntero
+- puntero de 16 bits
+- indexación
+- acceso indirecto
+
+## Qué significa `unsigned int words[2]`
+
+Semánticamente:
+
+- array de 2 elementos
+- cada elemento ocupa 2 bytes
+
+Layout conceptual:
+
+```text
+words[0].low
+words[0].high
+words[1].low
+words[1].high
+```
+
+## Qué significa `unsigned int *p = words`
+
+En C, el nombre del array en contexto de valor decae a puntero a su primer elemento.
+
+Qué es “decay”:
+
+transformar el array, en contexto de valor, en una dirección base.
+
+Por qué existe:
+
+- porque el lenguaje C usa mucho esta conversión implícita
+
+Cómo se implementa aquí:
+
+- la semántica la hace explícita
+- el lowering la convierte en `AddrOf`
+
+## Qué significa `p[0]`
+
+No es una magia especial distinta de los punteros.
+
+Conceptualmente:
+
+```text
+p[0] == *(p + 0)
+```
+
+Si fuera `p[1]`, sería:
+
+```text
+*(p + 1 * tamaño_del_elemento)
+```
+
+Como el elemento es `unsigned int`, el tamaño es 2.
+
+## Qué hace el lowering
+
+Versión conceptual:
+
+```text
+t0 = &words
+p = t0
+t1 = p + 0
+t2 = load_indirect(t1)
+PORTB = low_byte(t2)
+```
+
+Para `words[1] = 0x0040`, la idea sería:
+
+```text
+base = &words
+addr = base + 2
+store_indirect(addr, 0x0040)
+```
+
+## Qué hace el backend
+
+Para un `load_indirect`:
+
+1. cargar dirección a `FSR`
+2. ajustar `IRP`
+3. leer `INDF`
+4. si es 16-bit, repetir para el segundo byte
+
+Esto es exactamente el punto en que se ve por qué Phase 3 necesitó introducir una IR de memoria explícita.
+
+## Qué aprender de este caso
+
+Si diseñas tu propio compilador y llegas a arrays y punteros, la gran pregunta ya no será “cómo parseo `[]`”.
+
+La gran pregunta será:
+
+```text
+¿cuándo convierto sintaxis de alto nivel en dirección + desplazamiento + acceso indirecto?
+```
+
+En este repositorio, la respuesta correcta es:
+
+- durante semántica y lowering
+- no como parche tardío en el backend mirando AST
+
+---
+
+# 33. Apéndice D: caso práctico completo 3, llamadas anidadas y frames
+
+Programa:
+
+```c
+int f(int x) { return x + 1; }
+int g(int y) { return f(y) + 2; }
+int h(int z) { return g(z) + 3; }
+
+int main(void) {
+    return h(5);
+}
+```
+
+## Qué problema ilustra este caso
+
+Ilustra por qué el ABI y el frame model no son un lujo, sino una necesidad.
+
+Si no hubiera frames:
+
+- `f`, `g` y `h` podrían pelear por las mismas ubicaciones temporales
+- el retorno intermedio podría corromperse
+
+## Qué hace el caller
+
+Por ejemplo, cuando `g` llama a `f`:
+
+1. evalúa `y`
+2. empuja bytes de `y`
+3. hace `call f`
+4. limpia los bytes de argumento
+5. usa el retorno
+
+## Qué hace el callee
+
+En `f`:
+
+1. guarda el `FP` anterior
+2. fija su `FP`
+3. reserva temporales
+4. computa `x + 1`
+5. devuelve el resultado
+6. restaura `FP`
+
+## Diagrama de anidamiento
+
+```text
+frame main
+  frame h
+    frame g
+      frame f
+```
+
+Si `f` termina:
+
+```text
+frame main
+  frame h
+    frame g
+```
+
+Ese orden de vida es exactamente lo que el stack model resuelve bien.
+
+## Qué te enseña esto
+
+Muchísimas veces el “primer ABI que funciona” no es el ABI que escala.
+
+Phase 4 muestra el momento en que el compilador deja de ser un experimento de funciones pequeñas y empieza a comportarse como un compilador de verdad con llamadas generales.
+
+---
+
+# 34. Apéndice E: caso práctico completo 4, multiplicación y helpers
+
+Programa:
+
+```c
+unsigned int mul16(unsigned int a, unsigned int b) {
+    return a * b;
+}
+```
+
+## Qué problema ilustra
+
+Que el lenguaje pide una operación que la ISA no ofrece directamente.
+
+## Qué decisiones son posibles
+
+El compilador podría:
+
+1. expandir siempre inline una rutina larga
+2. llamar siempre a un helper
+3. mezclar inline en casos simples y helper en casos complejos
+
+`pic16cc` elige la tercera.
+
+## Qué pasa en un caso general
+
+Para `a * b` de 16 bits:
+
+- se selecciona `__rt_mul_u16` o `__rt_mul_i16`
+- se empujan argumentos
+- se llama al helper
+- el helper usa su frame
+- devuelve 16 bits en `W + return_high`
+
+## Qué pasa en un caso barato
+
+Si la operación fuera:
+
+```c
+value * 2
+```
+
+el compilador puede convertirlo en:
+
+```text
+shift left 1
+```
+
+sin helper.
+
+## Qué aprender de este caso
+
+El lenguaje y la ISA no tienen por qué alinearse.
+
+Ahí es donde un compilador deja de ser “traductor sintáctico” y se convierte en diseñador de estrategias de implementación.
+
+---
+
+# 35. Apéndice F: caso práctico completo 5, interrupción y contexto
+
+Programa conceptual:
+
+```c
+void __interrupt isr(void) {
+    if (T0IF) {
+        T0IF = 0;
+        PORTB = PORTB ^ 0x01;
+    }
+}
+```
+
+## Qué problema ilustra
+
+Que una ISR no es “otra función más”.
+
+Interrumpe un estado arbitrario del programa.
+
+## Qué debe ocurrir antes del cuerpo de la ISR
+
+El prologue ISR debe guardar:
+
+- `W`
+- `STATUS`
+- `PCLATH`
+- `FSR`
+- slots ABI críticos
+- stack/frame pointers
+
+## Qué puede hacer el cuerpo
+
+Bajo las restricciones actuales:
+
+- leer y escribir SFR
+- hacer comparaciones simples
+- operar inline
+
+## Qué no puede hacer
+
+- llamar funciones normales
+- disparar helpers aritméticos
+
+## Qué debe ocurrir al salir
+
+El epilogue ISR:
+
+1. restaura contexto
+2. deja la CPU coherente
+3. termina con `retfie`
+
+## Qué aprender de este caso
+
+Una ISR es una frontera excelente para distinguir dos estilos de diseño:
+
+- diseño optimista: “ya veremos qué hace falta salvar”
+- diseño conservador: “salvemos claramente todo lo necesario y restrinjamos lo peligroso”
+
+Este proyecto eligió, con buen criterio, el segundo.
+
+---
+
+# 36. Apéndice G: método recomendado para construir tu propio compilador inspirado en éste
+
+Si alguien quisiera empezar su propio compilador para un microcontrolador parecido, un camino razonable sería éste.
+
+## Etapa 1: lenguaje mínimo y pipeline completo
+
+Objetivo:
+
+- un pequeño subconjunto
+- variables
+- asignaciones
+- `if`
+- `return`
+- `.hex` real al final
+
+No empieces por:
+
+- structs
+- punteros complejos
+- ISR
+
+Empieza por:
+
+- demostrar que toda la cadena vive
+
+## Etapa 2: tipos más anchos y comparaciones
+
+Añade:
+
+- enteros de 16 bits
+- signed vs unsigned
+- booleanos explícitos
+
+Razón:
+
+- te obligará a cerrar representación y casts
+
+## Etapa 3: memoria real
+
+Añade:
+
+- arrays
+- `&`
+- `*`
+- loads/stores indirectos
+
+Razón:
+
+- aquí el compilador deja de ser puramente aritmético y entra en el mundo real de C
+
+## Etapa 4: ABI serio
+
+Hazlo antes de que tu compilador crezca demasiado.
+
+Si esperas demasiado:
+
+- el coste de migración será alto
+
+## Etapa 5: runtime helpers
+
+Sólo cuando tu ABI ya sea robusto.
+
+Razón:
+
+- los helpers son llamadas internas generadas por el compilador
+- si tu ABI es frágil, lo descubrirás muy pronto
+
+## Etapa 6: interrupciones
+
+Sólo cuando:
+
+- ya tengas backend estable
+- ya entiendas qué estado puede estar vivo en cualquier punto
+
+## Etapa 7: optimización
+
+Sólo cuando:
+
+- ya confíes en la corrección base
+
+Empieza por:
+
+- constantes
+- DCE
+- peephole
+
+No por:
+
+- register allocation global compleja
+
+## Qué documentos te conviene escribir en tu propio proyecto
+
+Inspirado en este repositorio, conviene documentar:
+
+- ABI
+- memory model
+- lowering de llamadas
+- helpers
+- ISR
+- optimización
+
+No por burocracia, sino porque documentar bien obliga a pensar bien.
+
+---
+
+# 37. Epílogo pedagógico
+
+Si has llegado hasta aquí, ya puedes mirar este repositorio de otra forma.
+
+Ya no es sólo “código Rust que genera código PIC16”.
+
+Es un ejemplo muy claro de varias ideas profundas:
+
+- los compiladores no son una única transformación
+- cada capa existe para resolver un problema concreto
+- el hardware manda mucho más de lo que parece
+- un buen ABI puede cambiar por completo la robustez del sistema
+- una IR bien diseñada simplifica tanto el backend como la optimización
+- las restricciones bien documentadas son una fortaleza, no una debilidad
+
+Y quizá la enseñanza más importante de todas es ésta:
+
+```text
+construir un compilador no consiste en acumular features;
+consiste en tomar decisiones arquitectónicas coherentes
+y hacerlas visibles, comprobables y mantenibles.
+```
+
+Ésa es, precisamente, una de las mejores lecciones que se pueden extraer de `pic16cc`.
