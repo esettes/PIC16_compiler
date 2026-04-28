@@ -1,0 +1,200 @@
+error: unknown start of token: \
+   --> tests/compiler_pipeline.rs:998:10
+    |
+998 |         "\
+    |          ^
+
+error: unknown start of token: \
+    --> tests/compiler_pipeline.rs:1020:10
+     |
+1020 |         "\
+     |          ^
+
+error: prefix `parameters` is unknown
+    --> tests/compiler_pipeline.rs:1137:41
+     |
+1137 |     assert!(error.contains("cannot take parameters"));
+     |                                         ^^^^^^^^^^ unknown prefix
+     |
+     = note: prefixed identifiers and literals are reserved since Rust 2021
+help: consider inserting whitespace here
+     |
+1137 |     assert!(error.contains("cannot take parameters "));
+     |                                                   +
+
+error: unknown start of token: \
+    --> tests/compiler_pipeline.rs:1146:10
+     |
+1146 |         "\
+     |          ^
+
+error: prefix `handler` is unknown
+    --> tests/compiler_pipeline.rs:1160:48
+     |
+1160 |     assert!(error.contains("only one interrupt handler"));
+     |                                                ^^^^^^^ unknown prefix
+     |
+     = note: prefixed identifiers and literals are reserved since Rust 2021
+help: consider inserting whitespace here
+     |
+1160 |     assert!(error.contains("only one interrupt handler "));
+     |                                                       +
+
+error: unknown start of token: \
+    --> tests/compiler_pipeline.rs:1169:10
+     |
+1169 |         "\
+     |          ^
+
+error: unknown start of token: `
+    --> tests/compiler_pipeline.rs:1183:41
+     |
+1183 |     assert!(error.contains("cannot call `helper`"));
+     |                                         ^
+     |
+help: Unicode character '`' (Grave Accent) looks like ''' (Single Quote), but it is not
+     |
+1183 -     assert!(error.contains("cannot call `helper`"));
+1183 +     assert!(error.contains("cannot call 'helper`"));
+     |
+
+error: unknown start of token: `
+    --> tests/compiler_pipeline.rs:1183:48
+     |
+1183 |     assert!(error.contains("cannot call `helper`"));
+     |                                                ^
+     |
+help: Unicode character '`' (Grave Accent) looks like ''' (Single Quote), but it is not
+     |
+1183 -     assert!(error.contains("cannot call `helper`"));
+1183 +     assert!(error.contains("cannot call `helper'"));
+     |
+
+error: unknown start of token: \
+    --> tests/compiler_pipeline.rs:1192:10
+     |
+1192 |         "\
+     |          ^
+
+error: prefix `helper` is unknown
+    --> tests/compiler_pipeline.rs:1207:37
+     |
+1207 |     assert!(error.contains("runtime helper"));
+     |                                     ^^^^^^ unknown prefix
+     |
+     = note: prefixed identifiers and literals are reserved since Rust 2021
+help: consider inserting whitespace here
+     |
+1207 |     assert!(error.contains("runtime helper "));
+     |                                           +
+
+error: unknown start of token: \
+    --> tests/compiler_pipeline.rs:1216:10
+     |
+1216 |         "\
+     |          ^
+
+error: prefix `hex` is unknown
+    --> tests/compiler_pipeline.rs:1234:49
+     |
+1234 |             output: temp_file("mixed-signedness.hex"),
+     |                                                 ^^^ unknown prefix
+     |
+     = note: prefixed identifiers and literals are reserved since Rust 2021
+help: consider inserting whitespace here
+     |
+1234 |             output: temp_file("mixed-signedness.hex "),
+     |                                                    +
+
+error: prefix `fail` is unknown
+    --> tests/compiler_pipeline.rs:1244:23
+     |
+1244 |     .expect_err("must fail");
+     |                       ^^^^ unknown prefix
+     |
+     = note: prefixed identifiers and literals are reserved since Rust 2021
+help: consider inserting whitespace here
+     |
+1244 |     .expect_err("must fail ");
+     |                           +
+
+error: prefix `signedness` is unknown
+    --> tests/compiler_pipeline.rs:1246:48
+     |
+1246 |     assert!(format!("{error}").contains("mixed signedness"));
+     |                                                ^^^^^^^^^^ unknown prefix
+     |
+     = note: prefixed identifiers and literals are reserved since Rust 2021
+help: consider inserting whitespace here
+     |
+1246 |     assert!(format!("{error}").contains("mixed signedness "));
+     |                                                          +
+
+error: unknown start of token: \
+    --> tests/compiler_pipeline.rs:1259:22
+     |
+1259 |                     "\
+     |                      ^
+
+error: prefix `hex` is unknown
+    --> tests/compiler_pipeline.rs:1273:42
+     |
+1273 |             output: temp_file("recursion.hex"),
+     |                                          ^^^ unknown prefix
+     |
+     = note: prefixed identifiers and literals are reserved since Rust 2021
+help: consider inserting whitespace here
+     |
+1273 |             output: temp_file("recursion.hex "),
+     |                                             +
+
+error: prefix `fail` is unknown
+    --> tests/compiler_pipeline.rs:1283:23
+     |
+1283 |     .expect_err("must fail");
+     |                       ^^^^ unknown prefix
+     |
+     = note: prefixed identifiers and literals are reserved since Rust 2021
+help: consider inserting whitespace here
+     |
+1283 |     .expect_err("must fail ");
+     |                           +
+
+error: prefix `cycle` is unknown
+    --> tests/compiler_pipeline.rs:1285:57
+     |
+1285 |     assert!(format!("{error}").contains("recursive call cycle"));
+     |                                                         ^^^^^ unknown prefix
+     |
+     = note: prefixed identifiers and literals are reserved since Rust 2021
+help: consider inserting whitespace here
+     |
+1285 |     assert!(format!("{error}").contains("recursive call cycle "));
+     |                                                              +
+
+error: unknown start of token: \
+    --> tests/compiler_pipeline.rs:1298:22
+     |
+1298 |                     "\
+     |                      ^
+
+error: prefix `hex` is unknown
+    --> tests/compiler_pipeline.rs:1314:45
+     |
+1314 |             output: temp_file("return-local.hex"),
+     |                                             ^^^ unknown prefix
+     |
+     = note: prefixed identifiers and literals are reserved since Rust 2021
+help: consider inserting whitespace here
+     |
+1314 |             output: temp_file("return-local.hex "),
+     |                                                +
+
+error: prefix `fail` is unknown
+    --> tests/compiler_pipeline.rs:1324:23
+     |
+1324 |     .expect_err("must fail");
+     |                       ^^^^ unknown prefix
+     |
+     = note: prefixed identifiers and literals are reserved since Rust 2021
+help: consider inserting whitespace here

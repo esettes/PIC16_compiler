@@ -1115,29 +1115,21 @@ impl<'a> Parser<'a> {
                 next_value = value.saturating_add(1);
 
                 if self.match_symbol(Symbol::Comma) {
-                    if self.check_symbol(Symbol::RBrace) {
-                        self.advance();
-                        break;
-                    }
                     continue;
+                } else {
+                    break;
                 }
-                self.expect_symbol(Symbol::RBrace);
-                break;
             }
 
-            if self.check_symbol(Symbol::RBrace) {
-                self.advance();
-            }
+            self.expect_symbol(Symbol::RBrace);
 
-            if let Some(tag) = tag.clone() {
-                if !self.enum_tags.insert(tag.clone()) {
-                    self.diagnostics.error(
-                        "parser",
-                        Some(Span::new(start, self.previous_span().end)),
-                        format!("redefinition of enum `{tag}`"),
-                        None,
-                    );
-                }
+            if let Some(tag_name) = tag.as_ref() && !self.enum_tags.insert(tag_name.clone()) {
+                self.diagnostics.error(
+                    "parser",
+                    Some(Span::new(start, self.previous_span().end)),
+                    format!("redefinition of enum `{}`", tag_name),
+                    None,
+                );
             }
         } else if let Some(tag) = tag {
             if !self.enum_tags.contains(&tag) {

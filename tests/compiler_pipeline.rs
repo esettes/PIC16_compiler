@@ -2058,3 +2058,49 @@ fn parses_cli_shape_requested_in_readme() {
     assert_eq!(command.target, "pic16f877a");
     assert_eq!(command.output, PathBuf::from("build/main.hex"));
 }
+
+#[test]
+/// Verifies named structs and global positional initializers compile and emit program HEX.
+fn compiles_phase8_struct_global_initializer() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase8-struct-global.c",
+        "\
+#include <pic16/pic16f877a.h>
+struct Point { unsigned int x; unsigned int y; };
+struct Point p = { 1000, 2000 };
+void main(void) {
+    TRISB = 0x00;
+    PORTB = p.x & 0xFF;
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+    let map = read_artifact(&output, "map");
+    assert!(map.contains("p"));
+}
+
+#[test]
+/// Verifies typedef, enum constants, and explicit casts compile in Phase 8.
+fn compiles_phase8_enum_typedef_casts() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase8-enum-typedef.c",
+        "\
+#include <pic16/pic16f628a.h>
+typedef unsigned int uint;
+enum Flags { A = 1, B, C = 8 };
+uint f = (uint)B;
+unsigned char *np = (unsigned char*)0;
+void main(void) {
+    TRISB = 0x00;
+    PORTB = f & 0xFF;
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+    let map = read_artifact(&output, "map");
+    assert!(map.contains("f"));
+}

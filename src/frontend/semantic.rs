@@ -1540,9 +1540,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 return None;
             };
 
-            let Some(len) = target_ty.array_len else {
-                return None;
-            };
+            let len = target_ty.array_len?;
             let element_ty = target_ty.element_type();
             if element_ty.is_array() || element_ty.is_struct() {
                 diagnostics.error(
@@ -1607,9 +1605,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 return None;
             };
 
-            let Some(struct_id) = target_ty.struct_id else {
-                return None;
-            };
+            let struct_id = target_ty.struct_id?;
             let Some(def) = self.struct_defs.get(struct_id) else {
                 diagnostics.error(
                     "semantic",
