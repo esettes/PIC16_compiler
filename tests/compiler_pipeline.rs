@@ -188,6 +188,46 @@ fn compile_example_with_profile(
     compile_path_with_profile(target, repo(input), warning_profile)
 }
 
+/// Compiles one checked-in example through the built `picc` CLI under strict warnings.
+fn compile_example_via_picc_cli(target: &str, input: &str) -> PathBuf {
+    let out_dir = temp_dir_path("phase8-cli");
+    fs::create_dir_all(&out_dir).expect("out dir");
+    let stem = Path::new(input)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .expect("example stem");
+    let out_hex = out_dir.join(format!("{stem}.hex"));
+    let output = Command::new(picc_bin())
+        .current_dir(repo("."))
+        .args([
+            "--target",
+            target,
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-O2",
+            "-I",
+            "include",
+            "--map",
+            "--list-file",
+        ])
+        .arg("-o")
+        .arg(&out_hex)
+        .arg(input)
+        .output()
+        .expect("run picc");
+
+    if !output.status.success() {
+        panic!(
+            "picc failed for {input}: stdout={:?} stderr={:?}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    out_hex
+}
+
 /// Returns a strict warning profile equivalent to `-Wall -Wextra -Werror`.
 fn strict_warnings() -> WarningProfile {
     WarningProfile {
@@ -1731,6 +1771,49 @@ void main(void) {
 }
 
 #[test]
+/// Verifies arrays inside structs are rejected with a clear Phase 8 diagnostic.
+fn reports_phase8_array_field_in_struct_unsupported() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase8-struct-array-field.c",
+        "\
+#include <pic16/pic16f628a.h>
+struct Packet {
+    unsigned char bytes[2];
+};
+void main(void) {
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("arrays inside structs are not supported"));
+}
+
+#[test]
+/// Verifies nested struct fields are rejected with a clear Phase 8 diagnostic.
+fn reports_phase8_nested_struct_field_unsupported() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase8-nested-struct-field.c",
+        "\
+#include <pic16/pic16f628a.h>
+struct Inner {
+    unsigned char x;
+};
+struct Outer {
+    struct Inner inner;
+};
+void main(void) {
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("nested struct fields are not supported"));
+}
+
+#[test]
 /// Verifies explicit narrowing casts avoid implicit-conversion diagnostics under `-Werror`.
 fn allows_phase8_explicit_narrowing_cast_under_werror() {
     let output = compile_source_with_profile(
@@ -2103,4 +2186,23 @@ void main(void) {
     assert_hex_is_programmable(&output);
     let map = read_artifact(&output, "map");
     assert!(map.contains("f"));
+}
+
+#[test]
+/// Verifies checked-in Phase 8 examples compile cleanly through the `picc` CLI.
+fn phase8_examples_compile_via_picc() {
+    let examples = [
+        ("pic16f628a", "examples/pic16f628a/typedef_enum.c"),
+        ("pic16f628a", "examples/pic16f628a/struct_point.c"),
+        ("pic16f628a", "examples/pic16f628a/array_initializer.c"),
+        ("pic16f628a", "examples/pic16f628a/struct_initializer.c"),
+        ("pic16f628a", "examples/pic16f628a/casts.c"),
+    ];
+
+    for (target, example) in examples {
+        let output = compile_example_via_picc_cli(target, example);
+        assert_hex_is_programmable(&output);
+        assert!(output.with_extension("map").exists());
+        assert!(output.with_extension("lst").exists());
+    }
 }

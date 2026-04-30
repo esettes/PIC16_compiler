@@ -230,7 +230,7 @@ Explicit casts:
 
 - scalar widening/narrowing and signedness casts are supported
 - explicit narrowing suppresses implicit narrowing warnings
-- one-level pointer-to-pointer bitcasts are supported
+- casts between supported one-level data pointers are supported
 - integer-to-pointer is restricted to integer zero (`(T*)0`)
 - pointer-to-integer is restricted to 16-bit integer targets
 
@@ -245,6 +245,9 @@ Supported:
 - globals
 - auto locals
 - static locals
+- file-scope `typedef` aliases for supported object/value types
+- `enum` declarations and enumerator constants
+- named packed `struct` declarations with non-aggregate fields
 - `if` / `else`
 - `while`
 - `for`
@@ -254,15 +257,19 @@ Supported:
 - direct calls
 - `char`, `unsigned char`, `int`, `unsigned int`, `void`
 - fixed-size one-dimensional arrays of supported scalar types
-- pointers to supported scalar types in PIC16 data memory
+- flat struct objects with scalar or one-level pointer fields
+- one-level data pointers to supported scalar or flat named struct types in PIC16 data memory
 - `&obj`
 - `*ptr`
 - `a[i]`
 - `p[i]`
+- `.` and `->`
 - unary `!`, `~`, unary `-`
 - `+`, `-`, `*`, `/`, `%`, `<<`, `>>`, `&`, `|`, `^`
 - `==`, `!=`, `<`, `<=`, `>`, `>=`
 - compile-time `sizeof` for supported scalars, pointers, and fixed arrays
+- positional array and flat struct initializer lists with zero-fill
+- explicit casts for supported scalar and one-level data-pointer forms
 - indirect data access through `FSR/INDF`
 - 3+ argument stack calls
 - stack-backed local arrays
@@ -271,16 +278,31 @@ Supported:
 - interrupt vector emission at `0x0004`
 - `retfie`
 
-Still unsupported:
+Partially supported / constrained:
+
+- `typedef` names are file-scope only and cannot conflict with object/function names
+- enums use fixed 16-bit `int` representation in this phase
+- structs use packed declaration-order layout with no implicit padding
+- struct fields must stay flat: scalar or one-level pointer fields only
+- aggregate initializers are positional only; missing elements are zero-filled
+- global aggregate initializer elements must be constant expressions
+- explicit casts are limited to scalar conversions, one-level data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
+- aggregate objects support declaration/initialization and field access, but not whole-struct assignment
+
+Unsupported:
 
 - `switch`
+- `union`
 - source-level function pointers
 - pointer-to-pointer types
 - multidimensional arrays
-- array initializers
+- arrays inside structs
+- nested struct fields
+- designated initializers
+- nested aggregate initializer lists
+- whole-struct assignment
 - pointer subtraction between two pointers
 - pointer relational compares other than `==` / `!=`
-- `struct`, `union`, `enum`
 - `float`
 - recursion
 
@@ -288,18 +310,22 @@ Current constraints:
 
 - recursion is rejected because Phase 4 computes maximum software-stack depth statically and has no runtime overflow checks
 - returning a pointer to stack-local storage is rejected, including direct forms and obvious local alias chains
-- explicit source casts are still limited; widening/truncation casts are primarily inserted by semantic analysis
+- explicit casts stay limited to scalar conversions, one-level data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
+- aggregate initializers are rejected inside interrupt handlers
+- global aggregate initializer elements must be constant expressions
 - pointers are data-space-only; code pointers remain unsupported
 - only one ISR is supported in this phase
 - ISR code cannot call normal functions or Phase 5 runtime helpers
 - no emulator or hardware execution runs in CI; validation is compile/listing/map/HEX shape based
 
-## Known Limitations (Phase 6 Freeze)
+## Known Limitations (Phase 8 Freeze)
 
 - recursion is unsupported
 - no runtime software-stack overflow detection is implemented
 - ISR restrictions remain conservative: one ISR, no normal calls, no runtime-helper-requiring expressions
-- C type-system support is partial (no `struct`, `union`, `enum`, `float`)
+- aggregate support is intentionally flat: no arrays inside structs, nested struct fields, designated initializers, nested aggregate initializers, or whole-struct assignment
+- enums stay fixed to 16-bit `int`; structs stay packed with no padding
+- `union` and `float` are unsupported
 - source-level function pointers are unsupported
 - dynamic division/modulo by zero returns `0` (constant zero divisors are diagnostics)
 - pointers are data-space only; code pointers are unsupported
@@ -472,7 +498,12 @@ picc --list-targets
 - [examples/pic16f628a/blink.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/blink.c:1)
 - [examples/pic16f628a/arith16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/arith16.c:1)
 - [examples/pic16f628a/array_fill.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/array_fill.c:1)
+- [examples/pic16f628a/array_initializer.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/array_initializer.c:1)
+- [examples/pic16f628a/casts.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/casts.c:1)
 - [examples/pic16f628a/stack_abi.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/stack_abi.c:1)
+- [examples/pic16f628a/struct_initializer.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/struct_initializer.c:1)
+- [examples/pic16f628a/struct_point.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/struct_point.c:1)
+- [examples/pic16f628a/typedef_enum.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/typedef_enum.c:1)
 - [examples/pic16f877a/blink.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/blink.c:1)
 - [examples/pic16f877a/call_chain.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/call_chain.c:1)
 - [examples/pic16f877a/compare16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/compare16.c:1)
@@ -504,4 +535,4 @@ picc --list-targets
 
 ## Current Limits
 
-Phase 7 does not add new language features. It only improves code quality within the existing Phase 6 language/runtime surface.
+Phase 8 adds `typedef`, `enum`, packed named `struct`, flat aggregate initializer, and explicit-cast support for constrained scalar/data-pointer cases. Current hard limits remain: no `union`, no pointer-to-pointer types, no multidimensional arrays, no nested aggregate layouts or designated initializers, no whole-struct assignment, no function pointers, no `float`, and no recursion.

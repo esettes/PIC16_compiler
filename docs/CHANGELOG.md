@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.0 - 2026-04-28
+
+Release v0.1.0 corresponds to the Phase 8 milestone; see `docs/releases/v0.1.0.md` for full notes.
+
 ## Phase 8 - Type System and Initializers
 
 - Added: `typedef` support for type aliases.

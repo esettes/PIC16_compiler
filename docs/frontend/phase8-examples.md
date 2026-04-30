@@ -3,10 +3,10 @@
 Example: struct and initializer
 
 ```c
-struct Point { unsigned short x; unsigned short y; };
+struct Point { unsigned int x; unsigned int y; };
 struct Point p = { 100, 200 };
 
-unsigned short arr[4] = { 1, 2 }; // rest zero-filled
+unsigned int arr[4] = { 1, 2 }; // rest zero-filled
 ```
 
 Example: enum

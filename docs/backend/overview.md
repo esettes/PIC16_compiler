@@ -10,7 +10,7 @@ Shared backend responsibilities:
 - IR -> PIC16 asm lowering
 - 14-bit word encoding
 
-Current backend phase: **Phase 7 code-generation quality and optimization on top of Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**
+Current backend phase: **Phase 8 aggregate/type-aware lowering on top of Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**
 
 Backend owns:
 
@@ -24,6 +24,8 @@ Backend owns:
 - interrupt vector emission and ISR dispatch
 - ISR-specific save/restore and `retfie` lowering
 - Phase 7 peephole cleanup and helper fast-path selection
+- packed struct field offset lowering for `.` / `->`
+- startup writes for pre-flattened global aggregate initializer bytes
 - bank/page reuse tracking
 
 Current call contract:
@@ -88,6 +90,10 @@ Phase 7 optimization responsibilities:
 Phase 7 backend docs:
 
 - [optimization.md](/home/settes/cursus/PIC16_compiler/docs/backend/optimization.md:1)
+
+Phase 8 backend docs:
+
+- [phase8-struct-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase8-struct-layout.md:1)
 
 Historical docs:
 

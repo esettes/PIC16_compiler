@@ -176,26 +176,39 @@ Supported:
 - `void`, `char`, `unsigned char`, `int`, `unsigned int`
 - functions
 - globals, locals, static locals
+- file-scope `typedef` aliases for supported object/value types
+- `enum` declarations and enumerator constants
+- named packed `struct` declarations with non-aggregate fields
 - fixed-size one-dimensional arrays of supported scalar types
-- data pointers to supported scalar types
+- flat struct objects with scalar or one-level pointer fields
+- one-level data pointers to supported scalar or flat named struct types
 - `if/else`, `while`, `for`, `do while`, `break`, `continue`, `return`
 - direct calls
 - `&obj`, `*ptr`, `a[i]`, `p[i]`
+- `.` and `->`
 - `==`, `!=`, `<`, `<=`, `>`, `>=`
 - `+`, `-`, `*`, `/`, `%`, `<<`, `>>`, `&`, `|`, `^`, `!`, `~`
 - compile-time `sizeof`
+- positional array and flat struct initializer lists with zero-fill
+- explicit casts for supported scalar and one-level data-pointer forms
 
 Deferred:
 - richer pointer compatibility
-- array initializers
+- nested aggregate support
+- whole-object aggregate operations
 
 Not implemented:
 
 - `switch`
-- pointer-to-pointer
-- function pointers
+- `union`
+- pointer-to-pointer types
+- source-level function pointers
 - multidimensional arrays
-- structs
+- arrays inside structs
+- nested struct fields
+- designated initializers
+- nested aggregate initializer lists
+- whole-struct assignment
 - floats
 - recursion
 
@@ -221,6 +234,12 @@ Not implemented:
 - equal-width mixed signedness arithmetic is rejected unless user adds an explicit cast
 - expressions preserve lvalue/rvalue distinction
 - array decay is explicit in typed tree
+- typedef aliases are accepted at file scope only
+- enum constants are global compile-time 16-bit `int` values
+- structs are packed in declaration order and only permit flat scalar/one-level pointer fields
+- local aggregate initializers lower to per-slot stores; global aggregate initializers require constant elements and pre-materialize into byte arrays
+- designated initializers, nested aggregate initializers, arrays inside structs, nested struct fields, and whole-struct assignment are rejected directly
+- explicit casts cover scalar conversions, one-level data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
 - stack-local pointer returns are rejected directly and through obvious local alias chains
 - shift result type is left operand type; shift count is coerced to left operand type
 

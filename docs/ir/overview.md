@@ -16,6 +16,8 @@ Current IR carries:
 - explicit indirect load/store
 - direct-call instructions with arbitrary argument lists
 - typed arithmetic and shift instructions for helper-aware lowering
+- member-access-friendly base + constant-offset address computations
+- flat aggregate initializer lowering into scalar stores or global byte payloads
 - per-function interrupt metadata for backend vector/prologue selection
 - optimization-pass-friendly CFG blocks and temp tables
 
@@ -27,11 +29,18 @@ Phase 7 optimization passes:
 - dead code elimination
 - temp-slot compaction
 
+Phase 8 lowering notes:
+
+- local array/struct initializers are flattened before or during IR lowering into per-slot stores
+- global array/struct initializers arrive as byte payloads for backend startup writes
+- whole-struct assignment, designated initializers, and nested aggregate forms are rejected before IR generation
+
 Current detail:
 
 - [phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
 - [phase5-arithmetic-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase5-arithmetic-lowering.md:1)
 - [phase6-isr-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase6-isr-lowering.md:1)
+- [phase8-aggregate-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase8-aggregate-lowering.md:1)
 
 Historical detail:
 

@@ -10,13 +10,17 @@
 
 Target backend is classic 14-bit PIC16 mid-range family, not a generic 8-bit CPU model.
 
-Current Phase 5 keeps that split intact while extending:
+Current Phase 8 keeps that split intact while extending:
 
 - stack-first caller-pushed ABI
 - per-call frame storage for locals and IR temps
 - typed IR call lowering for arbitrary argument counts
 - explicit pointer and frame access through `FSR/INDF`
 - arithmetic runtime helpers without replacing shared `midrange14` backend
+- Phase 7 IR/backend optimization passes
+- Phase 8 `typedef`/`enum`/packed-`struct` frontend support
+- Phase 8 flat aggregate initializer analysis and lowering
+- Phase 8 explicit cast validation for supported scalar/data-pointer forms
 - PIC16 banking/paging without backend duplication per device
 
 See:
