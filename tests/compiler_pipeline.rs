@@ -2206,3 +2206,400 @@ fn phase8_examples_compile_via_picc() {
         assert!(output.with_extension("lst").exists());
     }
 }
+
+#[test]
+/// Verifies unsigned-byte switches lower to a compare chain and emit valid artifacts.
+fn compiles_phase9_switch_unsigned_char_compare_chain() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase9-switch-u8.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    unsigned char state = 1;
+    TRISB = 0x00;
+    switch (state) {
+        case 0:
+            PORTB = 0x00;
+            break;
+        case 1:
+            PORTB = 0x11;
+            break;
+        default:
+            PORTB = 0xFF;
+            break;
+    }
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    let listing = read_artifact(&output, "lst");
+    let map = read_artifact(&output, "map");
+    assert_hex_is_programmable(&output);
+    assert!(count_occurrences(&asm, "subwf") >= 2);
+    assert!(count_occurrences(&asm, "goto fn_main_b") >= 3);
+    assert!(listing.contains("subwf"));
+    assert!(map.contains("fn_main"));
+}
+
+#[test]
+/// Verifies signed-16-bit switches compile without a default label.
+fn compiles_phase9_switch_int_without_default() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase9-switch-int.c",
+        "\
+#include <pic16/pic16f877a.h>
+void main(void) {
+    int value = -1;
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    switch (value) {
+        case -1:
+            PORTB = 0x0F;
+            break;
+        case 2:
+            PORTB = 0xF0;
+            break;
+    }
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies enum-backed switches compile through the fixed 16-bit enum model.
+fn compiles_phase9_switch_enum() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase9-switch-enum.c",
+        "\
+#include <pic16/pic16f877a.h>
+enum State {
+    STATE_IDLE,
+    STATE_RUN,
+    STATE_ERROR = 9
+};
+void main(void) {
+    enum State state = STATE_RUN;
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    switch (state) {
+        case STATE_IDLE:
+            PORTB = 0x00;
+            break;
+        case STATE_RUN:
+            PORTB = 0x01;
+            break;
+        default:
+            PORTB = STATE_ERROR;
+            break;
+    }
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies case fallthrough lowers without forcing an intermediate break.
+fn compiles_phase9_switch_fallthrough() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase9-switch-fallthrough.c",
+        "\
+#include <pic16/pic16f877a.h>
+void main(void) {
+    unsigned char x = 1;
+    unsigned char y = 0;
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    switch (x) {
+        case 1:
+            y = 10;
+        case 2:
+            y = y + 1;
+            break;
+        default:
+            y = 0xFF;
+            break;
+    }
+    PORTB = y;
+}
+",
+    );
+
+    let ir = read_artifact(&output, "ir");
+    assert_hex_is_programmable(&output);
+    assert!(ir.contains("switch.case") || count_occurrences(&ir, "Equal") >= 2);
+}
+
+#[test]
+/// Verifies nested switches compile with independent break targets.
+fn compiles_phase9_nested_switch() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase9-nested-switch.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    unsigned char outer = 1;
+    unsigned char inner = 2;
+    TRISB = 0x00;
+    switch (outer) {
+        case 1:
+            switch (inner) {
+                case 2:
+                    PORTB = 0x22;
+                    break;
+                default:
+                    PORTB = 0x33;
+                    break;
+            }
+            break;
+        default:
+            PORTB = 0xFF;
+            break;
+    }
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies switch statements compile inside loops and `break` exits only the switch.
+fn compiles_phase9_switch_inside_loop_break_exits_switch_only() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase9-switch-in-loop.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    unsigned char i = 0;
+    unsigned char acc = 0;
+    TRISB = 0x00;
+    while (i < 3) {
+        switch (i) {
+            case 1:
+                acc = acc + 2;
+                break;
+            default:
+                acc = acc + 1;
+                break;
+        }
+        i = i + 1;
+    }
+    PORTB = acc;
+}
+",
+    );
+
+    let ir = read_artifact(&output, "ir");
+    assert_hex_is_programmable(&output);
+    assert!(ir.contains("while.head"));
+}
+
+#[test]
+/// Verifies loops nested inside one switch body compile cleanly.
+fn compiles_phase9_loop_inside_switch() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase9-loop-in-switch.c",
+        "\
+#include <pic16/pic16f877a.h>
+void main(void) {
+    unsigned char mode = 0;
+    unsigned char i = 0;
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    switch (mode) {
+        case 0:
+            while (i < 2) {
+                PORTB = i;
+                i = i + 1;
+            }
+            break;
+        default:
+            PORTB = 0xFF;
+            break;
+    }
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies duplicate case labels are rejected clearly.
+fn reports_phase9_duplicate_case_value() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase9-dup-case.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    unsigned char x = 0;
+    switch (x) {
+        case 1:
+            break;
+        case 1:
+            break;
+    }
+}
+",
+    );
+
+    assert!(error.contains("duplicate case value"));
+}
+
+#[test]
+/// Verifies multiple default labels are rejected clearly.
+fn reports_phase9_multiple_defaults() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase9-multi-default.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    unsigned char x = 0;
+    switch (x) {
+        default:
+            break;
+        default:
+            break;
+    }
+}
+",
+    );
+
+    assert!(error.contains("multiple `default`"));
+}
+
+#[test]
+/// Verifies `case` outside a switch is rejected clearly.
+fn reports_phase9_case_outside_switch() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase9-case-outside.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    case 1:
+        TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("`case` label outside switch"));
+}
+
+#[test]
+/// Verifies `default` outside a switch is rejected clearly.
+fn reports_phase9_default_outside_switch() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase9-default-outside.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    default:
+        TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("`default` label outside switch"));
+}
+
+#[test]
+/// Verifies non-constant case labels are rejected clearly.
+fn reports_phase9_nonconstant_case_label() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase9-nonconst-case.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    unsigned char x = 0;
+    unsigned char y = 1;
+    switch (x) {
+        case y:
+            break;
+        default:
+            break;
+    }
+}
+",
+    );
+
+    assert!(error.contains("case label must be a constant expression"));
+}
+
+#[test]
+/// Verifies out-of-range case labels are rejected for the chosen switch type.
+fn reports_phase9_case_value_not_representable() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase9-case-range.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    unsigned char x = 0;
+    switch (x) {
+        case 300:
+            break;
+        default:
+            break;
+    }
+}
+",
+    );
+
+    assert!(error.contains("not representable in switch type"));
+}
+
+#[test]
+/// Verifies switches reject unsupported non-integer controlling expressions.
+fn reports_phase9_switch_on_unsupported_type() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase9-switch-ptr.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    unsigned char value = 0;
+    unsigned char *ptr = &value;
+    switch (ptr) {
+        case 0:
+            break;
+    }
+}
+",
+    );
+
+    assert!(error.contains("switch expression must have integer or enum type"));
+}
+
+#[test]
+/// Verifies checked-in Phase 9 examples compile cleanly through the `picc` CLI.
+fn phase9_examples_compile_via_picc() {
+    let examples = [
+        ("pic16f628a", "examples/pic16f628a/switch_state.c"),
+        ("pic16f877a", "examples/pic16f877a/switch_enum.c"),
+        ("pic16f877a", "examples/pic16f877a/switch_fallthrough.c"),
+    ];
+
+    for (target, example) in examples {
+        let output = compile_example_via_picc_cli(target, example);
+        assert_hex_is_programmable(&output);
+        assert!(output.with_extension("map").exists());
+        assert!(output.with_extension("lst").exists());
+    }
+}

@@ -10,7 +10,7 @@
 
 Target backend is classic 14-bit PIC16 mid-range family, not a generic 8-bit CPU model.
 
-Current Phase 8 keeps that split intact while extending:
+Current Phase 9 keeps that split intact while extending:
 
 - stack-first caller-pushed ABI
 - per-call frame storage for locals and IR temps
@@ -21,6 +21,9 @@ Current Phase 8 keeps that split intact while extending:
 - Phase 8 `typedef`/`enum`/packed-`struct` frontend support
 - Phase 8 flat aggregate initializer analysis and lowering
 - Phase 8 explicit cast validation for supported scalar/data-pointer forms
+- Phase 9 `switch` / `case` / `default` parsing and semantic validation
+- Phase 9 compare-chain lowering into ordinary CFG branches instead of backend AST shortcuts
+- Phase 9 rejection of `case` / `default` labels nested under unrelated control statements
 - PIC16 banking/paging without backend duplication per device
 
 See:

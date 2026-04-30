@@ -334,15 +334,34 @@ impl<'a> Parser<'a> {
             self.expect_symbol(Symbol::Semicolon);
             return Stmt::Continue(Span::new(start, self.previous_span().end));
         }
+        if self.match_keyword(Keyword::Case) {
+            let value = self.parse_expression();
+            self.expect_symbol(Symbol::Colon);
+            let body = Box::new(self.parse_statement());
+            return Stmt::Case {
+                value,
+                body,
+                span: Span::new(start, self.previous_span().end),
+            };
+        }
+        if self.match_keyword(Keyword::Default) {
+            self.expect_symbol(Symbol::Colon);
+            let body = Box::new(self.parse_statement());
+            return Stmt::Default {
+                body,
+                span: Span::new(start, self.previous_span().end),
+            };
+        }
         if self.match_keyword(Keyword::Switch) {
-            self.diagnostics.error(
-                "parser",
-                Some(self.previous_span()),
-                "`switch` is not implemented yet",
-                Some("rewrite the construct using `if`/`else if` for now".to_string()),
-            );
-            self.synchronize_statement();
-            return Stmt::Empty(Span::new(start, self.previous_span().end));
+            self.expect_symbol(Symbol::LParen);
+            let expr = self.parse_expression();
+            self.expect_symbol(Symbol::RParen);
+            let body = Box::new(self.parse_statement());
+            return Stmt::Switch {
+                expr,
+                body,
+                span: Span::new(start, self.previous_span().end),
+            };
         }
         if self.match_symbol(Symbol::Semicolon) {
             return Stmt::Empty(Span::new(start, self.previous_span().end));
@@ -1421,16 +1440,6 @@ impl<'a> Parser<'a> {
         value as usize
     }
 
-    /// Skips tokens until a likely statement boundary after a parse error.
-    fn synchronize_statement(&mut self) {
-        while !self.is_eof() {
-            if self.match_symbol(Symbol::Semicolon) || self.match_symbol(Symbol::RBrace) {
-                break;
-            }
-            self.advance();
-        }
-    }
-
     /// Returns true when the current token can start a declaration.
     fn is_decl_start(&self) -> bool {
         matches!(
@@ -1551,5 +1560,99 @@ impl<'a> Parser<'a> {
     /// Returns true when the parser is positioned on the EOF token.
     fn is_eof(&self) -> bool {
         self.current().kind == TokenKind::Eof
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Parser;
+    use crate::common::source::{PreprocessedSource, SourceId, SourcePoint};
+    use crate::diagnostics::{DiagnosticBag, WarningProfile};
+    use crate::frontend::lexer::Lexer;
+
+    fn parse_source(source: &str) -> (String, DiagnosticBag) {
+        let origin = SourcePoint {
+            file: SourceId(0),
+            line: 1,
+            column: 1,
+        };
+        let mut preprocessed = PreprocessedSource::new();
+        preprocessed.push_str(source, origin);
+
+        let mut diagnostics = DiagnosticBag::new(WarningProfile::default());
+        let tokens = Lexer::new(&preprocessed, &mut diagnostics).tokenize();
+        let ast = Parser::new(tokens, &preprocessed, &mut diagnostics).parse_translation_unit();
+        (ast.render(), diagnostics)
+    }
+
+    #[test]
+    /// Verifies one basic switch statement parses into AST output with case/default labels.
+    fn parses_phase9_switch_case_default() {
+        let (ast, diagnostics) = parse_source(
+            "\
+void main(void) {
+    switch (mode) {
+        case 0:
+            PORTB = 0;
+            break;
+        default:
+            break;
+    }
+}
+",
+        );
+
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert!(ast.contains("switch mode"));
+        assert!(ast.contains("case 0"));
+        assert!(ast.contains("default"));
+    }
+
+    #[test]
+    /// Verifies nested switch statements parse without parser diagnostics.
+    fn parses_phase9_nested_switch() {
+        let (ast, diagnostics) = parse_source(
+            "\
+void main(void) {
+    switch (outer) {
+        case 1:
+            switch (inner) {
+                case 2:
+                    break;
+                default:
+                    break;
+            }
+            break;
+        default:
+            break;
+    }
+}
+",
+        );
+
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert!(ast.matches("switch ").count() >= 2);
+        assert!(ast.contains("case 2"));
+    }
+
+    #[test]
+    /// Verifies case/default labels parse as ordinary statements inside a switch block.
+    fn parses_phase9_case_label_sequence() {
+        let (ast, diagnostics) = parse_source(
+            "\
+void main(void) {
+    switch (x) {
+        case 1:
+        case 2:
+            value = 3;
+            break;
+    }
+}
+",
+        );
+
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert!(ast.contains("case 1"));
+        assert!(ast.contains("case 2"));
     }
 }

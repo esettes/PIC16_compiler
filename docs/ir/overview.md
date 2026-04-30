@@ -35,12 +35,23 @@ Phase 8 lowering notes:
 - global array/struct initializers arrive as byte payloads for backend startup writes
 - whole-struct assignment, designated initializers, and nested aggregate forms are rejected before IR generation
 
+Phase 9 lowering notes:
+
+- `switch` does not add a dedicated IR instruction in this phase
+- the IR lowerer evaluates the controlling expression once, then emits a linear equality-compare dispatch chain
+- case/default entries become ordinary CFG blocks
+- fallthrough is represented with ordinary jumps between successive case blocks
+- `break` from switches reuses ordinary jump-to-end CFG lowering
+- no jump tables are emitted in this phase because compare chains are simpler to verify on PIC16
+- case/default labels nested under unrelated control statements are rejected before IR generation
+
 Current detail:
 
 - [phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
 - [phase5-arithmetic-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase5-arithmetic-lowering.md:1)
 - [phase6-isr-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase6-isr-lowering.md:1)
 - [phase8-aggregate-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase8-aggregate-lowering.md:1)
+- [phase9-switch-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase9-switch-lowering.md:1)
 
 Historical detail:
 

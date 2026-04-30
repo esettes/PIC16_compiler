@@ -28,9 +28,18 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 8: C aggregate types and richer declarations on top of the Phase 7 optimization layer, Phase 6 interrupt model, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
+Current implementation is **Phase 9: `switch` / `case` / `default` control flow on top of the Phase 8 type-system work, Phase 7 optimization layer, Phase 6 interrupt model, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
 
-Phase 8 scope:
+Phase 9 scope:
+
+- `switch` statements over `char`, `unsigned char`, `int`, `unsigned int`, and enum-backed 16-bit `int`
+- `case` labels with integer constant expressions or enum constants
+- `default` labels
+- `break` from switches
+- ordinary C fallthrough between adjacent cases
+- explicit diagnostics for duplicate or invalid switch labels
+
+Phase 8 scope remains:
 
 - `typedef` aliases for supported scalar/pointer/array/object forms
 - `enum` declarations with implicit and explicit enumerator values
@@ -53,6 +62,7 @@ What changed from Phase 3:
 - Phase 6 ISR body rules reject normal calls and runtime-helper-requiring expressions
 - Phase 7 reduces redundant instructions, shrinks temp pressure, and avoids some helper calls entirely
 - Phase 8 adds typedef/enum/struct support, aggregate initializers, and explicit casts for supported forms
+- Phase 9 adds compare-chain lowering for `switch` / `case` / `default`, fallthrough, and switch-aware `break`
 - active docs now describe stack-first behavior; old Phase 2/3 docs remain historical
 
 ## Phase 4 ABI Summary
@@ -87,9 +97,12 @@ More detail:
 - [docs/ir/phase5-arithmetic-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase5-arithmetic-lowering.md:1)
 - [docs/ir/phase6-isr-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase6-isr-lowering.md:1)
 - [docs/ir/phase8-aggregate-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase8-aggregate-lowering.md:1)
+- [docs/ir/phase9-switch-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase9-switch-lowering.md:1)
 - [docs/frontend/phase6-isr-syntax.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase6-isr-syntax.md:1)
 - [docs/frontend/phase8-types.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase8-types.md:1)
+- [docs/frontend/phase9-switch.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase9-switch.md:1)
 - [docs/backend/phase8-struct-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase8-struct-layout.md:1)
+- [docs/backend/phase9-switch-codegen.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase9-switch-codegen.md:1)
 - [docs/runtime/phase5-arithmetic-helpers.md](/home/settes/cursus/PIC16_compiler/docs/runtime/phase5-arithmetic-helpers.md:1)
 - [docs/migration/phase3-to-phase4-abi.md](/home/settes/cursus/PIC16_compiler/docs/migration/phase3-to-phase4-abi.md:1)
 
@@ -234,6 +247,29 @@ Explicit casts:
 - integer-to-pointer is restricted to integer zero (`(T*)0`)
 - pointer-to-integer is restricted to 16-bit integer targets
 
+## Phase 9 Switch Summary
+
+Supported:
+
+- `switch (expr)` over `char`, `unsigned char`, `int`, `unsigned int`, and enum-backed 16-bit `int`
+- `case` labels using integer constant expressions or enum constants
+- one optional `default` label per switch
+- `break` exits the innermost enclosing switch; in mixed loop/switch nesting it does not exit an outer loop
+- fallthrough between adjacent cases when no `break`, `return`, or other control transfer intervenes
+- nested switches
+- switches inside loops and loops inside switches
+- compare-and-branch lowering; no jump tables in this phase
+
+Diagnostics:
+
+- duplicate case values
+- multiple `default` labels
+- `case` / `default` outside switches
+- non-constant case labels
+- case values not representable in the switch expression type
+- unsupported non-integer switch expressions
+- case/default labels nested under other control statements in the same switch are rejected in this phase
+
 ## Supported Subset
 
 Supported:
@@ -252,6 +288,7 @@ Supported:
 - `while`
 - `for`
 - `do while`
+- `switch` / `case` / `default`
 - `break` / `continue`
 - `return`
 - direct calls
@@ -288,10 +325,11 @@ Partially supported / constrained:
 - global aggregate initializer elements must be constant expressions
 - explicit casts are limited to scalar conversions, one-level data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
 - aggregate objects support declaration/initialization and field access, but not whole-struct assignment
+- switch lowering uses linear compare chains; no jump tables are emitted in this phase
+- case/default labels must stay in the switch body flow or nested blocks; labels under unrelated control statements like `if`, `while`, or `for` are rejected in phase 9
 
 Unsupported:
 
-- `switch`
 - `union`
 - source-level function pointers
 - pointer-to-pointer types
@@ -313,17 +351,20 @@ Current constraints:
 - explicit casts stay limited to scalar conversions, one-level data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
 - aggregate initializers are rejected inside interrupt handlers
 - global aggregate initializer elements must be constant expressions
+- switch expressions must stay in the supported integer subset; case labels must be constant and representable
+- switch inside ISR is allowed only when the controlling expression and body remain inline-safe under existing Phase 6 helper restrictions
 - pointers are data-space-only; code pointers remain unsupported
 - only one ISR is supported in this phase
 - ISR code cannot call normal functions or Phase 5 runtime helpers
 - no emulator or hardware execution runs in CI; validation is compile/listing/map/HEX shape based
 
-## Known Limitations (Phase 8 Freeze)
+## Known Limitations (Phase 9 Freeze)
 
 - recursion is unsupported
 - no runtime software-stack overflow detection is implemented
 - ISR restrictions remain conservative: one ISR, no normal calls, no runtime-helper-requiring expressions
 - aggregate support is intentionally flat: no arrays inside structs, nested struct fields, designated initializers, nested aggregate initializers, or whole-struct assignment
+- switch lowering stays intentionally simple: compare chains only, no jump tables, and labels nested under other control statements are rejected
 - enums stay fixed to 16-bit `int`; structs stay packed with no padding
 - `union` and `float` are unsupported
 - source-level function pointers are unsupported
@@ -503,6 +544,7 @@ picc --list-targets
 - [examples/pic16f628a/stack_abi.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/stack_abi.c:1)
 - [examples/pic16f628a/struct_initializer.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/struct_initializer.c:1)
 - [examples/pic16f628a/struct_point.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/struct_point.c:1)
+- [examples/pic16f628a/switch_state.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/switch_state.c:1)
 - [examples/pic16f628a/typedef_enum.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/typedef_enum.c:1)
 - [examples/pic16f877a/blink.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/blink.c:1)
 - [examples/pic16f877a/call_chain.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/call_chain.c:1)
@@ -513,6 +555,8 @@ picc --list-targets
 - [examples/pic16f877a/mul16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/mul16.c:1)
 - [examples/pic16f877a/pointer16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/pointer16.c:1)
 - [examples/pic16f877a/shift_mix.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/shift_mix.c:1)
+- [examples/pic16f877a/switch_enum.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/switch_enum.c:1)
+- [examples/pic16f877a/switch_fallthrough.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/switch_fallthrough.c:1)
 - [examples/pic16f628a/timer_interrupt.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/timer_interrupt.c:1)
 - [examples/pic16f877a/timer_interrupt.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/timer_interrupt.c:1)
 - [examples/pic16f877a/gpio_interrupt.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/gpio_interrupt.c:1)
@@ -526,13 +570,16 @@ picc --list-targets
 - [docs/backend/optimization.md](/home/settes/cursus/PIC16_compiler/docs/backend/optimization.md:1)
 - [docs/backend/phase4-stack-first-abi.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-first-abi.md:1)
 - [docs/backend/phase4-stack-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-model.md:1)
+- [docs/backend/phase9-switch-codegen.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase9-switch-codegen.md:1)
 - [docs/ir/phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
 - [docs/backend/phase5-helper-calling.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase5-helper-calling.md:1)
 - [docs/ir/phase5-arithmetic-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase5-arithmetic-lowering.md:1)
+- [docs/ir/phase9-switch-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase9-switch-lowering.md:1)
+- [docs/frontend/phase9-switch.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase9-switch.md:1)
 - [docs/runtime/phase5-arithmetic-helpers.md](/home/settes/cursus/PIC16_compiler/docs/runtime/phase5-arithmetic-helpers.md:1)
 - [docs/migration/phase3-to-phase4-abi.md](/home/settes/cursus/PIC16_compiler/docs/migration/phase3-to-phase4-abi.md:1)
 - [docs/developer-guide/adding-device.md](/home/settes/cursus/PIC16_compiler/docs/developer-guide/adding-device.md:1)
 
 ## Current Limits
 
-Phase 8 adds `typedef`, `enum`, packed named `struct`, flat aggregate initializer, and explicit-cast support for constrained scalar/data-pointer cases. Current hard limits remain: no `union`, no pointer-to-pointer types, no multidimensional arrays, no nested aggregate layouts or designated initializers, no whole-struct assignment, no function pointers, no `float`, and no recursion.
+Phase 9 adds `switch` / `case` / `default` with compare-chain lowering, fallthrough, and switch-aware `break` on top of the Phase 8 type-system work. Current hard limits remain: no jump tables, no case/default labels buried under other control statements, no `union`, no pointer-to-pointer types, no multidimensional arrays, no nested aggregate layouts or designated initializers, no whole-struct assignment, no function pointers, no `float`, and no recursion.

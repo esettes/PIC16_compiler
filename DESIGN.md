@@ -182,7 +182,7 @@ Supported:
 - fixed-size one-dimensional arrays of supported scalar types
 - flat struct objects with scalar or one-level pointer fields
 - one-level data pointers to supported scalar or flat named struct types
-- `if/else`, `while`, `for`, `do while`, `break`, `continue`, `return`
+- `if/else`, `while`, `for`, `do while`, `switch/case/default`, `break`, `continue`, `return`
 - direct calls
 - `&obj`, `*ptr`, `a[i]`, `p[i]`
 - `.` and `->`
@@ -199,7 +199,6 @@ Deferred:
 
 Not implemented:
 
-- `switch`
 - `union`
 - pointer-to-pointer types
 - source-level function pointers
@@ -240,6 +239,9 @@ Not implemented:
 - local aggregate initializers lower to per-slot stores; global aggregate initializers require constant elements and pre-materialize into byte arrays
 - designated initializers, nested aggregate initializers, arrays inside structs, nested struct fields, and whole-struct assignment are rejected directly
 - explicit casts cover scalar conversions, one-level data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
+- switch expressions must be integer-valued; case labels must be constant and representable in the switch type
+- switch lowering evaluates the controlling expression once, compares through a linear branch chain, allows fallthrough, and routes `break` to the innermost switch end
+- case/default labels nested under other control statements in the same switch are rejected in phase 9
 - stack-local pointer returns are rejected directly and through obvious local alias chains
 - shift result type is left operand type; shift count is coerced to left operand type
 
@@ -262,6 +264,13 @@ IR models:
 - typed branch conditions
 
 Boolean expressions lower through branch form first. Memory expressions lower through explicit address and indirect ops.
+
+Phase 9 does not add a dedicated switch IR terminator. The IR lowerer expands each valid switch into:
+
+- one controlling-value evaluation
+- a linear compare-and-branch dispatch chain
+- ordinary CFG blocks for case/default entry points
+- ordinary jumps for `break` and fallthrough
 
 Interrupt functions stay structurally ordinary IR functions, but carry interrupt metadata so the backend can:
 
@@ -317,3 +326,28 @@ Current backend quality work includes:
 - power-of-two unsigned modulo lowered as inline mask
 - selective RP0/RP1 updates instead of blind bank rewrites
 - peephole cleanup for redundant self-moves, duplicate writes, duplicate bit operations, duplicate `setpage`, and overwritten W loads
+
+## Phase 9 Switch Lowering
+
+Phase 9 adds switch control flow in frontend + IR lowering, not as a backend AST shortcut.
+
+Rules:
+
+- switch expression types: `char`, `unsigned char`, `int`, `unsigned int`, and enum-backed 16-bit `int`
+- case labels use integer constant expressions or enum constants
+- duplicate normalized case values are rejected
+- at most one `default` label is allowed
+- `break` exits only the innermost enclosing loop-or-switch construct; a `break` in a nested switch does not exit an outer loop
+- fallthrough is explicit CFG flow into the next case/default label when no `break`, `return`, or other terminator intervenes
+
+Lowering strategy:
+
+- evaluate controlling expression once
+- emit a linear equality-compare chain in IR
+- branch to case/default blocks
+- if no case matches and no default exists, jump to switch end
+- reuse existing backend compare-branch emission; no jump tables in this phase
+
+Current limitation:
+
+- case/default labels must remain in the switch body flow or nested blocks, not under unrelated control statements like `if` or loop bodies

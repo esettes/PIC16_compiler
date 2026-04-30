@@ -73,6 +73,20 @@ pub enum TypedStmt {
     Block(Vec<TypedStmt>, Span),
     VarDecl(SymbolId, Option<TypedExpr>, Span),
     Expr(TypedExpr, Span),
+    Switch {
+        expr: TypedExpr,
+        body: Box<TypedStmt>,
+        span: Span,
+    },
+    Case {
+        value: i64,
+        body: Box<TypedStmt>,
+        span: Span,
+    },
+    Default {
+        body: Box<TypedStmt>,
+        span: Span,
+    },
     If {
         condition: TypedExpr,
         then_branch: Box<TypedStmt>,
@@ -159,6 +173,13 @@ enum AnalyzedInitializer {
     Aggregate(Vec<AggregateAssignment>),
 }
 
+#[derive(Clone, Debug)]
+struct SwitchContext {
+    expr_ty: Type,
+    case_values: BTreeMap<i64, Span>,
+    default_span: Option<Span>,
+}
+
 pub struct SemanticAnalyzer<'a> {
     target: &'a TargetDevice,
     symbols: Vec<Symbol>,
@@ -169,6 +190,8 @@ pub struct SemanticAnalyzer<'a> {
     scopes: Vec<BTreeMap<String, SymbolId>>,
     current_function: Option<SymbolId>,
     loop_depth: usize,
+    switch_stack: Vec<SwitchContext>,
+    switch_label_modes: Vec<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -190,6 +213,8 @@ impl<'a> SemanticAnalyzer<'a> {
             scopes: Vec::new(),
             current_function: None,
             loop_depth: 0,
+            switch_stack: Vec::new(),
+            switch_label_modes: Vec::new(),
         };
         analyzer.seed_device_registers();
         analyzer
@@ -560,6 +585,96 @@ impl<'a> SemanticAnalyzer<'a> {
                     .unwrap_or_else(|| zero_expr(*span)),
                 *span,
             ),
+            Stmt::Switch { expr, body, span } => {
+                let expr = self
+                    .analyze_expr(expr, diagnostics)
+                    .unwrap_or_else(|| zero_expr(*span));
+                let expr = if expr.ty.is_integer() {
+                    expr
+                } else {
+                    diagnostics.error(
+                        "semantic",
+                        Some(expr.span),
+                        "switch expression must have integer or enum type",
+                        None,
+                    );
+                    zero_expr(expr.span)
+                };
+
+                self.switch_stack.push(SwitchContext {
+                    expr_ty: expr.ty,
+                    case_values: BTreeMap::new(),
+                    default_span: None,
+                });
+                self.switch_label_modes.push(true);
+                let body = Box::new(self.analyze_stmt(body, diagnostics));
+                self.switch_label_modes.pop();
+                self.switch_stack.pop();
+
+                TypedStmt::Switch {
+                    expr,
+                    body,
+                    span: *span,
+                }
+            }
+            Stmt::Case { value, body, span } => {
+                if self.switch_stack.is_empty() {
+                    diagnostics.error("semantic", Some(*span), "`case` label outside switch", None);
+                    return self.analyze_stmt(body, diagnostics);
+                }
+                if !self.current_switch_labels_allowed() {
+                    diagnostics.error(
+                        "semantic",
+                        Some(*span),
+                        "case labels nested inside control statements are not supported in phase 9",
+                        Some("move the case label to the surrounding switch block or nested block".to_string()),
+                    );
+                    return self.analyze_stmt(body, diagnostics);
+                }
+
+                let switch_ty = self.current_switch_type().expect("switch context");
+                let typed_value = self.analyze_expr(value, diagnostics);
+                let value = self.validate_case_value(typed_value, switch_ty, *span, diagnostics);
+                let body = Box::new(self.analyze_stmt(body, diagnostics));
+                if let Some(value) = value {
+                    TypedStmt::Case {
+                        value,
+                        body,
+                        span: *span,
+                    }
+                } else {
+                    *body
+                }
+            }
+            Stmt::Default { body, span } => {
+                if self.switch_stack.is_empty() {
+                    diagnostics.error("semantic", Some(*span), "`default` label outside switch", None);
+                    return self.analyze_stmt(body, diagnostics);
+                }
+                if !self.current_switch_labels_allowed() {
+                    diagnostics.error(
+                        "semantic",
+                        Some(*span),
+                        "default label nested inside control statements is not supported in phase 9",
+                        Some("move the default label to the surrounding switch block or nested block".to_string()),
+                    );
+                    return self.analyze_stmt(body, diagnostics);
+                }
+                if let Some(previous) = self.current_switch_default_span() {
+                    diagnostics.error(
+                        "semantic",
+                        Some(*span),
+                        "multiple `default` labels in one switch are not allowed",
+                        Some(format!("previous default label starts at byte {}", previous.start)),
+                    );
+                } else if let Some(context) = self.switch_stack.last_mut() {
+                    context.default_span = Some(*span);
+                }
+                TypedStmt::Default {
+                    body: Box::new(self.analyze_stmt(body, diagnostics)),
+                    span: *span,
+                }
+            }
             Stmt::If {
                 condition,
                 then_branch,
@@ -569,10 +684,14 @@ impl<'a> SemanticAnalyzer<'a> {
                 condition: self
                     .analyze_expr(condition, diagnostics)
                     .unwrap_or_else(|| zero_expr(*span)),
-                then_branch: Box::new(self.analyze_stmt(then_branch, diagnostics)),
+                then_branch: Box::new(
+                    self.analyze_stmt_with_case_labels_disabled(then_branch, diagnostics),
+                ),
                 else_branch: else_branch
                     .as_ref()
-                    .map(|branch| Box::new(self.analyze_stmt(branch, diagnostics))),
+                    .map(|branch| {
+                        Box::new(self.analyze_stmt_with_case_labels_disabled(branch, diagnostics))
+                    }),
                 span: *span,
             },
             Stmt::While {
@@ -585,7 +704,9 @@ impl<'a> SemanticAnalyzer<'a> {
                     condition: self
                         .analyze_expr(condition, diagnostics)
                         .unwrap_or_else(|| zero_expr(*span)),
-                    body: Box::new(self.analyze_stmt(body, diagnostics)),
+                    body: Box::new(
+                        self.analyze_stmt_with_case_labels_disabled(body, diagnostics),
+                    ),
                     span: *span,
                 };
                 self.loop_depth -= 1;
@@ -598,7 +719,9 @@ impl<'a> SemanticAnalyzer<'a> {
             } => {
                 self.loop_depth += 1;
                 let typed = TypedStmt::DoWhile {
-                    body: Box::new(self.analyze_stmt(body, diagnostics)),
+                    body: Box::new(
+                        self.analyze_stmt_with_case_labels_disabled(body, diagnostics),
+                    ),
                     condition: self
                         .analyze_expr(condition, diagnostics)
                         .unwrap_or_else(|| zero_expr(*span)),
@@ -625,7 +748,9 @@ impl<'a> SemanticAnalyzer<'a> {
                     step: step
                         .as_ref()
                         .and_then(|expr| self.analyze_expr(expr, diagnostics)),
-                    body: Box::new(self.analyze_stmt(body, diagnostics)),
+                    body: Box::new(
+                        self.analyze_stmt_with_case_labels_disabled(body, diagnostics),
+                    ),
                     span: *span,
                 };
                 self.loop_depth -= 1;
@@ -679,8 +804,13 @@ impl<'a> SemanticAnalyzer<'a> {
                 TypedStmt::Return(typed, *span)
             }
             Stmt::Break(span) => {
-                if self.loop_depth == 0 {
-                    diagnostics.error("semantic", Some(*span), "`break` outside loop", None);
+                if self.loop_depth == 0 && self.switch_stack.is_empty() {
+                    diagnostics.error(
+                        "semantic",
+                        Some(*span),
+                        "`break` outside loop or switch",
+                        None,
+                    );
                 }
                 TypedStmt::Break(*span)
             }
@@ -1774,6 +1904,95 @@ impl<'a> SemanticAnalyzer<'a> {
         def.fields.iter().find(|entry| entry.name == field).cloned()
     }
 
+    /// Returns the switch-expression type for the innermost active switch.
+    fn current_switch_type(&self) -> Option<Type> {
+        self.switch_stack.last().map(|context| context.expr_ty)
+    }
+
+    /// Returns true when the innermost active switch permits direct case/default labels here.
+    fn current_switch_labels_allowed(&self) -> bool {
+        self.switch_label_modes.last().copied().unwrap_or(false)
+    }
+
+    /// Returns the first default-label span already registered for the active switch.
+    fn current_switch_default_span(&self) -> Option<Span> {
+        self.switch_stack.last().and_then(|context| context.default_span)
+    }
+
+    /// Analyzes one nested statement while temporarily forbidding case/default labels here.
+    fn analyze_stmt_with_case_labels_disabled(
+        &mut self,
+        stmt: &Stmt,
+        diagnostics: &mut DiagnosticBag,
+    ) -> TypedStmt {
+        let disable = !self.switch_stack.is_empty() && self.current_switch_labels_allowed();
+        if disable {
+            self.switch_label_modes.push(false);
+        }
+        let typed = self.analyze_stmt(stmt, diagnostics);
+        if disable {
+            self.switch_label_modes.pop();
+        }
+        typed
+    }
+
+    /// Validates one case-label expression and records its normalized value for duplicate checks.
+    fn validate_case_value(
+        &mut self,
+        typed_value: Option<TypedExpr>,
+        switch_ty: Type,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<i64> {
+        let value = typed_value?;
+        if !value.ty.is_integer() {
+            diagnostics.error(
+                "semantic",
+                Some(value.span),
+                "case label must use an integer constant expression",
+                None,
+            );
+            return None;
+        }
+        if !is_constant_expression(&value) {
+            diagnostics.error(
+                "semantic",
+                Some(value.span),
+                "case label must be a constant expression",
+                None,
+            );
+            return None;
+        }
+        if !is_representable_integer_constant(&value, switch_ty) {
+            diagnostics.error(
+                "semantic",
+                Some(value.span),
+                format!("case label value is not representable in switch type `{switch_ty}`"),
+                None,
+            );
+            return None;
+        }
+
+        let canonical = signed_or_unsigned_constant_value(&value)
+            .expect("representable case constant remains evaluable");
+        let normalized = normalize_value(canonical, switch_ty);
+        if let Some(previous) = self
+            .switch_stack
+            .last_mut()
+            .expect("switch context")
+            .case_values
+            .insert(normalized, span)
+        {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("duplicate case value `{canonical}` in one switch"),
+                Some(format!("previous matching case label starts at byte {}", previous.start)),
+            );
+        }
+        Some(normalized)
+    }
+
     /// Returns true when analyzing statements inside the active interrupt handler.
     fn current_function_is_interrupt(&self) -> bool {
         self.current_function
@@ -2451,6 +2670,13 @@ impl<'a> SemanticAnalyzer<'a> {
                     self.walk_stmt_for_stack_pointer_returns(statement, tainted_locals, diagnostics);
                 }
             }
+            TypedStmt::Switch { expr, body, .. } => {
+                let _ = self.track_stack_pointer_expr(expr, tainted_locals);
+                self.walk_stmt_for_stack_pointer_returns(body, tainted_locals, diagnostics);
+            }
+            TypedStmt::Case { body, .. } | TypedStmt::Default { body, .. } => {
+                self.walk_stmt_for_stack_pointer_returns(body, tainted_locals, diagnostics);
+            }
             TypedStmt::VarDecl(symbol, initializer, _) => {
                 if let Some(initializer) = initializer {
                     let may_point_to_stack =
@@ -2633,6 +2859,13 @@ impl<'a> SemanticAnalyzer<'a> {
                 for statement in statements {
                     self.walk_interrupt_stmt(function, statement, diagnostics);
                 }
+            }
+            TypedStmt::Switch { expr, body, .. } => {
+                self.walk_interrupt_expr(function, expr, diagnostics);
+                self.walk_interrupt_stmt(function, body, diagnostics);
+            }
+            TypedStmt::Case { body, .. } | TypedStmt::Default { body, .. } => {
+                self.walk_interrupt_stmt(function, body, diagnostics);
             }
             TypedStmt::VarDecl(_, initializer, _)
             | TypedStmt::Return(initializer, _) => {
@@ -2975,6 +3208,16 @@ fn is_representable_integer_constant(expr: &TypedExpr, target_ty: Type) -> bool 
     (min..=max).contains(&value)
 }
 
+/// Returns one constant expression's mathematical integer value before coercing it to a target type.
+fn signed_or_unsigned_constant_value(expr: &TypedExpr) -> Option<i64> {
+    let value = eval_integer_constant_expr(expr)?;
+    Some(if expr.ty.is_signed() {
+        signed_value(value, expr.ty)
+    } else {
+        normalize_value(value, expr.ty)
+    })
+}
+
 /// Returns the closed signed range that values of this integer type can represent.
 fn integer_value_range(ty: Type) -> Option<(i64, i64)> {
     if !ty.is_integer() {
@@ -3006,6 +3249,13 @@ fn collect_stmt_calls(stmt: &TypedStmt, callees: &mut BTreeSet<SymbolId>) {
             for statement in statements {
                 collect_stmt_calls(statement, callees);
             }
+        }
+        TypedStmt::Switch { expr, body, .. } => {
+            collect_expr_calls(expr, callees);
+            collect_stmt_calls(body, callees);
+        }
+        TypedStmt::Case { body, .. } | TypedStmt::Default { body, .. } => {
+            collect_stmt_calls(body, callees);
         }
         TypedStmt::VarDecl(_, initializer, _) => {
             if let Some(initializer) = initializer {

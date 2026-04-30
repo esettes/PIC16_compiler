@@ -44,7 +44,14 @@ struct FunctionBuilder {
     current: BlockId,
     temp_types: Vec<Type>,
     loop_stack: Vec<(BlockId, BlockId)>,
+    break_stack: Vec<BlockId>,
     body: TypedStmt,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SwitchCaseLabel {
+    value: i64,
+    block: BlockId,
 }
 
 impl FunctionBuilder {
@@ -65,6 +72,7 @@ impl FunctionBuilder {
             current: 0,
             temp_types: Vec::new(),
             loop_stack: Vec::new(),
+            break_stack: Vec::new(),
             body,
         }
     }
@@ -112,6 +120,28 @@ impl FunctionBuilder {
             TypedStmt::Expr(expr, _) => {
                 let _ = self.lower_expr(expr);
             }
+            TypedStmt::Switch { expr, body, .. } => {
+                let switch_value = self.lower_expr(expr);
+                let end = self.new_block("switch.end");
+                let body_start = self.new_block("switch.body");
+                let mut cases = Vec::new();
+                let mut label_blocks = std::collections::BTreeMap::new();
+                let mut default_block = None;
+                self.collect_switch_labels(body, &mut cases, &mut default_block, &mut label_blocks);
+
+                self.lower_switch_dispatch(expr.ty, switch_value, &cases, default_block, end);
+
+                self.break_stack.push(end);
+                self.current = body_start;
+                self.lower_switch_body_stmt(body, &label_blocks);
+                self.ensure_jump(end);
+                self.break_stack.pop();
+
+                self.current = end;
+            }
+            TypedStmt::Case { .. } | TypedStmt::Default { .. } => {
+                unreachable!("case/default labels lower only through switch-body lowering")
+            }
             TypedStmt::If {
                 condition,
                 then_branch,
@@ -146,11 +176,13 @@ impl FunctionBuilder {
 
                 self.current = header;
                 self.loop_stack.push((header, end));
+                self.break_stack.push(end);
                 self.lower_condition(condition, body_block, end);
 
                 self.current = body_block;
                 self.lower_stmt(body);
                 self.ensure_jump(header);
+                self.break_stack.pop();
                 self.loop_stack.pop();
 
                 self.current = end;
@@ -166,12 +198,14 @@ impl FunctionBuilder {
                 self.ensure_jump(body_block);
 
                 self.loop_stack.push((cond_block, end));
+                self.break_stack.push(end);
                 self.current = body_block;
                 self.lower_stmt(body);
                 self.ensure_jump(cond_block);
 
                 self.current = cond_block;
                 self.lower_condition(condition, body_block, end);
+                self.break_stack.pop();
                 self.loop_stack.pop();
 
                 self.current = end;
@@ -194,6 +228,7 @@ impl FunctionBuilder {
 
                 self.current = header;
                 self.loop_stack.push((step_block, end));
+                self.break_stack.push(end);
                 if let Some(condition) = condition {
                     self.lower_condition(condition, body_block, end);
                 } else {
@@ -209,6 +244,7 @@ impl FunctionBuilder {
                     let _ = self.lower_expr(step);
                 }
                 self.ensure_jump(header);
+                self.break_stack.pop();
                 self.loop_stack.pop();
 
                 self.current = end;
@@ -218,7 +254,7 @@ impl FunctionBuilder {
                 self.blocks[self.current].terminator = IrTerminator::Return(value);
             }
             TypedStmt::Break(_) => {
-                if let Some((_, break_block)) = self.loop_stack.last().copied() {
+                if let Some(break_block) = self.break_stack.last().copied() {
                     self.blocks[self.current].terminator = IrTerminator::Jump(break_block);
                     self.current = self.new_block("dead.break");
                 }
@@ -230,6 +266,108 @@ impl FunctionBuilder {
                 }
             }
             TypedStmt::Empty(_) => {}
+        }
+    }
+
+    /// Collects valid case/default labels in source order before lowering the switch body.
+    fn collect_switch_labels(
+        &mut self,
+        stmt: &TypedStmt,
+        cases: &mut Vec<SwitchCaseLabel>,
+        default_block: &mut Option<BlockId>,
+        label_blocks: &mut std::collections::BTreeMap<usize, BlockId>,
+    ) {
+        match stmt {
+            TypedStmt::Block(statements, _) => {
+                for statement in statements {
+                    self.collect_switch_labels(statement, cases, default_block, label_blocks);
+                }
+            }
+            TypedStmt::Case { value, body, span } => {
+                let block = self.new_block("switch.case");
+                cases.push(SwitchCaseLabel {
+                    value: *value,
+                    block,
+                });
+                label_blocks.insert(span.start, block);
+                self.collect_switch_labels(body, cases, default_block, label_blocks);
+            }
+            TypedStmt::Default { body, span } => {
+                let block = self.new_block("switch.default");
+                *default_block = Some(block);
+                label_blocks.insert(span.start, block);
+                self.collect_switch_labels(body, cases, default_block, label_blocks);
+            }
+            TypedStmt::Switch { .. }
+            | TypedStmt::VarDecl(_, _, _)
+            | TypedStmt::Expr(_, _)
+            | TypedStmt::If { .. }
+            | TypedStmt::While { .. }
+            | TypedStmt::DoWhile { .. }
+            | TypedStmt::For { .. }
+            | TypedStmt::Return(_, _)
+            | TypedStmt::Break(_)
+            | TypedStmt::Continue(_)
+            | TypedStmt::Empty(_) => {}
+        }
+    }
+
+    /// Emits one switch dispatch chain using ordinary typed compare branches.
+    fn lower_switch_dispatch(
+        &mut self,
+        switch_ty: Type,
+        switch_value: Operand,
+        cases: &[SwitchCaseLabel],
+        default_block: Option<BlockId>,
+        end_block: BlockId,
+    ) {
+        let default_target = default_block.unwrap_or(end_block);
+        if cases.is_empty() {
+            self.blocks[self.current].terminator = IrTerminator::Jump(default_target);
+            return;
+        }
+
+        for (index, case) in cases.iter().enumerate() {
+            let miss = if index + 1 == cases.len() {
+                default_target
+            } else {
+                self.new_block("switch.next")
+            };
+            self.blocks[self.current].terminator = IrTerminator::Branch {
+                condition: IrCondition::Compare {
+                    op: BinaryOp::Equal,
+                    lhs: switch_value,
+                    rhs: Operand::Constant(case.value),
+                    ty: switch_ty,
+                },
+                then_block: case.block,
+                else_block: miss,
+            };
+            self.current = miss;
+        }
+    }
+
+    /// Lowers one switch body while routing case/default labels to preallocated blocks.
+    fn lower_switch_body_stmt(
+        &mut self,
+        stmt: &TypedStmt,
+        label_blocks: &std::collections::BTreeMap<usize, BlockId>,
+    ) {
+        match stmt {
+            TypedStmt::Block(statements, _) => {
+                for statement in statements {
+                    self.lower_switch_body_stmt(statement, label_blocks);
+                }
+            }
+            TypedStmt::Case { body, span, .. } | TypedStmt::Default { body, span, .. } => {
+                let block = *label_blocks
+                    .get(&span.start)
+                    .expect("switch label block collected");
+                self.ensure_jump(block);
+                self.current = block;
+                self.lower_switch_body_stmt(body, label_blocks);
+            }
+            _ => self.lower_stmt(stmt),
         }
     }
 

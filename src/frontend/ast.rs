@@ -72,6 +72,20 @@ pub enum Stmt {
     Block(Vec<Stmt>, Span),
     VarDecl(VarDecl),
     Expr(Expr, Span),
+    Switch {
+        expr: Expr,
+        body: Box<Stmt>,
+        span: Span,
+    },
+    Case {
+        value: Expr,
+        body: Box<Stmt>,
+        span: Span,
+    },
+    Default {
+        body: Box<Stmt>,
+        span: Span,
+    },
     If {
         condition: Expr,
         then_branch: Box<Stmt>,
@@ -243,6 +257,18 @@ fn render_stmt(stmt: &Stmt, indent: usize, output: &mut String) {
         }
         Stmt::Expr(expr, _) => {
             let _ = writeln!(output, "{prefix}expr {}", render_expr(expr));
+        }
+        Stmt::Switch { expr, body, .. } => {
+            let _ = writeln!(output, "{prefix}switch {}", render_expr(expr));
+            render_stmt(body, indent + 1, output);
+        }
+        Stmt::Case { value, body, .. } => {
+            let _ = writeln!(output, "{prefix}case {}", render_expr(value));
+            render_stmt(body, indent + 1, output);
+        }
+        Stmt::Default { body, .. } => {
+            let _ = writeln!(output, "{prefix}default");
+            render_stmt(body, indent + 1, output);
         }
         Stmt::If {
             condition,
