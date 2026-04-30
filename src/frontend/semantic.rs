@@ -6,8 +6,8 @@ use crate::common::source::Span;
 use crate::diagnostics::DiagnosticBag;
 
 use super::ast::{
-    BinaryOp, Expr, ExprKind, FunctionDecl, Initializer, Item, Stmt, StructDef, TranslationUnit,
-    UnaryOp, VarDecl,
+    BinaryOp, Designator, Expr, ExprKind, FunctionDecl, Initializer, InitializerEntry, Item,
+    Stmt, StructDef, TranslationUnit, UnaryOp, VarDecl,
 };
 use super::types::{CastKind, Qualifiers, ScalarType, StorageClass, StructId, Type};
 
@@ -150,6 +150,11 @@ pub enum TypedExprKind {
         target: Box<TypedExpr>,
         value: Box<TypedExpr>,
     },
+    StructAssign {
+        target: Box<TypedExpr>,
+        value: Box<TypedExpr>,
+        size: usize,
+    },
     Call {
         function: SymbolId,
         args: Vec<TypedExpr>,
@@ -171,6 +176,13 @@ struct AggregateAssignment {
 enum AnalyzedInitializer {
     Scalar(TypedExpr),
     Aggregate(Vec<AggregateAssignment>),
+}
+
+struct AggregateInitContext<'a> {
+    mode: &'a str,
+    assignments: &'a mut Vec<AggregateAssignment>,
+    slot_by_offset: &'a BTreeMap<usize, usize>,
+    diagnostics: &'a mut DiagnosticBag,
 }
 
 #[derive(Clone, Debug)]
@@ -1614,13 +1626,37 @@ impl<'a> SemanticAnalyzer<'a> {
         let value = self.analyze_expr(value, diagnostics)?;
         let target_ty = target.ty;
         if target_ty.is_struct() {
-            diagnostics.error(
-                "semantic",
-                Some(span),
-                "struct assignment is not supported in phase 8",
-                Some("assign struct fields individually".to_string()),
-            );
-            return None;
+            if self.current_function_is_interrupt() {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    "whole-struct assignment is not supported inside interrupt handlers in phase 11",
+                    Some("copy scalar fields explicitly outside the ISR".to_string()),
+                );
+                return None;
+            }
+            if !value.ty.is_struct() || value.ty.unqualified() != target_ty.unqualified() {
+                diagnostics.error(
+                    "semantic",
+                    Some(value.span),
+                    format!(
+                        "cannot assign incompatible struct type `{}` to `{}`",
+                        value.ty, target_ty
+                    ),
+                    Some("assign only between the same named struct type".to_string()),
+                );
+                return None;
+            }
+            return Some(TypedExpr {
+                kind: TypedExprKind::StructAssign {
+                    target: Box::new(target),
+                    value: Box::new(value),
+                    size: target_ty.byte_width(),
+                },
+                ty: target_ty,
+                span,
+                value_category: ValueCategory::RValue,
+            });
         }
         let value = self.coerce_expr(value, target_ty, diagnostics, "assignment", true);
         Some(TypedExpr {
@@ -1706,145 +1742,9 @@ impl<'a> SemanticAnalyzer<'a> {
         context: &str,
         diagnostics: &mut DiagnosticBag,
     ) -> Option<AnalyzedInitializer> {
-        if target_ty.is_array() {
-            if let Initializer::Expr(Expr {
-                kind: ExprKind::StringLiteral(bytes),
-                ..
-            }) = initializer
-            {
-                let assignments =
-                    self.analyze_string_array_initializer(target_ty, bytes, initializer_span(initializer), diagnostics)?;
-                return Some(AnalyzedInitializer::Aggregate(assignments));
-            }
-
-            let Initializer::List(items, _) = initializer else {
-                diagnostics.error(
-                    "semantic",
-                    Some(match initializer {
-                        Initializer::Expr(expr) => expr.span,
-                        Initializer::List(_, span) => *span,
-                    }),
-                    format!("{context} for array type requires a brace initializer list or string literal"),
-                    None,
-                );
-                return None;
-            };
-
-            let len = target_ty.array_len?;
-            let element_ty = target_ty.element_type();
-            if element_ty.is_array() || element_ty.is_struct() {
-                diagnostics.error(
-                    "semantic",
-                    Some(match initializer {
-                        Initializer::Expr(expr) => expr.span,
-                        Initializer::List(_, span) => *span,
-                    }),
-                    "nested aggregate initializers are not supported in phase 8",
-                    Some("initialize nested aggregates manually".to_string()),
-                );
-                return None;
-            }
-
-            if items.len() > len {
-                diagnostics.error(
-                    "semantic",
-                    Some(match initializer {
-                        Initializer::Expr(expr) => expr.span,
-                        Initializer::List(_, span) => *span,
-                    }),
-                    "too many initializer elements for array",
-                    None,
-                );
-            }
-
-            let mut assignments = Vec::with_capacity(len);
-            for index in 0..len {
-                let value = if let Some(item) = items.get(index) {
-                    self.analyze_scalar_initializer_expr(item, element_ty, context, diagnostics)?
-                } else {
-                    TypedExpr {
-                        kind: TypedExprKind::IntLiteral(0),
-                        ty: element_ty,
-                        span: match initializer {
-                            Initializer::Expr(expr) => expr.span,
-                            Initializer::List(_, span) => *span,
-                        },
-                        value_category: ValueCategory::RValue,
-                    }
-                };
-                assignments.push(AggregateAssignment {
-                    offset: index * element_ty.byte_width(),
-                    ty: element_ty,
-                    value,
-                });
-            }
-            return Some(AnalyzedInitializer::Aggregate(assignments));
-        }
-
-        if target_ty.is_struct() {
-            let Initializer::List(items, span) = initializer else {
-                diagnostics.error(
-                    "semantic",
-                    Some(match initializer {
-                        Initializer::Expr(expr) => expr.span,
-                        Initializer::List(_, span) => *span,
-                    }),
-                    format!("{context} for struct type requires a positional brace initializer list"),
-                    None,
-                );
-                return None;
-            };
-
-            let struct_id = target_ty.struct_id?;
-            let Some(def) = self.struct_defs.get(struct_id) else {
-                diagnostics.error(
-                    "semantic",
-                    Some(*span),
-                    "unknown struct layout during initializer analysis",
-                    None,
-                );
-                return None;
-            };
-            let fields = def.fields.clone();
-
-            if items.len() > fields.len() {
-                diagnostics.error(
-                    "semantic",
-                    Some(*span),
-                    "too many initializer elements for struct",
-                    None,
-                );
-            }
-
-            let mut assignments = Vec::with_capacity(fields.len());
-            for (index, field) in fields.iter().enumerate() {
-                if field.ty.is_array() || field.ty.is_struct() {
-                    diagnostics.error(
-                        "semantic",
-                        Some(field.span),
-                        "nested aggregate fields are not supported in phase 8 initializers",
-                        None,
-                    );
-                    return None;
-                }
-
-                let value = if let Some(item) = items.get(index) {
-                    self.analyze_scalar_initializer_expr(item, field.ty, context, diagnostics)?
-                } else {
-                    TypedExpr {
-                        kind: TypedExprKind::IntLiteral(0),
-                        ty: field.ty,
-                        span: *span,
-                        value_category: ValueCategory::RValue,
-                    }
-                };
-                assignments.push(AggregateAssignment {
-                    offset: field.offset,
-                    ty: field.ty,
-                    value,
-                });
-            }
-
+        if target_ty.is_array() || target_ty.is_struct() {
+            let assignments =
+                self.analyze_recursive_aggregate_initializer(target_ty, initializer, context, diagnostics)?;
             return Some(AnalyzedInitializer::Aggregate(assignments));
         }
 
@@ -1870,12 +1770,21 @@ impl<'a> SemanticAnalyzer<'a> {
                     diagnostics.error(
                         "semantic",
                         Some(*span),
-                        "nested initializer lists are not supported in phase 8",
-                        Some("use flat positional initializer elements".to_string()),
+                        "scalar initializer lists may contain only one element",
+                        Some("use a single scalar value or an aggregate target type".to_string()),
                     );
                     return None;
                 }
-                self.analyze_scalar_initializer_expr(&items[0], target_ty, context, diagnostics)
+                if items[0].designator.is_some() {
+                    diagnostics.error(
+                        "semantic",
+                        Some(*span),
+                        "designated initializers require an array or struct target",
+                        None,
+                    );
+                    return None;
+                }
+                self.analyze_scalar_initializer_expr(&items[0].initializer, target_ty, context, diagnostics)
             }
         }
     }
@@ -1963,7 +1872,7 @@ impl<'a> SemanticAnalyzer<'a> {
                         );
                         1
                     } else {
-                        items.len()
+                        self.infer_array_initializer_len(items, span, diagnostics)
                     }
                 }
                 Some(Initializer::Expr(Expr {
@@ -1992,6 +1901,497 @@ impl<'a> SemanticAnalyzer<'a> {
             ty = ty.array_of(inferred_len);
         }
         ty
+    }
+
+    /// Recursively flattens one array/struct initializer into scalar-slot assignments with zero-fill.
+    fn analyze_recursive_aggregate_initializer(
+        &mut self,
+        target_ty: Type,
+        initializer: &Initializer,
+        context: &str,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<Vec<AggregateAssignment>> {
+        let span = initializer_span(initializer);
+        let mut assignments = Vec::new();
+        self.collect_zero_aggregate_assignments(target_ty, 0, span, &mut assignments);
+        let slot_by_offset = assignments
+            .iter()
+            .enumerate()
+            .map(|(index, assignment)| (assignment.offset, index))
+            .collect::<BTreeMap<_, _>>();
+        let mut init_context = AggregateInitContext {
+            mode: context,
+            assignments: &mut assignments,
+            slot_by_offset: &slot_by_offset,
+            diagnostics,
+        };
+        if self.apply_initializer_to_object(target_ty, initializer, 0, &mut init_context) {
+            Some(assignments)
+        } else {
+            None
+        }
+    }
+
+    /// Walks one aggregate type and seeds zero-value scalar leaves for later initializer overlay.
+    fn collect_zero_aggregate_assignments(
+        &self,
+        target_ty: Type,
+        base_offset: usize,
+        span: Span,
+        assignments: &mut Vec<AggregateAssignment>,
+    ) {
+        if target_ty.is_array() {
+            let len = target_ty.array_len.unwrap_or(0);
+            let element_ty = target_ty.element_type();
+            let stride = element_ty.byte_width();
+            for index in 0..len {
+                self.collect_zero_aggregate_assignments(
+                    element_ty,
+                    base_offset + index * stride,
+                    span,
+                    assignments,
+                );
+            }
+            return;
+        }
+
+        if target_ty.is_struct() {
+            let Some(def) = target_ty
+                .struct_id
+                .and_then(|struct_id| self.struct_defs.get(struct_id))
+            else {
+                return;
+            };
+            for field in &def.fields {
+                self.collect_zero_aggregate_assignments(
+                    field.ty,
+                    base_offset + field.offset,
+                    span,
+                    assignments,
+                );
+            }
+            return;
+        }
+
+        assignments.push(AggregateAssignment {
+            offset: base_offset,
+            ty: target_ty,
+            value: TypedExpr {
+                kind: TypedExprKind::IntLiteral(0),
+                ty: if target_ty.is_pointer() {
+                    Type::new(ScalarType::U16)
+                } else {
+                    target_ty
+                },
+                span,
+                value_category: ValueCategory::RValue,
+            },
+        });
+    }
+
+    /// Applies one initializer recursively to a target object, overlaying explicit values onto zero-fill.
+    fn apply_initializer_to_object(
+        &mut self,
+        target_ty: Type,
+        initializer: &Initializer,
+        base_offset: usize,
+        init_context: &mut AggregateInitContext<'_>,
+    ) -> bool {
+        if target_ty.is_array() {
+            if let Initializer::Expr(Expr {
+                kind: ExprKind::StringLiteral(bytes),
+                ..
+            }) = initializer
+            {
+                let Some(string_assignments) = self.analyze_string_array_initializer(
+                    target_ty,
+                    bytes,
+                    initializer_span(initializer),
+                    init_context.diagnostics,
+                ) else {
+                    return false;
+                };
+                let mut valid = true;
+                for assignment in string_assignments {
+                    valid &= self.install_scalar_initializer(
+                        base_offset + assignment.offset,
+                        assignment.value,
+                        init_context.assignments,
+                        init_context.slot_by_offset,
+                        init_context.diagnostics,
+                    );
+                }
+                return valid;
+            }
+
+            let Initializer::List(items, span) = initializer else {
+                init_context.diagnostics.error(
+                    "semantic",
+                    Some(initializer_span(initializer)),
+                    format!(
+                        "{} for array type requires a brace initializer list or string literal",
+                        init_context.mode
+                    ),
+                    None,
+                );
+                return false;
+            };
+            return self.apply_array_initializer(
+                target_ty,
+                items,
+                *span,
+                base_offset,
+                init_context,
+            );
+        }
+
+        if target_ty.is_struct() {
+            let Initializer::List(items, span) = initializer else {
+                init_context.diagnostics.error(
+                    "semantic",
+                    Some(initializer_span(initializer)),
+                    format!("{} for struct type requires a brace initializer list", init_context.mode),
+                    None,
+                );
+                return false;
+            };
+            return self.apply_struct_initializer(
+                target_ty,
+                items,
+                *span,
+                base_offset,
+                init_context,
+            );
+        }
+
+        let Some(value) = self.analyze_scalar_initializer_expr(
+            initializer,
+            target_ty,
+            init_context.mode,
+            init_context.diagnostics,
+        ) else {
+            return false;
+        };
+        self.install_scalar_initializer(
+            base_offset,
+            value,
+            init_context.assignments,
+            init_context.slot_by_offset,
+            init_context.diagnostics,
+        )
+    }
+
+    /// Applies a one-dimensional array initializer, including array designators and nested aggregate elements.
+    fn apply_array_initializer(
+        &mut self,
+        target_ty: Type,
+        items: &[InitializerEntry],
+        span: Span,
+        base_offset: usize,
+        init_context: &mut AggregateInitContext<'_>,
+    ) -> bool {
+        let len = target_ty.array_len.unwrap_or(0);
+        let element_ty = target_ty.element_type();
+        let stride = element_ty.byte_width();
+        let mut next_index = 0usize;
+        let mut seen = BTreeSet::new();
+        let mut valid = true;
+
+        for entry in items {
+            let index = match &entry.designator {
+                Some(Designator::Index(expr, designator_span)) => {
+                    let Some(index) =
+                        self.evaluate_array_designator_index(
+                            expr,
+                            len,
+                            *designator_span,
+                            init_context.diagnostics,
+                        )
+                    else {
+                        valid = false;
+                        continue;
+                    };
+                    next_index = index.saturating_add(1);
+                    index
+                }
+                Some(Designator::Field(field, designator_span)) => {
+                    init_context.diagnostics.error(
+                        "semantic",
+                        Some(*designator_span),
+                        format!("array initializer does not accept field designator `.{field}`"),
+                        None,
+                    );
+                    valid = false;
+                    continue;
+                }
+                None => {
+                    if next_index >= len {
+                        init_context.diagnostics.error(
+                            "semantic",
+                            Some(span),
+                            "too many initializer elements for array",
+                            None,
+                        );
+                        valid = false;
+                        continue;
+                    }
+                    let index = next_index;
+                    next_index += 1;
+                    index
+                }
+            };
+
+            if !seen.insert(index) {
+                init_context.diagnostics.error(
+                    "semantic",
+                    Some(initializer_entry_span(entry)),
+                    format!("duplicate array initializer for index [{index}]"),
+                    None,
+                );
+                valid = false;
+                continue;
+            }
+
+            valid &= self.apply_initializer_to_object(
+                element_ty,
+                &entry.initializer,
+                base_offset + index * stride,
+                init_context,
+            );
+        }
+
+        valid
+    }
+
+    /// Applies a struct initializer, including field designators and nested aggregate fields.
+    fn apply_struct_initializer(
+        &mut self,
+        target_ty: Type,
+        items: &[InitializerEntry],
+        span: Span,
+        base_offset: usize,
+        init_context: &mut AggregateInitContext<'_>,
+    ) -> bool {
+        let Some(struct_id) = target_ty.struct_id else {
+            init_context.diagnostics.error(
+                "semantic",
+                Some(span),
+                "unknown struct layout during initializer analysis",
+                None,
+            );
+            return false;
+        };
+        let Some(def) = self.struct_defs.get(struct_id) else {
+            init_context.diagnostics.error(
+                "semantic",
+                Some(span),
+                "unknown struct layout during initializer analysis",
+                None,
+            );
+            return false;
+        };
+        let fields = def.fields.clone();
+        let mut next_index = 0usize;
+        let mut seen = BTreeSet::new();
+        let mut valid = true;
+
+        for entry in items {
+            let field_index = match &entry.designator {
+                Some(Designator::Field(field_name, designator_span)) => {
+                    let Some(index) = fields.iter().position(|field| field.name == *field_name) else {
+                        init_context.diagnostics.error(
+                            "semantic",
+                            Some(*designator_span),
+                            format!("unknown designated field `.{field_name}`"),
+                            None,
+                        );
+                        valid = false;
+                        continue;
+                    };
+                    next_index = index.saturating_add(1);
+                    index
+                }
+                Some(Designator::Index(_, designator_span)) => {
+                    init_context.diagnostics.error(
+                        "semantic",
+                        Some(*designator_span),
+                        "struct initializer does not accept array index designators",
+                        None,
+                    );
+                    valid = false;
+                    continue;
+                }
+                None => {
+                    if next_index >= fields.len() {
+                        init_context.diagnostics.error(
+                            "semantic",
+                            Some(span),
+                            "too many initializer elements for struct",
+                            None,
+                        );
+                        valid = false;
+                        continue;
+                    }
+                    let index = next_index;
+                    next_index += 1;
+                    index
+                }
+            };
+
+            let field = &fields[field_index];
+            if !seen.insert(field_index) {
+                init_context.diagnostics.error(
+                    "semantic",
+                    Some(initializer_entry_span(entry)),
+                    format!("duplicate initializer for field `.{}`", field.name),
+                    None,
+                );
+                valid = false;
+                continue;
+            }
+
+            valid &= self.apply_initializer_to_object(
+                field.ty,
+                &entry.initializer,
+                base_offset + field.offset,
+                init_context,
+            );
+        }
+
+        valid
+    }
+
+    /// Resolves and checks one array designator index against a concrete element count.
+    fn evaluate_array_designator_index(
+        &mut self,
+        expr: &Expr,
+        len: usize,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<usize> {
+        let typed = self.analyze_expr(expr, diagnostics)?;
+        if !typed.ty.is_integer() {
+            diagnostics.error(
+                "semantic",
+                Some(typed.span),
+                "array designator index must be an integer constant expression",
+                None,
+            );
+            return None;
+        }
+        if !is_constant_expression(&typed) {
+            diagnostics.error(
+                "semantic",
+                Some(typed.span),
+                "array designator index must be a constant expression",
+                None,
+            );
+            return None;
+        }
+        let Some(value) = signed_or_unsigned_constant_value(&typed) else {
+            diagnostics.error(
+                "semantic",
+                Some(typed.span),
+                "unsupported array designator expression",
+                None,
+            );
+            return None;
+        };
+        if value < 0 {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "array designator index must be non-negative",
+                None,
+            );
+            return None;
+        }
+        let index = value as usize;
+        if index >= len {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("array designator index [{index}] is out of range for {len}-element array"),
+                None,
+            );
+            return None;
+        }
+        Some(index)
+    }
+
+    /// Infers an omitted top-level array length from positional and designated initializer entries.
+    fn infer_array_initializer_len(
+        &mut self,
+        items: &[InitializerEntry],
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> usize {
+        let mut next_index = 0usize;
+        let mut max_len = 0usize;
+
+        for entry in items {
+            let index = match &entry.designator {
+                Some(Designator::Index(expr, designator_span)) => {
+                    let Some(index) =
+                        self.evaluate_array_designator_index(expr, usize::MAX, *designator_span, diagnostics)
+                    else {
+                        continue;
+                    };
+                    next_index = index.saturating_add(1);
+                    index
+                }
+                Some(Designator::Field(field, designator_span)) => {
+                    diagnostics.error(
+                        "semantic",
+                        Some(*designator_span),
+                        format!("array initializer does not accept field designator `.{field}`"),
+                        None,
+                    );
+                    continue;
+                }
+                None => {
+                    let index = next_index;
+                    next_index += 1;
+                    index
+                }
+            };
+            max_len = max_len.max(index.saturating_add(1));
+        }
+
+        if max_len == 0 {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "cannot infer an array size from an empty initializer",
+                Some("spell an explicit array length or provide at least one initializer element".to_string()),
+            );
+            1
+        } else {
+            max_len
+        }
+    }
+
+    /// Stores one scalar initializer value into the flattened aggregate slot map.
+    fn install_scalar_initializer(
+        &mut self,
+        offset: usize,
+        value: TypedExpr,
+        assignments: &mut [AggregateAssignment],
+        slot_by_offset: &BTreeMap<usize, usize>,
+        diagnostics: &mut DiagnosticBag,
+    ) -> bool {
+        let Some(index) = slot_by_offset.get(&offset).copied() else {
+            diagnostics.error(
+                "semantic",
+                Some(value.span),
+                "initializer element exceeded object size during layout",
+                None,
+            );
+            return false;
+        };
+        let slot_ty = assignments[index].ty;
+        assignments[index].value = self.coerce_expr(value, slot_ty, diagnostics, "initializer", true);
+        true
     }
 
     /// Converts one string literal initializer into byte-slot assignments with required null fit.
@@ -2717,13 +3117,22 @@ impl<'a> SemanticAnalyzer<'a> {
         diagnostics: &mut DiagnosticBag,
     ) {
         self.validate_const_placement(ty, span, &format!("{context} `{name}`"), diagnostics);
+        if ty.is_array() && ty.element_type().is_array() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("{context} `{name}` uses unsupported multidimensional array type `{ty}`"),
+                Some("phase 11 still supports one-dimensional arrays only".to_string()),
+            );
+            return;
+        }
         if ty.is_void() || !ty.is_supported_object_type() {
             diagnostics.error(
                 "semantic",
                 Some(span),
                 format!("{context} `{name}` uses unsupported type `{ty}`"),
                 Some(
-                    "phase 8 supports scalar objects, one-dimensional arrays of supported scalar targets, and basic named structs"
+                    "phase 11 supports scalar objects, one-dimensional arrays, and packed structs with nested arrays/structs"
                         .to_string(),
                 ),
             );
@@ -2732,7 +3141,7 @@ impl<'a> SemanticAnalyzer<'a> {
 
     /// Rejects pointer-shaped const qualifier forms the current type model cannot represent safely.
     fn validate_const_placement(
-        &mut self,
+        &self,
         ty: Type,
         span: Span,
         context: &str,
@@ -2752,26 +3161,128 @@ impl<'a> SemanticAnalyzer<'a> {
 
     /// Checks struct fields for the same unsupported const-pointer forms rejected elsewhere.
     fn validate_struct_field_types(&mut self, diagnostics: &mut DiagnosticBag) {
-        let mut issues = Vec::new();
         for def in &self.struct_defs {
             for field in &def.fields {
-                if field.ty.qualifiers.is_const
-                    && (field.ty.is_pointer()
-                        || (field.ty.is_array() && field.ty.element_type().is_pointer()))
+                self.validate_const_placement(
+                    field.ty,
+                    field.span,
+                    &format!("struct `{}` field `{}`", def.name, field.name),
+                    diagnostics,
+                );
+
+                let field_ty = field.ty;
+                let element_ty = if field_ty.is_array() {
+                    Some(field_ty.element_type())
+                } else {
+                    None
+                };
+
+                if field_ty.is_void() {
+                    diagnostics.error(
+                        "semantic",
+                        Some(field.span),
+                        format!("struct `{}` field `{}` uses unsupported type `void`", def.name, field.name),
+                        None,
+                    );
+                    continue;
+                }
+
+                if field_ty.is_incomplete_array() {
+                    diagnostics.error(
+                        "semantic",
+                        Some(field.span),
+                        format!("struct `{}` field `{}` cannot use an incomplete array type", def.name, field.name),
+                        Some("spell an explicit array length for struct fields".to_string()),
+                    );
+                    continue;
+                }
+
+                if field_ty.is_array() && element_ty.is_some_and(Type::is_array) {
+                    diagnostics.error(
+                        "semantic",
+                        Some(field.span),
+                        format!(
+                            "struct `{}` field `{}` uses unsupported multidimensional array type `{}`",
+                            def.name, field.name, field_ty
+                        ),
+                        Some("phase 11 still supports one-dimensional arrays only".to_string()),
+                    );
+                    continue;
+                }
+
+                if field_ty.is_struct() && field_ty.struct_id == Some(def.id) {
+                    diagnostics.error(
+                        "semantic",
+                        Some(field.span),
+                        format!(
+                            "struct `{}` cannot contain itself by value through field `{}`",
+                            def.name, field.name
+                        ),
+                        Some("use a pointer field only if/when incomplete-struct pointers are supported".to_string()),
+                    );
+                    continue;
+                }
+
+                if field_ty.is_struct() && field_ty.struct_size == 0 {
+                    diagnostics.error(
+                        "semantic",
+                        Some(field.span),
+                        format!(
+                            "struct `{}` field `{}` uses incomplete struct type `{}`",
+                            def.name, field.name, field_ty
+                        ),
+                        Some("define the nested struct before using it by value".to_string()),
+                    );
+                    continue;
+                }
+
+                if let Some(element_ty) = element_ty
+                    && element_ty.is_struct()
+                    && element_ty.struct_size == 0
                 {
-                    issues.push((field.span, def.name.clone(), field.name.clone()));
+                    diagnostics.error(
+                        "semantic",
+                        Some(field.span),
+                        format!(
+                            "struct `{}` field `{}` uses incomplete struct element type `{}`",
+                            def.name, field.name, element_ty
+                        ),
+                        Some("define the struct before using it in an array field".to_string()),
+                    );
+                    continue;
+                }
+
+                if field_ty.is_pointer() && field_ty.element_type().has_struct_base() && !field_ty.element_type().has_size() {
+                    diagnostics.error(
+                        "semantic",
+                        Some(field.span),
+                        format!(
+                            "struct `{}` field `{}` uses unsupported pointer to incomplete struct type `{}`",
+                            def.name, field.name, field_ty
+                        ),
+                        Some("phase 11 does not model incomplete-struct pointers yet".to_string()),
+                    );
+                    continue;
+                }
+
+                let supported_field = field_ty.is_supported_value_type()
+                    || field_ty.is_struct()
+                    || (field_ty.is_array()
+                        && element_ty.is_some_and(|element| {
+                            element.is_supported_value_type() || element.is_struct()
+                        }));
+                if !supported_field {
+                    diagnostics.error(
+                        "semantic",
+                        Some(field.span),
+                        format!(
+                            "struct `{}` field `{}` uses unsupported type `{}`",
+                            def.name, field.name, field_ty
+                        ),
+                        None,
+                    );
                 }
             }
-        }
-        for (span, struct_name, field_name) in issues {
-            diagnostics.error(
-                "semantic",
-                Some(span),
-                format!(
-                    "struct `{struct_name}` field `{field_name}` uses an unsupported const-qualified pointer form in phase 10"
-                ),
-                Some("use const scalar fields or unqualified data pointers".to_string()),
-            );
         }
     }
 
@@ -3035,6 +3546,11 @@ impl<'a> SemanticAnalyzer<'a> {
                 }
                 expr.ty.is_pointer() && value_tainted
             }
+            TypedExprKind::StructAssign { target, value, .. } => {
+                let _ = self.track_stack_pointer_expr(target, tainted_locals);
+                let _ = self.track_stack_pointer_expr(value, tainted_locals);
+                false
+            }
             TypedExprKind::Call { args, .. } => {
                 let arg_tainted = args
                     .iter()
@@ -3196,6 +3712,19 @@ impl<'a> SemanticAnalyzer<'a> {
                 self.walk_interrupt_expr(function, expr, diagnostics);
             }
             TypedExprKind::Assign { target, value } => {
+                self.walk_interrupt_expr(function, target, diagnostics);
+                self.walk_interrupt_expr(function, value, diagnostics);
+            }
+            TypedExprKind::StructAssign { target, value, .. } => {
+                diagnostics.error(
+                    "semantic",
+                    Some(expr.span),
+                    format!(
+                        "interrupt handler `{}` cannot perform whole-struct copy in phase 11",
+                        self.symbols[function].name
+                    ),
+                    Some("copy scalar fields explicitly outside the ISR".to_string()),
+                );
                 self.walk_interrupt_expr(function, target, diagnostics);
                 self.walk_interrupt_expr(function, value, diagnostics);
             }
@@ -3368,6 +3897,21 @@ fn initializer_span(initializer: &Initializer) -> Span {
     }
 }
 
+/// Returns the source span covering one initializer-list entry.
+fn initializer_entry_span(entry: &InitializerEntry) -> Span {
+    entry
+        .designator
+        .as_ref()
+        .map_or_else(|| initializer_span(&entry.initializer), designator_span)
+}
+
+/// Returns the source span covering one parsed designator.
+fn designator_span(designator: &Designator) -> Span {
+    match designator {
+        Designator::Field(_, span) | Designator::Index(_, span) => *span,
+    }
+}
+
 /// Returns true when an expression is valid for static initialization in this subset.
 fn is_constant_expression(expr: &TypedExpr) -> bool {
     match &expr.kind {
@@ -3378,6 +3922,7 @@ fn is_constant_expression(expr: &TypedExpr) -> bool {
         }
         TypedExprKind::Cast { expr, .. } => is_constant_expression(expr),
         TypedExprKind::Assign { .. }
+        | TypedExprKind::StructAssign { .. }
         | TypedExprKind::Call { .. }
         | TypedExprKind::ArrayDecay(_)
         | TypedExprKind::AddressOf(_)
@@ -3413,6 +3958,7 @@ fn eval_integer_constant_expr(expr: &TypedExpr) -> Option<i64> {
             }
         }
         TypedExprKind::Assign { .. }
+        | TypedExprKind::StructAssign { .. }
         | TypedExprKind::Call { .. }
         | TypedExprKind::ArrayDecay(_)
         | TypedExprKind::AddressOf(_)
@@ -3563,6 +4109,10 @@ fn collect_expr_calls(expr: &TypedExpr, callees: &mut BTreeSet<SymbolId>) {
             collect_expr_calls(rhs, callees);
         }
         TypedExprKind::Assign { target, value } => {
+            collect_expr_calls(target, callees);
+            collect_expr_calls(value, callees);
+        }
+        TypedExprKind::StructAssign { target, value, .. } => {
             collect_expr_calls(target, callees);
             collect_expr_calls(value, callees);
         }

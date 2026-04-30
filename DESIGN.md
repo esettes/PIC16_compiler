@@ -176,14 +176,14 @@ Supported:
 - `void`, `char`, `unsigned char`, `int`, `unsigned int`
 - functions
 - globals, locals, static locals
-- `const` scalar, one-dimensional array, and flat struct objects
+- `const` scalar, one-dimensional array, and complete named struct objects
 - file-scope `typedef` aliases for supported object/value types
 - `enum` declarations and enumerator constants
-- named packed `struct` declarations with non-aggregate fields
-- fixed-size one-dimensional arrays of supported scalar types
+- named packed `struct` declarations with nested struct and one-dimensional array fields
+- fixed-size one-dimensional arrays of supported scalar types and complete named struct types
 - omitted array size when inferred from a brace initializer list or string literal
-- flat struct objects with scalar or one-level pointer fields
-- one-level data pointers to supported scalar or flat named struct types
+- complete named struct objects with scalar, one-dimensional array, nested struct, or one-level pointer fields
+- one-level data pointers to supported scalar or complete named struct types
 - `if/else`, `while`, `for`, `do while`, `switch/case/default`, `break`, `continue`, `return`
 - direct calls
 - `&obj`, `*ptr`, `a[i]`, `p[i]`
@@ -191,14 +191,17 @@ Supported:
 - `==`, `!=`, `<`, `<=`, `>`, `>=`
 - `+`, `-`, `*`, `/`, `%`, `<<`, `>>`, `&`, `|`, `^`, `!`, `~`
 - compile-time `sizeof`
-- positional array and flat struct initializer lists with zero-fill
+- positional and designated array/struct initializer lists with zero-fill
+- nested aggregate initializer lists
+- string literal initialization for char/unsigned-char array fields inside structs
+- whole-struct assignment between compatible complete struct types
 - string literals for char/unsigned-char array initialization
 - explicit casts for supported scalar and one-level data-pointer forms
 
 Deferred:
 - richer pointer compatibility
-- nested aggregate support
-- whole-object aggregate operations
+- chained designators
+- incomplete-struct pointers
 
 Not implemented:
 
@@ -206,12 +209,8 @@ Not implemented:
 - pointer-to-pointer types
 - source-level function pointers
 - multidimensional arrays
-- arrays inside structs
-- nested struct fields
 - pointer initialization from string literals
-- designated initializers
-- nested aggregate initializer lists
-- whole-struct assignment
+- anonymous nested struct/enum fields without declarators
 - floats
 - recursion
 
@@ -239,12 +238,13 @@ Not implemented:
 - array decay is explicit in typed tree
 - typedef aliases are accepted at file scope only
 - enum constants are global compile-time 16-bit `int` values
-- structs are packed in declaration order and only permit flat scalar/one-level pointer fields
+- structs are packed in declaration order and may nest complete struct fields and one-dimensional array fields
 - local aggregate initializers lower to per-slot stores; global and static initializers require constant elements and pre-materialize into byte arrays
 - string literals are parsed as null-terminated byte strings, but phase 10 only consumes them in char/unsigned-char array initializers
 - omitted array size is inferred from supported brace or string initializers before storage layout is fixed
 - const objects are RAM-backed and read-only only at semantic level; const-qualified pointer forms are rejected
-- designated initializers, nested aggregate initializers, arrays inside structs, nested struct fields, and whole-struct assignment are rejected directly
+- designated initializers support `.field` and `[index]` forms; chained designators remain deferred
+- whole-struct assignment lowers to byte-wise copies and stays rejected inside interrupt handlers
 - explicit casts cover scalar conversions, one-level data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
 - switch expressions must be integer-valued; case labels must be constant and representable in the switch type
 - switch lowering evaluates the controlling expression once, compares through a linear branch chain, allows fallthrough, and routes `break` to the innermost switch end
@@ -285,6 +285,13 @@ Phase 10 keeps IR free of dedicated string/static-data opcodes. Instead it uses:
 - scalar constant expressions for scalar global/static initializers
 - ordinary startup stores/clears for initialized or zero-filled RAM-backed static data
 - ordinary per-slot local stores for automatic aggregate initialization
+
+Phase 11 keeps aggregate support within the same IR model. It adds:
+
+- recursive flattening of nested array/struct initializers into scalar slots
+- designated initializer overlay before IR generation
+- byte-wise whole-struct copy lowering through existing indirect load/store instructions
+- no dedicated aggregate-copy or switch-table backend shortcut
 
 Interrupt functions stay structurally ordinary IR functions, but carry interrupt metadata so the backend can:
 
@@ -385,3 +392,25 @@ Current limitation:
 
 - pointer-valued use of string literals is rejected instead of introducing code-space or pooled string objects
 - const-qualified pointer forms are rejected because the current pointer model has only one data-space pointer kind
+
+## Phase 11 Aggregates
+
+Phase 11 extends aggregate support without changing the packed-layout or RAM-backed data model.
+
+Rules:
+
+- arrays may appear inside structs
+- struct fields may be other complete named structs
+- nested initializer lists zero-fill omitted leaves
+- designated initializers support `.field = value` and `[index] = value`
+- string literals may initialize `char` / `unsigned char` array fields
+- whole-struct assignment is allowed only between compatible complete struct types
+- whole-struct assignment lowers as a byte-wise copy, not as a hidden helper call
+
+Current limitations:
+
+- multidimensional arrays remain unsupported
+- chained designators such as `.outer.inner = 1` remain unsupported
+- anonymous nested fields without declarators remain unsupported
+- pointers to incomplete struct types remain unsupported
+- local aggregate initializers and whole-struct copies remain rejected inside interrupt handlers

@@ -10,7 +10,7 @@
 
 Target backend is classic 14-bit PIC16 mid-range family, not a generic 8-bit CPU model.
 
-Current Phase 10 keeps that split intact while extending:
+Current Phase 11 keeps that split intact while extending:
 
 - stack-first caller-pushed ABI
 - per-call frame storage for locals and IR temps
@@ -27,6 +27,9 @@ Current Phase 10 keeps that split intact while extending:
 - Phase 10 string literal parsing for array initialization only
 - Phase 10 startup-time RAM initialization for globals, statics, const objects, and static locals
 - Phase 10 map/listing annotations for initialized or zeroed static data
+- Phase 11 arrays inside structs and nested struct-field layout
+- Phase 11 nested aggregate and designated initializer analysis before IR generation
+- Phase 11 byte-wise whole-struct copy lowering through existing indirect memory machinery
 - PIC16 banking/paging without backend duplication per device
 
 See:

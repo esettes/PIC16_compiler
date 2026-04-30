@@ -2934,6 +2934,7 @@ fn eval_const_expr(expr: &TypedExpr) -> i64 {
             }
         }
         TypedExprKind::Assign { .. }
+        | TypedExprKind::StructAssign { .. }
         | TypedExprKind::Call { .. }
         | TypedExprKind::ArrayDecay(_)
         | TypedExprKind::AddressOf(_)

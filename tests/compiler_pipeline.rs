@@ -1683,11 +1683,11 @@ void main(void) {
 }
 
 #[test]
-/// Verifies whole-struct copy assignment is rejected explicitly.
-fn reports_phase8_unsupported_struct_copy() {
-    let error = compile_error(
+/// Verifies whole-struct copy assignment compiles through byte-wise lowering.
+fn compiles_phase11_whole_struct_copy_assignment() {
+    let output = compile_source(
         "pic16f628a",
-        "phase8-struct-copy.c",
+        "phase11-struct-copy.c",
         "\
 #include <pic16/pic16f628a.h>
 struct Pair {
@@ -1695,15 +1695,18 @@ struct Pair {
     unsigned char y;
 };
 void main(void) {
-    struct Pair a;
-    struct Pair b;
+    struct Pair a = {1, 2};
+    struct Pair b = {3, 4};
     a = b;
     TRISB = 0x00;
+    PORTB = a.y;
 }
 ",
     );
 
-    assert!(error.contains("struct assignment is not supported"));
+    let ir = read_artifact(&output, "ir");
+    assert_hex_is_programmable(&output);
+    assert!(count_occurrences(&ir, "*t") >= 2);
 }
 
 #[test]
@@ -1749,68 +1752,87 @@ void main(void) {
 }
 
 #[test]
-/// Verifies designated initializers are rejected clearly when deferred.
-fn reports_phase8_designated_initializer_unsupported() {
-    let error = compile_error(
+/// Verifies struct and array designated initializers compile with zero-fill.
+fn compiles_phase11_designated_initializers() {
+    let output = compile_source(
         "pic16f628a",
-        "phase8-designated-init.c",
+        "phase11-designated-init.c",
         "\
 #include <pic16/pic16f628a.h>
 struct Point {
     unsigned char x;
     unsigned char y;
 };
-struct Point point = {.x = 1, .y = 2};
+struct Point point = {.y = 2, .x = 1};
+unsigned char table[4] = {[0] = 1, [3] = 9};
 void main(void) {
     TRISB = 0x00;
+    PORTB = point.y + table[3];
 }
 ",
     );
 
-    assert!(error.contains("designated initializers"));
+    let asm = read_artifact(&output, "asm");
+    assert_hex_is_programmable(&output);
+    assert!(asm.contains("init point"));
+    assert!(asm.contains("init table"));
 }
 
 #[test]
-/// Verifies arrays inside structs are rejected with a clear Phase 8 diagnostic.
-fn reports_phase8_array_field_in_struct_unsupported() {
-    let error = compile_error(
+/// Verifies arrays inside structs support direct and pointer-based element access.
+fn compiles_phase11_array_field_in_struct_access() {
+    let output = compile_source(
         "pic16f628a",
-        "phase8-struct-array-field.c",
+        "phase11-struct-array-field.c",
         "\
 #include <pic16/pic16f628a.h>
 struct Packet {
     unsigned char bytes[2];
+    unsigned char length;
 };
 void main(void) {
+    struct Packet packet = {{1, 0}, 1};
+    struct Packet *ptr = &packet;
     TRISB = 0x00;
+    ptr->bytes[1] = ptr->length;
+    PORTB = packet.bytes[1];
 }
 ",
     );
 
-    assert!(error.contains("arrays inside structs are not supported"));
+    let ir = read_artifact(&output, "ir");
+    assert_hex_is_programmable(&output);
+    assert!(ir.contains("Add 2"));
 }
 
 #[test]
-/// Verifies nested struct fields are rejected with a clear Phase 8 diagnostic.
-fn reports_phase8_nested_struct_field_unsupported() {
-    let error = compile_error(
+/// Verifies nested struct fields support composed offsets and pointer-member access.
+fn compiles_phase11_nested_struct_field_access() {
+    let output = compile_source(
         "pic16f628a",
-        "phase8-nested-struct-field.c",
+        "phase11-nested-struct-field.c",
         "\
 #include <pic16/pic16f628a.h>
-struct Inner {
+struct Point {
     unsigned char x;
+    unsigned char y;
 };
-struct Outer {
-    struct Inner inner;
+struct Box {
+    struct Point top_left;
+    struct Point bottom_right;
 };
+struct Box box = {{1, 2}, {3, 4}};
 void main(void) {
+    struct Box *ptr = &box;
     TRISB = 0x00;
+    PORTB = ptr->bottom_right.y;
 }
 ",
     );
 
-    assert!(error.contains("nested struct fields are not supported"));
+    let asm = read_artifact(&output, "asm");
+    assert_hex_is_programmable(&output);
+    assert!(asm.contains("init box"));
 }
 
 #[test]
@@ -2822,6 +2844,234 @@ fn phase10_examples_compile_via_picc() {
         ("pic16f877a", "examples/pic16f877a/static_table.c"),
         ("pic16f877a", "examples/pic16f877a/const_config.c"),
         ("pic16f877a", "examples/pic16f877a/global_init.c"),
+    ];
+
+    for (target, example) in examples {
+        let output = compile_example_via_picc_cli(target, example);
+        assert_hex_is_programmable(&output);
+        assert!(output.with_extension("map").exists());
+        assert!(output.with_extension("lst").exists());
+    }
+}
+
+#[test]
+/// Verifies nested aggregate initializers and string array fields compile for arrays of structs.
+fn compiles_phase11_nested_aggregate_initializers() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase11-config-table.c",
+        "\
+#include <pic16/pic16f877a.h>
+struct PinConfig {
+    unsigned char port;
+    unsigned char bit;
+};
+struct DeviceConfig {
+    struct PinConfig led;
+    unsigned char name[4];
+};
+struct DeviceConfig configs[2] = {
+    {{1, 0}, \"LED\"},
+    {.led = {2, 3}, .name = \"BTN\"}
+};
+void main(void) {
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    PORTB = configs[1].led.bit + configs[0].name[0];
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    let map = read_artifact(&output, "map");
+    assert_hex_is_programmable(&output);
+    assert!(asm.contains("init configs"));
+    assert!(map.contains("configs"));
+}
+
+#[test]
+/// Verifies duplicate designated struct fields diagnose clearly.
+fn reports_phase11_duplicate_designated_field() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase11-dup-designated-field.c",
+        "\
+#include <pic16/pic16f628a.h>
+struct Point {
+    unsigned char x;
+    unsigned char y;
+};
+struct Point point = {.x = 1, .x = 2};
+void main(void) {
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("duplicate initializer for field"));
+}
+
+#[test]
+/// Verifies duplicate array designators diagnose clearly.
+fn reports_phase11_duplicate_array_designator() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase11-dup-array-designator.c",
+        "\
+#include <pic16/pic16f628a.h>
+unsigned char table[2] = {[1] = 2, [1] = 3};
+void main(void) {
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("duplicate array initializer"));
+}
+
+#[test]
+/// Verifies array designators must stay within bounds.
+fn reports_phase11_array_designator_out_of_range() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase11-array-designator-range.c",
+        "\
+#include <pic16/pic16f628a.h>
+unsigned char table[2] = {[2] = 1};
+void main(void) {
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("out of range"));
+}
+
+#[test]
+/// Verifies array designators require constant integer expressions.
+fn reports_phase11_nonconstant_array_designator() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase11-array-designator-nonconst.c",
+        "\
+#include <pic16/pic16f628a.h>
+unsigned char index = 1;
+unsigned char table[2] = {[index] = 1};
+void main(void) {
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("array designator index must be a constant expression"));
+}
+
+#[test]
+/// Verifies self-containing structs by value are rejected clearly.
+fn reports_phase11_self_containing_struct_by_value() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase11-self-struct.c",
+        "\
+#include <pic16/pic16f628a.h>
+struct Node {
+    struct Node child;
+};
+void main(void) {
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("cannot contain itself by value"));
+}
+
+#[test]
+/// Verifies incompatible named-struct assignments are rejected.
+fn reports_phase11_incompatible_struct_assignment() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase11-incompatible-struct-assign.c",
+        "\
+#include <pic16/pic16f628a.h>
+struct A {
+    unsigned char x;
+};
+struct B {
+    unsigned char x;
+};
+void main(void) {
+    struct A a = {1};
+    struct B b = {2};
+    a = b;
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("incompatible struct type"));
+}
+
+#[test]
+/// Verifies assignments to const struct objects remain rejected after struct-copy support.
+fn reports_phase11_const_struct_assignment_rejected() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase11-const-struct-assign.c",
+        "\
+#include <pic16/pic16f628a.h>
+struct Pair {
+    unsigned char x;
+    unsigned char y;
+};
+const struct Pair a = {1, 2};
+struct Pair b = {3, 4};
+void main(void) {
+    a = b;
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("assignment to const object"));
+}
+
+#[test]
+/// Verifies whole-struct assignment stays rejected inside interrupt handlers.
+fn reports_phase11_struct_copy_in_isr() {
+    let error = compile_error(
+        "pic16f877a",
+        "phase11-isr-struct-copy.c",
+        "\
+#include <pic16/pic16f877a.h>
+struct Pair {
+    unsigned char x;
+    unsigned char y;
+};
+void __interrupt isr(void) {
+    struct Pair a = {1, 2};
+    struct Pair b = {3, 4};
+    a = b;
+}
+void main(void) {
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("whole-struct assignment is not supported inside interrupt handlers"));
+}
+
+#[test]
+/// Verifies checked-in Phase 11 examples compile cleanly through the `picc` CLI.
+fn phase11_examples_compile_via_picc() {
+    let examples = [
+        ("pic16f628a", "examples/pic16f628a/struct_array_field.c"),
+        ("pic16f877a", "examples/pic16f877a/nested_struct.c"),
+        ("pic16f877a", "examples/pic16f877a/designated_init.c"),
+        ("pic16f877a", "examples/pic16f877a/struct_copy.c"),
+        ("pic16f877a", "examples/pic16f877a/config_table.c"),
     ];
 
     for (target, example) in examples {

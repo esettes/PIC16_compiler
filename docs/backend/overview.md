@@ -10,7 +10,7 @@ Shared backend responsibilities:
 - IR -> PIC16 asm lowering
 - 14-bit word encoding
 
-Current backend phase: **Phase 10 static-data cleanup on top of Phase 9 control-flow coverage, Phase 8 aggregate/type-aware lowering, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**
+Current backend phase: **Phase 11 aggregate-complete lowering on top of Phase 10 static-data cleanup, Phase 9 control-flow coverage, Phase 8 aggregate/type-aware lowering, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**
 
 Backend owns:
 
@@ -28,8 +28,10 @@ Backend owns:
 - startup writes for pre-flattened global/static aggregate initializer bytes
 - startup clears for zero-init globals/statics
 - startup comments and map labels that annotate const/static data
+- byte-wise whole-struct copy lowering through existing indirect memory instructions
 - switch compare-chain blocks through the ordinary branch emitter
 - no backend jump tables and no backend-side recovery of labels nested under unrelated control statements in phase 9
+- no backend-side recovery for chained designators or incomplete-struct pointers; those stay frontend diagnostics
 - bank/page reuse tracking
 
 Current call contract:
@@ -106,6 +108,10 @@ Phase 9 backend docs:
 Phase 10 backend docs:
 
 - [phase10-data-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase10-data-layout.md:1)
+
+Phase 11 backend docs:
+
+- [phase11-aggregate-copy.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase11-aggregate-copy.md:1)
 
 Historical docs:
 

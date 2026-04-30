@@ -64,7 +64,19 @@ pub struct VarDecl {
 #[derive(Clone, Debug)]
 pub enum Initializer {
     Expr(Expr),
-    List(Vec<Initializer>, Span),
+    List(Vec<InitializerEntry>, Span),
+}
+
+#[derive(Clone, Debug)]
+pub struct InitializerEntry {
+    pub designator: Option<Designator>,
+    pub initializer: Initializer,
+}
+
+#[derive(Clone, Debug)]
+pub enum Designator {
+    Field(String, Span),
+    Index(Expr, Span),
 }
 
 #[derive(Clone, Debug)]

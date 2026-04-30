@@ -17,7 +17,7 @@ Current IR carries:
 - direct-call instructions with arbitrary argument lists
 - typed arithmetic and shift instructions for helper-aware lowering
 - member-access-friendly base + constant-offset address computations
-- flat aggregate initializer lowering into scalar stores or global byte payloads
+- recursive aggregate initializer lowering into scalar stores or global byte payloads
 - per-function interrupt metadata for backend vector/prologue selection
 - optimization-pass-friendly CFG blocks and temp tables
 
@@ -29,11 +29,13 @@ Phase 7 optimization passes:
 - dead code elimination
 - temp-slot compaction
 
-Phase 8 lowering notes:
+Phase 8-11 aggregate lowering notes:
 
 - local array/struct initializers are flattened before or during IR lowering into per-slot stores
 - global array/struct initializers arrive as byte payloads for backend startup writes
-- whole-struct assignment, designated initializers, and nested aggregate forms are rejected before IR generation
+- nested array/struct initializers are recursively flattened into scalar leaves before IR generation
+- designated initializers overlay those scalar leaves before IR generation
+- whole-struct assignment lowers to byte-wise indirect load/store sequences instead of a dedicated IR opcode
 
 Phase 9 lowering notes:
 
@@ -52,6 +54,13 @@ Phase 10 lowering notes:
 - static locals reuse the same startup-initializer path as globals and file-scope statics
 - zero-init and initialized static data remain explicit startup-store behavior instead of a separate ROM data section
 
+Current Phase 11 aggregate limits:
+
+- no multidimensional arrays
+- no chained designators such as `.outer.inner = 1`
+- no incomplete-struct pointers
+- no whole-struct copy inside interrupt handlers
+
 Current detail:
 
 - [phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
@@ -60,6 +69,7 @@ Current detail:
 - [phase8-aggregate-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase8-aggregate-lowering.md:1)
 - [phase9-switch-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase9-switch-lowering.md:1)
 - [phase10-static-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase10-static-initializers.md:1)
+- [phase11-aggregate-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase11-aggregate-initializers.md:1)
 
 Historical detail:
 

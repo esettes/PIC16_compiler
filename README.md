@@ -28,9 +28,19 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 10: string literals, RAM-backed const/static data, and improved startup initialization on top of Phase 9 `switch` control flow, Phase 8 type-system work, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
+Current implementation is **Phase 11: richer aggregates and initializer completeness on top of Phase 10 string/static-data cleanup, Phase 9 `switch` control flow, Phase 8 type-system work, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
 
-Phase 10 scope:
+Phase 11 scope:
+
+- arrays inside structs
+- nested struct fields with composed offsets for `.` and `->`
+- nested aggregate initializer lists with zero-fill
+- designated initializers for `.field = value` and `[index] = value`
+- string literal initialization for char/unsigned-char array fields
+- whole-struct assignment for compatible complete struct types
+- byte-wise struct-copy lowering through ordinary indirect load/store paths
+
+Phase 10 scope remains:
 
 - string literal lexing/parsing with `\n`, `\r`, `\t`, `\\`, `\"`, and `\0` escapes
 - `char` / `unsigned char` arrays initialized from string literals
@@ -73,6 +83,7 @@ What changed from Phase 3:
 - Phase 8 adds typedef/enum/struct support, aggregate initializers, and explicit casts for supported forms
 - Phase 9 adds compare-chain lowering for `switch` / `case` / `default`, fallthrough, and switch-aware `break`
 - Phase 10 adds string literal parsing, RAM-backed const/static initialization cleanup, and clearer startup data artifacts
+- Phase 11 adds nested aggregate layout/init support, designated initializers, and byte-wise whole-struct copy
 - active docs now describe stack-first behavior; old Phase 2/3 docs remain historical
 
 ## Phase 4 ABI Summary
@@ -109,13 +120,16 @@ More detail:
 - [docs/ir/phase8-aggregate-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase8-aggregate-lowering.md:1)
 - [docs/ir/phase9-switch-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase9-switch-lowering.md:1)
 - [docs/ir/phase10-static-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase10-static-initializers.md:1)
+- [docs/ir/phase11-aggregate-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase11-aggregate-initializers.md:1)
 - [docs/frontend/phase6-isr-syntax.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase6-isr-syntax.md:1)
 - [docs/frontend/phase8-types.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase8-types.md:1)
 - [docs/frontend/phase9-switch.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase9-switch.md:1)
 - [docs/frontend/phase10-string-literals.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase10-string-literals.md:1)
+- [docs/frontend/phase11-aggregates.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase11-aggregates.md:1)
 - [docs/backend/phase8-struct-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase8-struct-layout.md:1)
 - [docs/backend/phase9-switch-codegen.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase9-switch-codegen.md:1)
 - [docs/backend/phase10-data-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase10-data-layout.md:1)
+- [docs/backend/phase11-aggregate-copy.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase11-aggregate-copy.md:1)
 - [docs/runtime/phase5-arithmetic-helpers.md](/home/settes/cursus/PIC16_compiler/docs/runtime/phase5-arithmetic-helpers.md:1)
 - [docs/migration/phase3-to-phase4-abi.md](/home/settes/cursus/PIC16_compiler/docs/migration/phase3-to-phase4-abi.md:1)
 
@@ -307,6 +321,31 @@ Diagnostics:
 - assignment to const objects
 - unsupported const-qualified pointer forms
 
+## Phase 11 Aggregate Summary
+
+Supported:
+
+- arrays inside structs with packed declaration-order layout
+- nested struct fields with composed constant offsets
+- nested aggregate initializer lists for arrays and structs
+- string literal initialization of `char` / `unsigned char` array fields
+- zero-fill for omitted nested array/struct elements
+- designated struct-field initializers: `.field = value`
+- designated array-index initializers: `[index] = value`
+- whole-struct assignment between compatible complete struct types
+
+Diagnostics:
+
+- duplicate designated fields
+- duplicate array designators
+- unknown designated fields
+- array designator indices that are non-constant or out of range
+- too many initializer elements for arrays or structs
+- self-containing structs by value
+- incompatible struct assignment
+- assignment to const aggregate objects
+- whole-struct assignment inside interrupt handlers
+
 ## Supported Subset
 
 Supported:
@@ -320,7 +359,7 @@ Supported:
 - static locals
 - file-scope `typedef` aliases for supported object/value types
 - `enum` declarations and enumerator constants
-- named packed `struct` declarations with non-aggregate fields
+- named packed `struct` declarations with nested struct and one-dimensional array fields
 - `if` / `else`
 - `while`
 - `for`
@@ -330,11 +369,11 @@ Supported:
 - `return`
 - direct calls
 - `char`, `unsigned char`, `int`, `unsigned int`, `void`
-- fixed-size one-dimensional arrays of supported scalar types
+- fixed-size one-dimensional arrays of supported scalar types and complete named struct types
 - omitted array size when inferred from a brace initializer list or string literal
-- flat struct objects with scalar or one-level pointer fields
-- `const` scalar, one-dimensional array, and flat struct objects
-- one-level data pointers to supported scalar or flat named struct types in PIC16 data memory
+- complete named struct objects with scalar, one-dimensional array, nested struct, or one-level pointer fields
+- `const` scalar, one-dimensional array, and complete named struct objects
+- one-level data pointers to supported scalar or complete named struct types in PIC16 data memory
 - `&obj`
 - `*ptr`
 - `a[i]`
@@ -344,7 +383,10 @@ Supported:
 - `+`, `-`, `*`, `/`, `%`, `<<`, `>>`, `&`, `|`, `^`
 - `==`, `!=`, `<`, `<=`, `>`, `>=`
 - compile-time `sizeof` for supported scalars, pointers, and fixed arrays
-- positional array and flat struct initializer lists with zero-fill
+- positional and designated array/struct initializer lists with zero-fill
+- nested aggregate initializer lists
+- string literal initialization for char/unsigned-char array fields and char/unsigned-char array fields inside structs
+- whole-struct assignment between compatible complete struct types
 - explicit casts for supported scalar and one-level data-pointer forms
 - indirect data access through `FSR/INDF`
 - 3+ argument stack calls
@@ -359,15 +401,15 @@ Partially supported / constrained:
 - `typedef` names are file-scope only and cannot conflict with object/function names
 - enums use fixed 16-bit `int` representation in this phase
 - structs use packed declaration-order layout with no implicit padding
-- struct fields must stay flat: scalar or one-level pointer fields only
-- aggregate initializers are positional only; missing elements are zero-filled
+- struct copy lowers byte-by-byte through ordinary indirect memory operations
+- designated initializers support only single-step `.field` and `[index]` forms; chained designators are still deferred
 - global aggregate initializer elements must be constant expressions
 - explicit casts are limited to scalar conversions, one-level data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
-- aggregate objects support declaration/initialization and field access, but not whole-struct assignment
 - string literals are frontend values only in this phase; they are consumed by char/unsigned-char array initializers and do not form standalone pointer-addressable pools
 - startup code writes initialized global/static bytes and clears zero-init storage; direct ROM-style data sections are not modeled yet
 - const objects are RAM-backed in this phase and rely on semantic immutability rather than a separate program-memory address space
 - const-qualified pointer forms are intentionally rejected because the current pointer model has only one data-space pointer kind
+- local aggregate initializers and whole-struct copies remain rejected inside interrupt handlers
 - switch lowering uses linear compare chains; no jump tables are emitted in this phase
 - case/default labels must stay in the switch body flow or nested blocks; labels under unrelated control statements like `if`, `while`, or `for` are rejected in phase 9
 
@@ -377,11 +419,9 @@ Unsupported:
 - source-level function pointers
 - pointer-to-pointer types
 - multidimensional arrays
-- arrays inside structs
-- nested struct fields
-- designated initializers
-- nested aggregate initializer lists
-- whole-struct assignment
+- anonymous nested struct/enum fields without declarators
+- chained designators such as `.outer.inner = 1`
+- pointers to incomplete struct types
 - pointer initialization from string literals
 - pointer subtraction between two pointers
 - pointer relational compares other than `==` / `!=`
@@ -393,7 +433,8 @@ Current constraints:
 - recursion is rejected because Phase 4 computes maximum software-stack depth statically and has no runtime overflow checks
 - returning a pointer to stack-local storage is rejected, including direct forms and obvious local alias chains
 - explicit casts stay limited to scalar conversions, one-level data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
-- aggregate initializers are rejected inside interrupt handlers
+- aggregate initializers inside interrupt handlers remain rejected
+- whole-struct copy inside interrupt handlers remains rejected
 - global aggregate initializer elements must be constant expressions
 - string literal initializers are accepted only for `char` / `unsigned char` arrays, and explicit array sizes must fit the trailing null byte too
 - globals, file-scope statics, and static locals are initialized by startup code in RAM, not by a separate read-only data segment
@@ -406,12 +447,12 @@ Current constraints:
 - ISR code cannot call normal functions or Phase 5 runtime helpers
 - no emulator or hardware execution runs in CI; validation is compile/listing/map/HEX shape based
 
-## Known Limitations (Phase 10 Freeze)
+## Known Limitations (Phase 11 Freeze)
 
 - recursion is unsupported
 - no runtime software-stack overflow detection is implemented
 - ISR restrictions remain conservative: one ISR, no normal calls, no runtime-helper-requiring expressions
-- aggregate support is intentionally flat: no arrays inside structs, nested struct fields, designated initializers, nested aggregate initializers, or whole-struct assignment
+- aggregate support is still intentionally constrained: no multidimensional arrays, no anonymous nested fields, no chained designators, and no incomplete-struct pointers
 - switch lowering stays intentionally simple: compare chains only, no jump tables, and labels nested under other control statements are rejected
 - string literals do not produce standalone pointer-addressable objects; only char/unsigned-char array initialization is supported
 - const storage remains RAM-backed; there is still no separate program-memory const model or code-space string pointers
@@ -594,6 +635,7 @@ picc --list-targets
 - [examples/pic16f628a/casts.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/casts.c:1)
 - [examples/pic16f628a/stack_abi.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/stack_abi.c:1)
 - [examples/pic16f628a/string_array.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/string_array.c:1)
+- [examples/pic16f628a/struct_array_field.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/struct_array_field.c:1)
 - [examples/pic16f628a/struct_initializer.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/struct_initializer.c:1)
 - [examples/pic16f628a/struct_point.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/struct_point.c:1)
 - [examples/pic16f628a/switch_state.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/switch_state.c:1)
@@ -601,15 +643,19 @@ picc --list-targets
 - [examples/pic16f877a/blink.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/blink.c:1)
 - [examples/pic16f877a/call_chain.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/call_chain.c:1)
 - [examples/pic16f877a/compare16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/compare16.c:1)
+- [examples/pic16f877a/config_table.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/config_table.c:1)
 - [examples/pic16f877a/div16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/div16.c:1)
+- [examples/pic16f877a/designated_init.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/designated_init.c:1)
 - [examples/pic16f877a/expression_test.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/expression_test.c:1)
 - [examples/pic16f877a/const_config.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/const_config.c:1)
 - [examples/pic16f877a/global_init.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/global_init.c:1)
 - [examples/pic16f877a/mod16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/mod16.c:1)
 - [examples/pic16f877a/mul16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/mul16.c:1)
+- [examples/pic16f877a/nested_struct.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/nested_struct.c:1)
 - [examples/pic16f877a/pointer16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/pointer16.c:1)
 - [examples/pic16f877a/shift_mix.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/shift_mix.c:1)
 - [examples/pic16f877a/static_table.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/static_table.c:1)
+- [examples/pic16f877a/struct_copy.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/struct_copy.c:1)
 - [examples/pic16f877a/switch_enum.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/switch_enum.c:1)
 - [examples/pic16f877a/switch_fallthrough.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/switch_fallthrough.c:1)
 - [examples/pic16f628a/timer_interrupt.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/timer_interrupt.c:1)
@@ -626,13 +672,16 @@ picc --list-targets
 - [docs/backend/phase4-stack-first-abi.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-first-abi.md:1)
 - [docs/backend/phase4-stack-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-model.md:1)
 - [docs/backend/phase10-data-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase10-data-layout.md:1)
+- [docs/backend/phase11-aggregate-copy.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase11-aggregate-copy.md:1)
 - [docs/backend/phase9-switch-codegen.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase9-switch-codegen.md:1)
 - [docs/ir/phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
 - [docs/backend/phase5-helper-calling.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase5-helper-calling.md:1)
 - [docs/ir/phase5-arithmetic-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase5-arithmetic-lowering.md:1)
 - [docs/ir/phase10-static-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase10-static-initializers.md:1)
+- [docs/ir/phase11-aggregate-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase11-aggregate-initializers.md:1)
 - [docs/ir/phase9-switch-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase9-switch-lowering.md:1)
 - [docs/frontend/phase10-string-literals.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase10-string-literals.md:1)
+- [docs/frontend/phase11-aggregates.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase11-aggregates.md:1)
 - [docs/frontend/phase9-switch.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase9-switch.md:1)
 - [docs/runtime/phase5-arithmetic-helpers.md](/home/settes/cursus/PIC16_compiler/docs/runtime/phase5-arithmetic-helpers.md:1)
 - [docs/migration/phase3-to-phase4-abi.md](/home/settes/cursus/PIC16_compiler/docs/migration/phase3-to-phase4-abi.md:1)
@@ -640,4 +689,4 @@ picc --list-targets
 
 ## Current Limits
 
-Phase 10 adds null-terminated string parsing for array initializers, RAM-backed const/static startup initialization, omitted array-size inference from supported initializers, and clearer static-data artifacts on top of Phase 9 switch control flow. Current hard limits remain: no standalone pointer-addressable string literals, no const-qualified pointer forms, no program-memory const model, no jump tables, no case/default labels buried under other control statements, no `union`, no pointer-to-pointer types, no multidimensional arrays, no nested aggregate layouts or designated initializers, no whole-struct assignment, no function pointers, no `float`, and no recursion.
+Phase 11 adds arrays inside structs, nested struct fields, nested aggregate initializer lists, designated initializers, and byte-wise whole-struct assignment on top of Phase 10 static-data cleanup and Phase 9 switch control flow. Current hard limits remain: no standalone pointer-addressable string literals, no const-qualified pointer forms, no program-memory const model, no jump tables, no case/default labels buried under other control statements, no `union`, no pointer-to-pointer types, no multidimensional arrays, no anonymous nested aggregate fields, no chained designators, no incomplete-struct pointers, no function pointers, no `float`, and no recursion.

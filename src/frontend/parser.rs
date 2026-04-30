@@ -2,8 +2,8 @@ use crate::common::source::{PreprocessedSource, Span};
 use crate::diagnostics::DiagnosticBag;
 
 use super::ast::{
-    BinaryOp, EnumConstant, Expr, ExprKind, FunctionDecl, Initializer, Item, Stmt, StructDef,
-    StructField, TranslationUnit, UnaryOp, VarDecl,
+    BinaryOp, Designator, EnumConstant, Expr, ExprKind, FunctionDecl, Initializer,
+    InitializerEntry, Item, Stmt, StructDef, StructField, TranslationUnit, UnaryOp, VarDecl,
 };
 use super::lexer::{Keyword, Symbol, Token, TokenKind};
 use super::types::{Qualifiers, ScalarType, StorageClass, StructId, Type};
@@ -429,19 +429,32 @@ impl<'a> Parser<'a> {
         }
 
         loop {
-            if self.match_symbol(Symbol::Dot) {
-                self.diagnostics.error(
-                    "parser",
-                    Some(self.previous_span()),
-                    "designated initializers are not supported in phase 8",
-                    Some("use positional initializer order for now".to_string()),
-                );
-                let _ = self.expect_identifier();
+            let designator = if self.match_symbol(Symbol::Dot) {
+                let start_span = self.previous_span();
+                let (field, end_span) = self.expect_identifier();
                 self.expect_symbol(Symbol::Assign);
-                let _ = self.parse_initializer();
+                Some(Designator::Field(
+                    field,
+                    Span::new(start_span.start, end_span.end),
+                ))
+            } else if self.match_symbol(Symbol::LBracket) {
+                let designator_start = self.previous_span().start;
+                let index = self.parse_expression();
+                self.expect_symbol(Symbol::RBracket);
+                let designator_end = self.previous_span().end;
+                self.expect_symbol(Symbol::Assign);
+                Some(Designator::Index(
+                    index,
+                    Span::new(designator_start, designator_end),
+                ))
             } else {
-                items.push(self.parse_initializer());
-            }
+                None
+            };
+
+            items.push(InitializerEntry {
+                designator,
+                initializer: self.parse_initializer(),
+            });
 
             if self.match_symbol(Symbol::Comma) {
                 if self.check_symbol(Symbol::RBrace) {
@@ -984,6 +997,29 @@ impl<'a> Parser<'a> {
             return (Type::new(ScalarType::I16), false);
         }
 
+        let placeholder = tag.as_ref().map(|tag_name| {
+            if let Some(existing) = self.struct_tags.get(tag_name).copied() {
+                self.diagnostics.error(
+                    "parser",
+                    Some(Span::new(start, self.current_span().start)),
+                    format!("redefinition of struct `{tag_name}`"),
+                    None,
+                );
+                existing
+            } else {
+                let id = self.struct_defs.len();
+                self.struct_defs.push(StructDef {
+                    id,
+                    name: tag_name.clone(),
+                    fields: Vec::new(),
+                    size: 0,
+                    span: Span::new(start, start),
+                });
+                self.struct_tags.insert(tag_name.clone(), id);
+                id
+            }
+        });
+
         let mut fields = Vec::new();
         let mut seen_field_names = BTreeSet::new();
         let mut offset = 0usize;
@@ -1003,8 +1039,8 @@ impl<'a> Parser<'a> {
                 self.diagnostics.error(
                     "parser",
                     Some(Span::new(field_start, self.current_span().end)),
-                    "nested struct declarations are not supported in phase 8",
-                    Some("use pointer fields or flatten the struct".to_string()),
+                    "anonymous nested struct/enum fields are not supported in phase 11",
+                    Some("name the field explicitly".to_string()),
                 );
                 self.advance();
                 continue;
@@ -1023,25 +1059,6 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
-            if ty.is_array() {
-                self.diagnostics.error(
-                    "parser",
-                    Some(Span::new(field_start, self.previous_span().end)),
-                    "arrays inside structs are not supported in phase 8",
-                    Some("store a pointer instead, or flatten the layout".to_string()),
-                );
-                continue;
-            }
-            if ty.is_struct() {
-                self.diagnostics.error(
-                    "parser",
-                    Some(Span::new(field_start, self.previous_span().end)),
-                    "nested struct fields are not supported in phase 8",
-                    Some("use pointer fields or flatten the struct".to_string()),
-                );
-                continue;
-            }
-
             fields.push(StructField {
                 name,
                 ty,
@@ -1053,35 +1070,27 @@ impl<'a> Parser<'a> {
         self.expect_symbol(Symbol::RBrace);
 
         let end = self.previous_span().end;
-        if let Some(tag) = tag.clone()
-            && let Some(existing) = self.struct_tags.get(&tag).copied()
-        {
-            self.diagnostics.error(
-                "parser",
-                Some(Span::new(start, end)),
-                format!("redefinition of struct `{tag}`"),
-                None,
-            );
-            let size = self.struct_defs[existing].size;
-            return (Type::struct_type(existing, size), true);
+        if let Some(id) = placeholder {
+            self.struct_defs[id] = StructDef {
+                id,
+                name: self.struct_defs[id].name.clone(),
+                fields,
+                size: offset,
+                span: Span::new(start, end),
+            };
+            (Type::struct_type(id, offset), true)
+        } else {
+            let id = self.struct_defs.len();
+            let struct_name = format!("__anon_struct_{id}");
+            self.struct_defs.push(StructDef {
+                id,
+                name: struct_name,
+                fields,
+                size: offset,
+                span: Span::new(start, end),
+            });
+            (Type::struct_type(id, offset), true)
         }
-
-        let id = self.struct_defs.len();
-        let struct_name = tag
-            .clone()
-            .unwrap_or_else(|| format!("__anon_struct_{id}"));
-        self.struct_defs.push(StructDef {
-            id,
-            name: struct_name.clone(),
-            fields,
-            size: offset,
-            span: Span::new(start, end),
-        });
-        if let Some(tag) = tag {
-            self.struct_tags.insert(tag, id);
-        }
-
-        (Type::struct_type(id, offset), true)
     }
 
     /// Parses one `enum` specifier and captures global enumerator constants.
@@ -1696,5 +1705,73 @@ void main(void) {
 
         assert!(!diagnostics.has_errors(), "{diagnostics}");
         assert!(ast.contains("global char[] msg"));
+    }
+
+    #[test]
+    /// Verifies nested structs and array fields parse together for later layout analysis.
+    fn parses_phase11_nested_structs_and_array_fields() {
+        let (ast, diagnostics) = parse_source(
+            "\
+struct Point {
+    unsigned char x;
+    unsigned char y;
+};
+struct DeviceConfig {
+    struct Point led;
+    unsigned char name[4];
+};
+void main(void) {
+    struct DeviceConfig config;
+    PORTB = config.led.x + config.name[0];
+}
+",
+        );
+
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert!(ast.contains("struct DeviceConfig"));
+        assert!(ast.contains("config.led.x"));
+        assert!(ast.contains("config.name[0]"));
+    }
+
+    #[test]
+    /// Verifies designated initializers parse for both struct fields and array indices.
+    fn parses_phase11_designated_initializers() {
+        let (ast, diagnostics) = parse_source(
+            "\
+struct Point {
+    unsigned char x;
+    unsigned char y;
+};
+struct Point point = {.x = 1, .y = 2};
+unsigned char table[4] = {[0] = 1, [3] = 9};
+void main(void) {
+}
+",
+        );
+
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert!(ast.contains("point"));
+        assert!(ast.contains("table"));
+    }
+
+    #[test]
+    /// Verifies whole-struct assignment syntax parses as an ordinary assignment statement.
+    fn parses_phase11_struct_assignment_statement() {
+        let (ast, diagnostics) = parse_source(
+            "\
+struct Pair {
+    unsigned char x;
+    unsigned char y;
+};
+void main(void) {
+    struct Pair a;
+    struct Pair b;
+    a = b;
+}
+",
+        );
+
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert!(ast.contains("expr (a = b)"));
     }
 }

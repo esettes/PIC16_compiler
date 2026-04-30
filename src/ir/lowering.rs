@@ -453,6 +453,26 @@ impl FunctionBuilder {
                 }
                 value_operand
             }
+            TypedExprKind::StructAssign { target, value, size } => {
+                let dst_base = self.lower_lvalue_address(target);
+                let src_base = self.lower_lvalue_address(value);
+                let byte_ty = Type::new(ScalarType::U8);
+                for offset in 0..*size {
+                    let src_ptr = self.offset_pointer(src_base, offset);
+                    let dst_ptr = self.offset_pointer(dst_base, offset);
+                    let byte = self.new_temp(byte_ty);
+                    self.emit(IrInstr::LoadIndirect {
+                        dst: byte,
+                        ptr: src_ptr,
+                    });
+                    self.emit(IrInstr::StoreIndirect {
+                        ptr: dst_ptr,
+                        value: Operand::Temp(byte),
+                        ty: byte_ty,
+                    });
+                }
+                Operand::Constant(0)
+            }
             TypedExprKind::Call { function, args } => {
                 let args = args.iter().map(|arg| self.lower_expr(arg)).collect::<Vec<_>>();
                 if expr.ty.is_void() {
@@ -497,6 +517,22 @@ impl FunctionBuilder {
             }
             _ => unreachable!("semantic only forms addressable lvalues here"),
         }
+    }
+
+    /// Emits raw byte-pointer arithmetic used for aggregate copies.
+    fn offset_pointer(&mut self, base: Operand, offset: usize) -> Operand {
+        if offset == 0 {
+            return base;
+        }
+        let byte_ptr_ty = Type::new(ScalarType::U8).pointer_to();
+        let dst = self.new_temp(byte_ptr_ty);
+        self.emit(IrInstr::Binary {
+            dst,
+            op: BinaryOp::Add,
+            lhs: base,
+            rhs: Operand::Constant(offset as i64),
+        });
+        Operand::Temp(dst)
     }
 
     /// Materializes a boolean-like expression as a normalized `0` or `1` temp.
