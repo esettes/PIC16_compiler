@@ -28,9 +28,18 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 9: `switch` / `case` / `default` control flow on top of the Phase 8 type-system work, Phase 7 optimization layer, Phase 6 interrupt model, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
+Current implementation is **Phase 10: string literals, RAM-backed const/static data, and improved startup initialization on top of Phase 9 `switch` control flow, Phase 8 type-system work, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
 
-Phase 9 scope:
+Phase 10 scope:
+
+- string literal lexing/parsing with `\n`, `\r`, `\t`, `\\`, `\"`, and `\0` escapes
+- `char` / `unsigned char` arrays initialized from string literals
+- omitted array-size inference from brace initializers and string literals
+- RAM-backed `const` scalar/array/flat-struct objects with semantic write rejection
+- startup-time initialization and zero-fill for globals, file-scope statics, and static locals
+- clearer startup/listing/map output for initialized or zeroed static data
+
+Phase 9 scope remains:
 
 - `switch` statements over `char`, `unsigned char`, `int`, `unsigned int`, and enum-backed 16-bit `int`
 - `case` labels with integer constant expressions or enum constants
@@ -63,6 +72,7 @@ What changed from Phase 3:
 - Phase 7 reduces redundant instructions, shrinks temp pressure, and avoids some helper calls entirely
 - Phase 8 adds typedef/enum/struct support, aggregate initializers, and explicit casts for supported forms
 - Phase 9 adds compare-chain lowering for `switch` / `case` / `default`, fallthrough, and switch-aware `break`
+- Phase 10 adds string literal parsing, RAM-backed const/static initialization cleanup, and clearer startup data artifacts
 - active docs now describe stack-first behavior; old Phase 2/3 docs remain historical
 
 ## Phase 4 ABI Summary
@@ -98,11 +108,14 @@ More detail:
 - [docs/ir/phase6-isr-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase6-isr-lowering.md:1)
 - [docs/ir/phase8-aggregate-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase8-aggregate-lowering.md:1)
 - [docs/ir/phase9-switch-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase9-switch-lowering.md:1)
+- [docs/ir/phase10-static-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase10-static-initializers.md:1)
 - [docs/frontend/phase6-isr-syntax.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase6-isr-syntax.md:1)
 - [docs/frontend/phase8-types.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase8-types.md:1)
 - [docs/frontend/phase9-switch.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase9-switch.md:1)
+- [docs/frontend/phase10-string-literals.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase10-string-literals.md:1)
 - [docs/backend/phase8-struct-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase8-struct-layout.md:1)
 - [docs/backend/phase9-switch-codegen.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase9-switch-codegen.md:1)
+- [docs/backend/phase10-data-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase10-data-layout.md:1)
 - [docs/runtime/phase5-arithmetic-helpers.md](/home/settes/cursus/PIC16_compiler/docs/runtime/phase5-arithmetic-helpers.md:1)
 - [docs/migration/phase3-to-phase4-abi.md](/home/settes/cursus/PIC16_compiler/docs/migration/phase3-to-phase4-abi.md:1)
 
@@ -270,6 +283,30 @@ Diagnostics:
 - unsupported non-integer switch expressions
 - case/default labels nested under other control statements in the same switch are rejected in this phase
 
+## Phase 10 Static-Data Summary
+
+Supported:
+
+- string literals parse as null-terminated byte strings
+- supported escapes: `\n`, `\r`, `\t`, `\\`, `\"`, `\0`
+- `char` and `unsigned char` arrays may initialize from string literals
+- omitted array size may be inferred from brace initializer element count or string length plus trailing null
+- globals, file-scope statics, and static locals are zero-initialized when no initializer is present
+- scalar, array, and flat-struct globals/statics initialize through startup code
+- missing array/struct initializer elements are zero-filled
+- `const` scalar, array, and flat-struct objects are read-only at semantic level
+- map entries annotate const/static data; startup/listing output annotates zero/init actions
+
+Diagnostics:
+
+- unterminated string literals
+- unsupported string escape sequences
+- string initializers that do not fit including the trailing null byte
+- string literals used outside supported char/unsigned-char array initializer contexts
+- non-constant global/static initializer forms
+- assignment to const objects
+- unsupported const-qualified pointer forms
+
 ## Supported Subset
 
 Supported:
@@ -294,7 +331,9 @@ Supported:
 - direct calls
 - `char`, `unsigned char`, `int`, `unsigned int`, `void`
 - fixed-size one-dimensional arrays of supported scalar types
+- omitted array size when inferred from a brace initializer list or string literal
 - flat struct objects with scalar or one-level pointer fields
+- `const` scalar, one-dimensional array, and flat struct objects
 - one-level data pointers to supported scalar or flat named struct types in PIC16 data memory
 - `&obj`
 - `*ptr`
@@ -325,6 +364,10 @@ Partially supported / constrained:
 - global aggregate initializer elements must be constant expressions
 - explicit casts are limited to scalar conversions, one-level data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
 - aggregate objects support declaration/initialization and field access, but not whole-struct assignment
+- string literals are frontend values only in this phase; they are consumed by char/unsigned-char array initializers and do not form standalone pointer-addressable pools
+- startup code writes initialized global/static bytes and clears zero-init storage; direct ROM-style data sections are not modeled yet
+- const objects are RAM-backed in this phase and rely on semantic immutability rather than a separate program-memory address space
+- const-qualified pointer forms are intentionally rejected because the current pointer model has only one data-space pointer kind
 - switch lowering uses linear compare chains; no jump tables are emitted in this phase
 - case/default labels must stay in the switch body flow or nested blocks; labels under unrelated control statements like `if`, `while`, or `for` are rejected in phase 9
 
@@ -339,6 +382,7 @@ Unsupported:
 - designated initializers
 - nested aggregate initializer lists
 - whole-struct assignment
+- pointer initialization from string literals
 - pointer subtraction between two pointers
 - pointer relational compares other than `==` / `!=`
 - `float`
@@ -351,20 +395,27 @@ Current constraints:
 - explicit casts stay limited to scalar conversions, one-level data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
 - aggregate initializers are rejected inside interrupt handlers
 - global aggregate initializer elements must be constant expressions
+- string literal initializers are accepted only for `char` / `unsigned char` arrays, and explicit array sizes must fit the trailing null byte too
+- globals, file-scope statics, and static locals are initialized by startup code in RAM, not by a separate read-only data segment
+- const data remains in RAM in this phase; writes are rejected semantically
 - switch expressions must stay in the supported integer subset; case labels must be constant and representable
 - switch inside ISR is allowed only when the controlling expression and body remain inline-safe under existing Phase 6 helper restrictions
+- reads from global/static/const RAM objects are allowed inside ISR when the resulting expressions stay inline-safe
 - pointers are data-space-only; code pointers remain unsupported
 - only one ISR is supported in this phase
 - ISR code cannot call normal functions or Phase 5 runtime helpers
 - no emulator or hardware execution runs in CI; validation is compile/listing/map/HEX shape based
 
-## Known Limitations (Phase 9 Freeze)
+## Known Limitations (Phase 10 Freeze)
 
 - recursion is unsupported
 - no runtime software-stack overflow detection is implemented
 - ISR restrictions remain conservative: one ISR, no normal calls, no runtime-helper-requiring expressions
 - aggregate support is intentionally flat: no arrays inside structs, nested struct fields, designated initializers, nested aggregate initializers, or whole-struct assignment
 - switch lowering stays intentionally simple: compare chains only, no jump tables, and labels nested under other control statements are rejected
+- string literals do not produce standalone pointer-addressable objects; only char/unsigned-char array initialization is supported
+- const storage remains RAM-backed; there is still no separate program-memory const model or code-space string pointers
+- const-qualified pointer forms are rejected rather than partially modeled
 - enums stay fixed to 16-bit `int`; structs stay packed with no padding
 - `union` and `float` are unsupported
 - source-level function pointers are unsupported
@@ -542,6 +593,7 @@ picc --list-targets
 - [examples/pic16f628a/array_initializer.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/array_initializer.c:1)
 - [examples/pic16f628a/casts.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/casts.c:1)
 - [examples/pic16f628a/stack_abi.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/stack_abi.c:1)
+- [examples/pic16f628a/string_array.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/string_array.c:1)
 - [examples/pic16f628a/struct_initializer.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/struct_initializer.c:1)
 - [examples/pic16f628a/struct_point.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/struct_point.c:1)
 - [examples/pic16f628a/switch_state.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/switch_state.c:1)
@@ -551,10 +603,13 @@ picc --list-targets
 - [examples/pic16f877a/compare16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/compare16.c:1)
 - [examples/pic16f877a/div16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/div16.c:1)
 - [examples/pic16f877a/expression_test.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/expression_test.c:1)
+- [examples/pic16f877a/const_config.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/const_config.c:1)
+- [examples/pic16f877a/global_init.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/global_init.c:1)
 - [examples/pic16f877a/mod16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/mod16.c:1)
 - [examples/pic16f877a/mul16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/mul16.c:1)
 - [examples/pic16f877a/pointer16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/pointer16.c:1)
 - [examples/pic16f877a/shift_mix.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/shift_mix.c:1)
+- [examples/pic16f877a/static_table.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/static_table.c:1)
 - [examples/pic16f877a/switch_enum.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/switch_enum.c:1)
 - [examples/pic16f877a/switch_fallthrough.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/switch_fallthrough.c:1)
 - [examples/pic16f628a/timer_interrupt.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/timer_interrupt.c:1)
@@ -570,11 +625,14 @@ picc --list-targets
 - [docs/backend/optimization.md](/home/settes/cursus/PIC16_compiler/docs/backend/optimization.md:1)
 - [docs/backend/phase4-stack-first-abi.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-first-abi.md:1)
 - [docs/backend/phase4-stack-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-model.md:1)
+- [docs/backend/phase10-data-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase10-data-layout.md:1)
 - [docs/backend/phase9-switch-codegen.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase9-switch-codegen.md:1)
 - [docs/ir/phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
 - [docs/backend/phase5-helper-calling.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase5-helper-calling.md:1)
 - [docs/ir/phase5-arithmetic-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase5-arithmetic-lowering.md:1)
+- [docs/ir/phase10-static-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase10-static-initializers.md:1)
 - [docs/ir/phase9-switch-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase9-switch-lowering.md:1)
+- [docs/frontend/phase10-string-literals.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase10-string-literals.md:1)
 - [docs/frontend/phase9-switch.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase9-switch.md:1)
 - [docs/runtime/phase5-arithmetic-helpers.md](/home/settes/cursus/PIC16_compiler/docs/runtime/phase5-arithmetic-helpers.md:1)
 - [docs/migration/phase3-to-phase4-abi.md](/home/settes/cursus/PIC16_compiler/docs/migration/phase3-to-phase4-abi.md:1)
@@ -582,4 +640,4 @@ picc --list-targets
 
 ## Current Limits
 
-Phase 9 adds `switch` / `case` / `default` with compare-chain lowering, fallthrough, and switch-aware `break` on top of the Phase 8 type-system work. Current hard limits remain: no jump tables, no case/default labels buried under other control statements, no `union`, no pointer-to-pointer types, no multidimensional arrays, no nested aggregate layouts or designated initializers, no whole-struct assignment, no function pointers, no `float`, and no recursion.
+Phase 10 adds null-terminated string parsing for array initializers, RAM-backed const/static startup initialization, omitted array-size inference from supported initializers, and clearer static-data artifacts on top of Phase 9 switch control flow. Current hard limits remain: no standalone pointer-addressable string literals, no const-qualified pointer forms, no program-memory const model, no jump tables, no case/default labels buried under other control statements, no `union`, no pointer-to-pointer types, no multidimensional arrays, no nested aggregate layouts or designated initializers, no whole-struct assignment, no function pointers, no `float`, and no recursion.

@@ -2603,3 +2603,231 @@ fn phase9_examples_compile_via_picc() {
         assert!(output.with_extension("lst").exists());
     }
 }
+
+#[test]
+/// Verifies char and unsigned-char arrays can be initialized from string literals.
+fn compiles_phase10_string_initialized_char_arrays() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase10-string-arrays.c",
+        "\
+#include <pic16/pic16f628a.h>
+char msg_exact[3] = \"OK\";
+unsigned char msg_infer[] = \"OK\";
+void main(void) {
+    TRISB = 0x00;
+    PORTB = (unsigned char)msg_exact[0] + msg_infer[1];
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    let map = read_artifact(&output, "map");
+    assert_hex_is_programmable(&output);
+    assert!(asm.contains("init msg_exact"));
+    assert!(asm.contains("init msg_infer"));
+    assert!(asm.contains("(3 byte payload)"));
+    assert!(asm.contains("movlw 0x4F"));
+    assert!(asm.contains("movlw 0x4B"));
+    assert!(map.contains("msg_exact"));
+    assert!(map.contains("msg_infer"));
+}
+
+#[test]
+/// Verifies const/global/static data show clear startup comments and map tags.
+fn compiles_phase10_const_and_static_data_startup() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase10-const-static.c",
+        "\
+#include <pic16/pic16f877a.h>
+const unsigned char table[] = {1, 2, 3, 4};
+static unsigned char flags[4];
+unsigned int word = 0x1234;
+void main(void) {
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    flags[0] = table[0];
+    PORTB = flags[0] + (unsigned char)word;
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    let map = read_artifact(&output, "map");
+    let listing = read_artifact(&output, "lst");
+    assert_hex_is_programmable(&output);
+    assert!(asm.contains("static data initialization"));
+    assert!(asm.contains("init table [const]"));
+    assert!(asm.contains("zero flags [static]"));
+    assert!(asm.contains("init word"));
+    let low = asm.find("movlw 0x34").expect("little-endian low byte init");
+    let high = asm[low + 1..]
+        .find("movlw 0x12")
+        .map(|offset| low + 1 + offset)
+        .expect("little-endian high byte init");
+    assert!(low < high);
+    assert!(map.contains("table [const]"));
+    assert!(map.contains("flags [static]"));
+    assert!(map.contains("word"));
+    assert!(listing.contains("init table [const]"));
+}
+
+#[test]
+/// Verifies static local initializers move into startup data handling.
+fn compiles_phase10_static_local_initializer() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase10-static-local.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    static unsigned char seen = 3;
+    TRISB = 0x00;
+    PORTB = seen;
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    let map = read_artifact(&output, "map");
+    assert_hex_is_programmable(&output);
+    assert!(asm.contains("init seen [static local]"));
+    assert!(map.contains("seen [static local]"));
+}
+
+#[test]
+/// Verifies string initializers that cannot fit including the trailing null are rejected.
+fn reports_phase10_string_initializer_too_large() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase10-string-too-large.c",
+        "\
+#include <pic16/pic16f628a.h>
+char msg[2] = \"OK\";
+void main(void) {
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("string initializer is too large"));
+}
+
+#[test]
+/// Verifies omitted array sizes can be inferred from brace initializers for static data.
+fn compiles_phase10_unsized_const_table_initializer() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase10-unsized-table.c",
+        "\
+#include <pic16/pic16f877a.h>
+const unsigned char table[] = {1, 2, 3, 4};
+void main(void) {
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    PORTB = table[3];
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    let map = read_artifact(&output, "map");
+    assert_hex_is_programmable(&output);
+    assert!(asm.contains("init table [const] @"));
+    assert!(asm.contains("(4 byte payload)"));
+    assert!(map.contains("table [const]"));
+}
+
+#[test]
+/// Verifies string literals used outside supported array-initializer contexts are rejected.
+fn reports_phase10_string_literal_unsupported_context() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase10-string-context.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    PORTB = \"OK\";
+}
+",
+    );
+
+    assert!(error.contains("string literals are only supported"));
+}
+
+#[test]
+/// Verifies writes to const objects are rejected directly.
+fn reports_phase10_const_assignment_rejected() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase10-const-assign.c",
+        "\
+#include <pic16/pic16f628a.h>
+const unsigned char value = 1;
+void main(void) {
+    value = 2;
+}
+",
+    );
+
+    assert!(error.contains("assignment to const object"));
+}
+
+#[test]
+/// Verifies const-qualified struct objects make their fields read-only too.
+fn reports_phase10_const_struct_field_write_rejected() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase10-const-struct-field.c",
+        "\
+#include <pic16/pic16f628a.h>
+struct Point {
+    unsigned char x;
+    unsigned char y;
+};
+const struct Point point = {1, 2};
+void main(void) {
+    point.y = 3;
+}
+",
+    );
+
+    assert!(error.contains("assignment to const object"));
+}
+
+#[test]
+/// Verifies unsupported const-qualified pointer forms diagnose clearly.
+fn reports_phase10_unsupported_const_pointer_form() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase10-const-pointer.c",
+        "\
+#include <pic16/pic16f628a.h>
+const unsigned char *ptr = 0;
+void main(void) {
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("const-qualified pointer form"));
+}
+
+#[test]
+/// Verifies checked-in Phase 10 examples compile cleanly through the `picc` CLI.
+fn phase10_examples_compile_via_picc() {
+    let examples = [
+        ("pic16f628a", "examples/pic16f628a/string_array.c"),
+        ("pic16f877a", "examples/pic16f877a/static_table.c"),
+        ("pic16f877a", "examples/pic16f877a/const_config.c"),
+        ("pic16f877a", "examples/pic16f877a/global_init.c"),
+    ];
+
+    for (target, example) in examples {
+        let output = compile_example_via_picc_cli(target, example);
+        assert_hex_is_programmable(&output);
+        assert!(output.with_extension("map").exists());
+        assert!(output.with_extension("lst").exists());
+    }
+}

@@ -124,6 +124,7 @@ pub struct Expr {
 #[derive(Clone, Debug)]
 pub enum ExprKind {
     IntLiteral(i64),
+    StringLiteral(Vec<u8>),
     Name(String),
     Cast {
         ty: Type,
@@ -333,6 +334,7 @@ fn render_stmt(stmt: &Stmt, indent: usize, output: &mut String) {
 fn render_expr(expr: &Expr) -> String {
     match &expr.kind {
         ExprKind::IntLiteral(value) => value.to_string(),
+        ExprKind::StringLiteral(bytes) => render_string_literal(bytes),
         ExprKind::Name(name) => name.clone(),
         ExprKind::Cast { ty, expr } => format!("({ty})({})", render_expr(expr)),
         ExprKind::Unary { op, expr } => format!("{op:?}({})", render_expr(expr)),
@@ -357,4 +359,26 @@ fn render_expr(expr: &Expr) -> String {
         ExprKind::SizeOfExpr(expr) => format!("sizeof({})", render_expr(expr)),
         ExprKind::SizeOfType(ty) => format!("sizeof({ty})"),
     }
+}
+
+/// Renders one null-terminated byte string using the supported escape spellings.
+fn render_string_literal(bytes: &[u8]) -> String {
+    let payload = bytes.strip_suffix(&[0]).unwrap_or(bytes);
+    let mut rendered = String::from("\"");
+    for byte in payload {
+        match *byte {
+            b'\n' => rendered.push_str("\\n"),
+            b'\r' => rendered.push_str("\\r"),
+            b'\t' => rendered.push_str("\\t"),
+            b'\\' => rendered.push_str("\\\\"),
+            b'"' => rendered.push_str("\\\""),
+            0 => rendered.push_str("\\0"),
+            byte if byte.is_ascii_graphic() || byte == b' ' => rendered.push(byte as char),
+            byte => {
+                let _ = write!(rendered, "\\x{byte:02X}");
+            }
+        }
+    }
+    rendered.push('"');
+    rendered
 }

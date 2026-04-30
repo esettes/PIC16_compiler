@@ -79,6 +79,15 @@ impl Type {
         self
     }
 
+    /// Returns one otherwise-identical type with `const`/`volatile` qualifiers stripped.
+    pub const fn unqualified(mut self) -> Self {
+        self.qualifiers = Qualifiers {
+            is_const: false,
+            is_volatile: false,
+        };
+        self
+    }
+
     /// Returns a pointer type that targets the provided base object type.
     pub const fn pointer_to(mut self) -> Self {
         self.pointer_depth += 1;
@@ -138,6 +147,11 @@ impl Type {
     /// Returns true when this type is a fixed-size one-dimensional array.
     pub fn is_array(self) -> bool {
         self.array_len.is_some()
+    }
+
+    /// Returns true when this array was declared with `[]` and still needs size inference.
+    pub fn is_incomplete_array(self) -> bool {
+        self.array_len == Some(0)
     }
 
     /// Returns true when this type can currently be lowered by the backend.
@@ -237,7 +251,9 @@ impl Type {
 
     /// Returns true when the type has a complete object size in the current phase.
     pub fn has_size(self) -> bool {
-        !self.is_void() && (self.struct_id.is_none() || self.struct_size > 0)
+        !self.is_void()
+            && !self.is_incomplete_array()
+            && (self.struct_id.is_none() || self.struct_size > 0)
     }
 }
 
@@ -273,7 +289,11 @@ impl Display for Type {
             formatter.write_str("*")?;
         }
         if let Some(len) = self.array_len {
-            write!(formatter, "[{len}]")?;
+            if len == 0 {
+                formatter.write_str("[]")?;
+            } else {
+                write!(formatter, "[{len}]")?;
+            }
         }
         Ok(())
     }

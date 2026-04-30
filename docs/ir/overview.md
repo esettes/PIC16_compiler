@@ -45,6 +45,13 @@ Phase 9 lowering notes:
 - no jump tables are emitted in this phase because compare chains are simpler to verify on PIC16
 - case/default labels nested under unrelated control statements are rejected before IR generation
 
+Phase 10 lowering notes:
+
+- string literals do not become general IR expressions in this phase
+- string-initialized arrays lower to ordinary byte payloads for globals/statics or ordinary per-slot stores for locals
+- static locals reuse the same startup-initializer path as globals and file-scope statics
+- zero-init and initialized static data remain explicit startup-store behavior instead of a separate ROM data section
+
 Current detail:
 
 - [phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
@@ -52,6 +59,7 @@ Current detail:
 - [phase6-isr-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase6-isr-lowering.md:1)
 - [phase8-aggregate-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase8-aggregate-lowering.md:1)
 - [phase9-switch-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase9-switch-lowering.md:1)
+- [phase10-static-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase10-static-initializers.md:1)
 
 Historical detail:
 

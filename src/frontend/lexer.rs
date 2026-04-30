@@ -7,6 +7,7 @@ use crate::diagnostics::DiagnosticBag;
 pub enum TokenKind {
     Identifier(String),
     Number(i64),
+    StringLiteral(Vec<u8>),
     Keyword(Keyword),
     Symbol(Symbol),
     Eof,
@@ -179,6 +180,10 @@ impl<'a> Lexer<'a> {
             };
         }
 
+        if ch == '"' {
+            return self.lex_string_literal();
+        }
+
         let kind = match self.try_double_symbol() {
             Some(symbol) => TokenKind::Symbol(symbol),
             None => {
@@ -223,6 +228,104 @@ impl<'a> Lexer<'a> {
         Token {
             kind,
             span: Span::new(start, self.index),
+        }
+    }
+
+    /// Scans one string literal and appends the trailing null terminator byte.
+    fn lex_string_literal(&mut self) -> Token {
+        let start = self.index;
+        self.index += 1;
+        let bytes = self.source.text.as_bytes();
+        let mut value = Vec::new();
+        let mut terminated = false;
+
+        while self.index < bytes.len() {
+            match bytes[self.index] {
+                b'"' => {
+                    self.index += 1;
+                    terminated = true;
+                    break;
+                }
+                b'\\' => {
+                    self.index += 1;
+                    if self.index >= bytes.len() {
+                        break;
+                    }
+                    match bytes[self.index] {
+                        b'n' => {
+                            value.push(b'\n');
+                            self.index += 1;
+                        }
+                        b'r' => {
+                            value.push(b'\r');
+                            self.index += 1;
+                        }
+                        b't' => {
+                            value.push(b'\t');
+                            self.index += 1;
+                        }
+                        b'\\' => {
+                            value.push(b'\\');
+                            self.index += 1;
+                        }
+                        b'"' => {
+                            value.push(b'"');
+                            self.index += 1;
+                        }
+                        b'0' => {
+                            value.push(0);
+                            self.index += 1;
+                        }
+                        b'x' | b'X' => {
+                            let escape_span =
+                                Span::new(self.index.saturating_sub(1), (self.index + 1).min(bytes.len()));
+                            self.diagnostics.error(
+                                "lexer",
+                                Some(escape_span),
+                                "hexadecimal string escapes are not supported in phase 10",
+                                Some("use \\n, \\r, \\t, \\\\, \\\" or \\0 escapes only".to_string()),
+                            );
+                            self.index += 1;
+                            while self.index < bytes.len() && (bytes[self.index] as char).is_ascii_hexdigit() {
+                                self.index += 1;
+                            }
+                            value.push(0);
+                        }
+                        other => {
+                            let escape_span =
+                                Span::new(self.index.saturating_sub(1), (self.index + 1).min(bytes.len()));
+                            self.diagnostics.error(
+                                "lexer",
+                                Some(escape_span),
+                                format!("unsupported escape sequence `\\{}`", other as char),
+                                Some("use \\n, \\r, \\t, \\\\, \\\" or \\0 escapes only".to_string()),
+                            );
+                            self.index += 1;
+                            value.push(0);
+                        }
+                    }
+                }
+                b'\n' | b'\r' => break,
+                byte => {
+                    value.push(byte);
+                    self.index += 1;
+                }
+            }
+        }
+
+        if !terminated {
+            self.diagnostics.error(
+                "lexer",
+                Some(Span::new(start, self.index.min(self.source.text.len()))),
+                "unterminated string literal",
+                None,
+            );
+        }
+
+        value.push(0);
+        Token {
+            kind: TokenKind::StringLiteral(value),
+            span: Span::new(start, self.index.min(self.source.text.len())),
         }
     }
 
@@ -316,4 +419,69 @@ fn keyword_or_ident(text: &str) -> TokenKind {
         _ => None,
     };
     keyword.map_or_else(|| TokenKind::Identifier(text.to_string()), TokenKind::Keyword)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Lexer, TokenKind};
+    use crate::common::source::{PreprocessedSource, SourceId, SourcePoint};
+    use crate::diagnostics::{DiagnosticBag, WarningProfile};
+
+    fn lex(source: &str) -> (Vec<TokenKind>, DiagnosticBag) {
+        let origin = SourcePoint {
+            file: SourceId(0),
+            line: 1,
+            column: 1,
+        };
+        let mut preprocessed = PreprocessedSource::new();
+        preprocessed.push_str(source, origin);
+        let mut diagnostics = DiagnosticBag::new(WarningProfile::default());
+        let tokens = Lexer::new(&preprocessed, &mut diagnostics)
+            .tokenize()
+            .into_iter()
+            .map(|token| token.kind)
+            .collect();
+        (tokens, diagnostics)
+    }
+
+    #[test]
+    /// Verifies one basic string literal token carries its trailing null byte.
+    fn tokenizes_phase10_basic_string_literal() {
+        let (tokens, diagnostics) = lex("\"OK\"");
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert_eq!(
+            tokens,
+            vec![TokenKind::StringLiteral(vec![b'O', b'K', 0]), TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    /// Verifies the supported common escapes decode into byte payloads.
+    fn tokenizes_phase10_escaped_string_literal() {
+        let (tokens, diagnostics) = lex("\"A\\n\\t\\\\\\\"\\0\"");
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert_eq!(
+            tokens,
+            vec![
+                TokenKind::StringLiteral(vec![b'A', b'\n', b'\t', b'\\', b'"', 0, 0]),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    /// Verifies unterminated strings emit a lexer diagnostic.
+    fn reports_phase10_unterminated_string_literal() {
+        let (_, diagnostics) = lex("\"oops");
+        assert!(diagnostics.has_errors());
+        assert!(format!("{diagnostics}").contains("unterminated string literal"));
+    }
+
+    #[test]
+    /// Verifies unsupported string escapes emit a lexer diagnostic.
+    fn reports_phase10_unsupported_string_escape() {
+        let (_, diagnostics) = lex("\"\\q\"");
+        assert!(diagnostics.has_errors());
+        assert!(format!("{diagnostics}").contains("unsupported escape sequence"));
+    }
 }

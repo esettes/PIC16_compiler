@@ -7,9 +7,9 @@ use crate::common::integer::{
 use crate::diagnostics::DiagnosticBag;
 use crate::frontend::ast::{BinaryOp, UnaryOp};
 use crate::frontend::semantic::{
-    SymbolId, SymbolKind, TypedExpr, TypedExprKind, TypedGlobalInitializer, TypedProgram,
+    Symbol, SymbolId, SymbolKind, TypedExpr, TypedExprKind, TypedGlobalInitializer, TypedProgram,
 };
-use crate::frontend::types::{CastKind, ScalarType, Type};
+use crate::frontend::types::{CastKind, ScalarType, StorageClass, Type};
 use crate::ir::model::{IrCondition, IrFunction, IrInstr, IrProgram, IrTerminator, Operand};
 use crate::linker::map::MapFile;
 
@@ -496,6 +496,8 @@ impl<'a> CodegenContext<'a> {
             self.layout.stack_capacity,
             self.layout.max_stack_depth
         )));
+        self.program
+            .push(AsmLine::Comment("static data initialization".to_string()));
         for global in &self.typed_program.globals {
             let symbol = &self.typed_program.symbols[global.symbol];
             let Some(SymbolStorage::Absolute(base)) =
@@ -503,13 +505,22 @@ impl<'a> CodegenContext<'a> {
             else {
                 continue;
             };
+            let symbol_name = format_data_symbol_name(symbol);
             if let Some(initializer) = &global.initializer {
                 match initializer {
                     TypedGlobalInitializer::Scalar(initializer) => {
+                        self.program.push(AsmLine::Comment(format!(
+                            "init {symbol_name} @0x{base:04X} ({} byte scalar)",
+                            symbol.ty.byte_width()
+                        )));
                         let value = eval_const_expr(initializer);
                         self.store_const_value(base, symbol.ty, value);
                     }
                     TypedGlobalInitializer::Bytes(bytes) => {
+                        self.program.push(AsmLine::Comment(format!(
+                            "init {symbol_name} @0x{base:04X} ({} byte payload)",
+                            bytes.len()
+                        )));
                         for (index, byte) in bytes.iter().enumerate() {
                             self.emit_const_to_w(*byte);
                             self.store_w_to_addr(base + index as u16);
@@ -517,6 +528,10 @@ impl<'a> CodegenContext<'a> {
                     }
                 }
             } else {
+                self.program.push(AsmLine::Comment(format!(
+                    "zero {symbol_name} @0x{base:04X} ({} bytes)",
+                    symbol.ty.byte_width()
+                )));
                 self.clear_slot(base, symbol.ty);
             }
         }
@@ -2840,7 +2855,7 @@ fn build_map(
         .filter(|symbol| symbol.kind != SymbolKind::Function)
         .filter_map(|symbol| {
             match layout.symbol_storage.get(&symbol.id).copied() {
-                Some(SymbolStorage::Absolute(addr)) => Some((symbol.name.clone(), addr)),
+                Some(SymbolStorage::Absolute(addr)) => Some((format_data_symbol_name(symbol), addr)),
                 Some(SymbolStorage::Frame(_)) | None => None,
             }
         })
@@ -2876,6 +2891,24 @@ fn build_map(
     MapFile {
         code_symbols,
         data_symbols,
+    }
+}
+
+/// Formats one data symbol with simple qualifiers that help map/listing readers.
+fn format_data_symbol_name(symbol: &Symbol) -> String {
+    let mut tags = Vec::new();
+    if symbol.ty.qualifiers.is_const {
+        tags.push("const");
+    }
+    match (symbol.kind, symbol.storage_class) {
+        (SymbolKind::Local, StorageClass::Static) => tags.push("static local"),
+        (SymbolKind::Global, StorageClass::Static) => tags.push("static"),
+        _ => {}
+    }
+    if tags.is_empty() {
+        symbol.name.clone()
+    } else {
+        format!("{} [{}]", symbol.name, tags.join(", "))
     }
 }
 

@@ -770,6 +770,13 @@ impl<'a> Parser<'a> {
                 span: Span::new(start, self.previous_span().end),
             };
         }
+        if let TokenKind::StringLiteral(bytes) = self.current().kind.clone() {
+            self.advance();
+            return Expr {
+                kind: ExprKind::StringLiteral(bytes),
+                span: Span::new(start, self.previous_span().end),
+            };
+        }
         if let TokenKind::Identifier(name) = self.current().kind.clone() {
             self.advance();
             return Expr {
@@ -1175,6 +1182,7 @@ impl<'a> Parser<'a> {
     fn eval_enum_const_expr(&self, expr: &Expr) -> Option<i64> {
         match &expr.kind {
             ExprKind::IntLiteral(value) => Some(*value),
+            ExprKind::StringLiteral(_) => None,
             ExprKind::Name(name) => self.enum_constant_by_name.get(name).copied(),
             ExprKind::Cast { expr, .. } => self.eval_enum_const_expr(expr),
             ExprKind::Unary { op, expr } => {
@@ -1398,7 +1406,11 @@ impl<'a> Parser<'a> {
     /// Parses the supported one-dimensional array suffix for one declarator.
     fn parse_type_suffixes(&mut self, mut ty: Type) -> Type {
         if self.match_symbol(Symbol::LBracket) {
-            let len = self.parse_array_len();
+            let len = if self.check_symbol(Symbol::RBracket) {
+                0
+            } else {
+                self.parse_array_len()
+            };
             self.expect_symbol(Symbol::RBracket);
             ty = ty.array_of(len);
             while self.match_symbol(Symbol::LBracket) {
@@ -1654,5 +1666,35 @@ void main(void) {
         assert!(!diagnostics.has_errors(), "{diagnostics}");
         assert!(ast.contains("case 1"));
         assert!(ast.contains("case 2"));
+    }
+
+    #[test]
+    /// Verifies string literals parse as ordinary expressions and keep supported escapes.
+    fn parses_phase10_string_literal_expression() {
+        let (ast, diagnostics) = parse_source(
+            "\
+void main(void) {
+    PORTB = \"line\\n\";
+}
+",
+        );
+
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert!(ast.contains("\"line\\n\""));
+    }
+
+    #[test]
+    /// Verifies one omitted-size array declarator parses for later semantic inference.
+    fn parses_phase10_unsized_array_string_initializer() {
+        let (ast, diagnostics) = parse_source(
+            "\
+char msg[] = \"OK\";
+void main(void) {
+}
+",
+        );
+
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert!(ast.contains("global char[] msg"));
     }
 }

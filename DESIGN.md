@@ -176,10 +176,12 @@ Supported:
 - `void`, `char`, `unsigned char`, `int`, `unsigned int`
 - functions
 - globals, locals, static locals
+- `const` scalar, one-dimensional array, and flat struct objects
 - file-scope `typedef` aliases for supported object/value types
 - `enum` declarations and enumerator constants
 - named packed `struct` declarations with non-aggregate fields
 - fixed-size one-dimensional arrays of supported scalar types
+- omitted array size when inferred from a brace initializer list or string literal
 - flat struct objects with scalar or one-level pointer fields
 - one-level data pointers to supported scalar or flat named struct types
 - `if/else`, `while`, `for`, `do while`, `switch/case/default`, `break`, `continue`, `return`
@@ -190,6 +192,7 @@ Supported:
 - `+`, `-`, `*`, `/`, `%`, `<<`, `>>`, `&`, `|`, `^`, `!`, `~`
 - compile-time `sizeof`
 - positional array and flat struct initializer lists with zero-fill
+- string literals for char/unsigned-char array initialization
 - explicit casts for supported scalar and one-level data-pointer forms
 
 Deferred:
@@ -205,6 +208,7 @@ Not implemented:
 - multidimensional arrays
 - arrays inside structs
 - nested struct fields
+- pointer initialization from string literals
 - designated initializers
 - nested aggregate initializer lists
 - whole-struct assignment
@@ -236,7 +240,10 @@ Not implemented:
 - typedef aliases are accepted at file scope only
 - enum constants are global compile-time 16-bit `int` values
 - structs are packed in declaration order and only permit flat scalar/one-level pointer fields
-- local aggregate initializers lower to per-slot stores; global aggregate initializers require constant elements and pre-materialize into byte arrays
+- local aggregate initializers lower to per-slot stores; global and static initializers require constant elements and pre-materialize into byte arrays
+- string literals are parsed as null-terminated byte strings, but phase 10 only consumes them in char/unsigned-char array initializers
+- omitted array size is inferred from supported brace or string initializers before storage layout is fixed
+- const objects are RAM-backed and read-only only at semantic level; const-qualified pointer forms are rejected
 - designated initializers, nested aggregate initializers, arrays inside structs, nested struct fields, and whole-struct assignment are rejected directly
 - explicit casts cover scalar conversions, one-level data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
 - switch expressions must be integer-valued; case labels must be constant and representable in the switch type
@@ -271,6 +278,13 @@ Phase 9 does not add a dedicated switch IR terminator. The IR lowerer expands ea
 - a linear compare-and-branch dispatch chain
 - ordinary CFG blocks for case/default entry points
 - ordinary jumps for `break` and fallthrough
+
+Phase 10 keeps IR free of dedicated string/static-data opcodes. Instead it uses:
+
+- byte payloads for global and static array/struct initializers
+- scalar constant expressions for scalar global/static initializers
+- ordinary startup stores/clears for initialized or zero-filled RAM-backed static data
+- ordinary per-slot local stores for automatic aggregate initialization
 
 Interrupt functions stay structurally ordinary IR functions, but carry interrupt metadata so the backend can:
 
@@ -351,3 +365,23 @@ Lowering strategy:
 Current limitation:
 
 - case/default labels must remain in the switch body flow or nested blocks, not under unrelated control statements like `if` or loop bodies
+
+## Phase 10 Static Data
+
+Phase 10 improves the static-data model without changing the PIC16 backend architecture.
+
+Rules:
+
+- string literals use the lexer/parser/frontend model only; there is no standalone string pool in this phase
+- supported string escapes are `\n`, `\r`, `\t`, `\\`, `\"`, and `\0`
+- `char` and `unsigned char` arrays may initialize from string literals
+- explicit array sizes must fit the entire string including the trailing null byte
+- omitted array sizes may be inferred from brace initializer element count or string length plus null
+- globals, file-scope statics, and static locals are initialized by startup code in RAM
+- missing array/struct initializer elements are zero-filled
+- `const` scalar/array/flat-struct objects are RAM-backed and semantically read-only
+
+Current limitation:
+
+- pointer-valued use of string literals is rejected instead of introducing code-space or pooled string objects
+- const-qualified pointer forms are rejected because the current pointer model has only one data-space pointer kind
