@@ -83,8 +83,14 @@ pub enum Initializer {
 
 #[derive(Clone, Debug)]
 pub struct InitializerEntry {
-    pub designator: Option<Designator>,
+    pub designator: Option<DesignatorPath>,
     pub initializer: Initializer,
+}
+
+#[derive(Clone, Debug)]
+pub struct DesignatorPath {
+    pub items: Vec<Designator>,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug)]

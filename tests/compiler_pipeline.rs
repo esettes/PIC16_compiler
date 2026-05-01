@@ -1502,39 +1502,28 @@ void main(void) {
 }
 
 #[test]
-/// Verifies multidimensional arrays are rejected before lowering.
-fn reports_unsupported_multidimensional_array() {
-    let error = execute(CliOptions {
-        command: CliCommand::Compile(CompileCommand {
-            target: "pic16f628a".to_string(),
-            input: {
-                let input = temp_file("multidim.c");
-                fs::write(
-                    &input,
-                    "\
+/// Verifies fixed multidimensional arrays compile and use row-major indexing.
+fn compiles_phase16_multidimensional_array_basic() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase16-matrix-basic.c",
+        "\
 #include <pic16/pic16f628a.h>
-unsigned char table[2][2];
+unsigned char matrix[2][3];
 void main(void) {
+    unsigned char i = 1;
+    unsigned char j = 2;
+    matrix[0][0] = 1;
+    matrix[i][j] = 9;
     TRISB = 0x00;
+    PORTB = matrix[1][2];
 }
 ",
-                )
-                .expect("fixture");
-                input
-            },
-            output: temp_file("multidim.hex"),
-            include_dirs: vec![repo("include")],
-            defines: BTreeMap::new(),
-            optimization: OptimizationLevel::O0,
-            artifacts: OutputArtifacts::default(),
-            verbose: false,
-            opt_report: false,
-            warning_profile: WarningProfile::default(),
-        }),
-    })
-    .expect_err("must fail");
+    );
 
-    assert!(format!("{error}").contains("multidimensional arrays"));
+    let ir = read_artifact(&output, "ir");
+    assert_hex_is_programmable(&output);
+    assert!(ir.contains("Multiply") || ir.contains("Add"));
 }
 
 #[test]
@@ -4008,6 +3997,217 @@ fn phase15_examples_compile_via_picc() {
         ("pic16f877a", "examples/pic16f877a/bitfield_flags.c"),
         ("pic16f877a", "examples/pic16f877a/bitfield_register_like.c"),
         ("pic16f877a", "examples/pic16f877a/union_initializer.c"),
+    ];
+
+    for (target, example) in examples {
+        let output = compile_example_via_picc_cli(target, example);
+        assert_hex_is_programmable(&output);
+        assert!(output.with_extension("map").exists());
+        assert!(output.with_extension("lst").exists());
+    }
+}
+
+#[test]
+/// Verifies multidimensional aggregate layout renders row-major sizes and composed field offsets.
+fn phase16_ast_reports_multidimensional_layout() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase16-layout.c",
+        "\
+#include <pic16/pic16f877a.h>
+struct Font {
+    unsigned char glyph[2][3];
+    unsigned char width;
+};
+unsigned char matrix[2][3];
+void main(void) {
+    struct Font font;
+    PORTB = font.glyph[1][2] + matrix[1][2];
+}
+",
+    );
+
+    let ast = read_artifact(&output, "ast");
+    assert!(ast.contains("glyph:unsigned char[2][3]@0"));
+    assert!(ast.contains("width:unsigned char@"));
+    assert!(ast.contains("global unsigned char[2][3] matrix"));
+}
+
+#[test]
+/// Verifies nested initializer lists flatten and zero-fill multidimensional arrays.
+fn compiles_phase16_multidimensional_initializer() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase16-matrix-init.c",
+        "\
+#include <pic16/pic16f877a.h>
+unsigned char matrix[2][3] = {
+    {1},
+    {4, 5}
+};
+void main(void) {
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    PORTB = matrix[1][1];
+}
+",
+    );
+
+    let map = read_artifact(&output, "map");
+    assert_hex_is_programmable(&output);
+    assert!(map.contains("matrix"));
+}
+
+#[test]
+/// Verifies multidimensional arrays inside structs support composed field plus index offsets.
+fn compiles_phase16_struct_matrix_field_access() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase16-struct-matrix.c",
+        "\
+#include <pic16/pic16f877a.h>
+struct Font {
+    unsigned char glyph[2][3];
+};
+void main(void) {
+    struct Font font;
+    struct Font *ptr = &font;
+    ptr->glyph[1][2] = 7;
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    PORTB = font.glyph[1][2];
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+    assert!(read_artifact(&output, "asm").contains("main"));
+}
+
+#[test]
+/// Verifies chained designators resolve nested field/index targets.
+fn compiles_phase16_chained_designators() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase16-chained-designators.c",
+        "\
+#include <pic16/pic16f877a.h>
+struct Font {
+    unsigned char glyph[2][3];
+};
+struct Font font = {
+    .glyph[0][1] = 5,
+    .glyph[1][2] = 9
+};
+void main(void) {
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    PORTB = font.glyph[1][2];
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies duplicate chained designators diagnose the repeated final target clearly.
+fn reports_phase16_duplicate_chained_designator() {
+    let error = compile_error(
+        "pic16f877a",
+        "phase16-dup-chained-designator.c",
+        "\
+struct Font {
+    unsigned char glyph[2][3];
+};
+struct Font font = {
+    .glyph[1][2] = 7,
+    .glyph[1][2] = 8
+};
+void main(void) {
+}
+",
+    );
+
+    assert!(error.contains("duplicate initializer for designator .glyph"));
+}
+
+#[test]
+/// Verifies multidimensional ROM arrays remain deferred and diagnose clearly.
+fn reports_phase16_rom_multidimensional_array_unsupported() {
+    let error = compile_error(
+        "pic16f877a",
+        "phase16-rom-matrix.c",
+        "\
+const __rom unsigned char table[2][3] = {
+    {1, 2, 3},
+    {4, 5, 6}
+};
+void main(void) {
+}
+",
+    );
+
+    assert!(error.contains("unsupported multidimensional ROM array"));
+}
+
+#[test]
+/// Verifies constant multidimensional indexing remains ISR-safe when it stays inline.
+fn compiles_phase16_constant_multidimensional_index_in_isr() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase16-isr-const-matrix.c",
+        "\
+#include <pic16/pic16f877a.h>
+unsigned char matrix[2][3] = {
+    {1, 2, 3},
+    {4, 5, 6}
+};
+void __interrupt isr(void) {
+    PORTB = matrix[1][2];
+}
+void main(void) {
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies helper-requiring dynamic multidimensional indexing is rejected inside ISR code.
+fn reports_phase16_dynamic_multidimensional_index_in_isr() {
+    let error = compile_error(
+        "pic16f877a",
+        "phase16-isr-dyn-matrix.c",
+        "\
+#include <pic16/pic16f877a.h>
+unsigned char matrix[2][3];
+void __interrupt isr(void) {
+    unsigned char i = 1;
+    PORTB = matrix[i][2];
+}
+void main(void) {
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("cannot use `Multiply` when it would lower through a runtime helper"));
+}
+
+#[test]
+/// Verifies checked-in Phase 16 examples compile cleanly through the `picc` CLI.
+fn phase16_examples_compile_via_picc() {
+    let examples = [
+        ("pic16f628a", "examples/pic16f628a/matrix_basic.c"),
+        ("pic16f877a", "examples/pic16f877a/matrix_initializer.c"),
+        ("pic16f877a", "examples/pic16f877a/struct_matrix_field.c"),
+        ("pic16f877a", "examples/pic16f877a/chained_designators.c"),
+        ("pic16f877a", "examples/pic16f877a/matrix_switch_state.c"),
     ];
 
     for (target, example) in examples {

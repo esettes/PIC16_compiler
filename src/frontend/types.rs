@@ -5,6 +5,7 @@ use std::fmt::{Display, Formatter};
 pub type StructId = usize;
 pub type UnionId = usize;
 pub const MAX_POINTER_DEPTH: usize = 8;
+pub const MAX_ARRAY_DIMS: usize = 8;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum AddressSpace {
@@ -50,7 +51,8 @@ pub struct Type {
     pub qualifiers: Qualifiers,
     pub pointer_depth: u8,
     pub pointer_qualifiers: [Qualifiers; MAX_POINTER_DEPTH],
-    pub array_len: Option<usize>,
+    pub array_rank: u8,
+    pub array_dims: [usize; MAX_ARRAY_DIMS],
     pub struct_id: Option<StructId>,
     pub struct_size: usize,
     pub union_id: Option<UnionId>,
@@ -72,7 +74,8 @@ impl Type {
                 is_const: false,
                 is_volatile: false,
             }; MAX_POINTER_DEPTH],
-            array_len: None,
+            array_rank: 0,
+            array_dims: [0; MAX_ARRAY_DIMS],
             struct_id: None,
             struct_size: 0,
             union_id: None,
@@ -94,7 +97,8 @@ impl Type {
                 is_const: false,
                 is_volatile: false,
             }; MAX_POINTER_DEPTH],
-            array_len: None,
+            array_rank: 0,
+            array_dims: [0; MAX_ARRAY_DIMS],
             struct_id: Some(struct_id),
             struct_size,
             union_id: None,
@@ -116,7 +120,8 @@ impl Type {
                 is_const: false,
                 is_volatile: false,
             }; MAX_POINTER_DEPTH],
-            array_len: None,
+            array_rank: 0,
+            array_dims: [0; MAX_ARRAY_DIMS],
             struct_id: None,
             struct_size: 0,
             union_id: Some(union_id),
@@ -163,20 +168,40 @@ impl Type {
             self.pointer_qualifiers[self.pointer_depth as usize] = qualifiers;
             self.pointer_depth += 1;
         }
-        self.array_len = None;
+        self.array_rank = 0;
+        self.array_dims = [0; MAX_ARRAY_DIMS];
         self
     }
 
-    /// Returns a fixed-size one-dimensional array type over the provided element type.
+    /// Returns a fixed-size array type with one additional outer dimension.
     pub const fn array_of(mut self, len: usize) -> Self {
-        self.array_len = Some(len);
+        if self.array_rank < MAX_ARRAY_DIMS as u8 {
+            self.array_dims[self.array_rank as usize] = len;
+            self.array_rank += 1;
+        }
+        self
+    }
+
+    /// Replaces one outer incomplete array dimension with a concrete inferred length.
+    pub const fn complete_outer_array(mut self, len: usize) -> Self {
+        if self.array_rank > 0 && self.array_dims[0] == 0 {
+            self.array_dims[0] = len;
+        } else if self.array_rank < MAX_ARRAY_DIMS as u8 {
+            self.array_dims[self.array_rank as usize] = len;
+            self.array_rank += 1;
+        }
         self
     }
 
     /// Returns the element or pointee type for arrays and pointers.
-    pub const fn element_type(mut self) -> Self {
-        if self.array_len.is_some() {
-            self.array_len = None;
+    pub fn element_type(mut self) -> Self {
+        if self.array_rank > 0 {
+            let rank = self.array_rank as usize;
+            for index in 1..rank {
+                self.array_dims[index - 1] = self.array_dims[index];
+            }
+            self.array_rank -= 1;
+            self.array_dims[self.array_rank as usize] = 0;
             return self;
         }
         if self.pointer_depth > 0 {
@@ -186,12 +211,13 @@ impl Type {
                 is_volatile: false,
             };
         }
-        self.array_len = None;
+        self.array_rank = 0;
+        self.array_dims = [0; MAX_ARRAY_DIMS];
         self
     }
 
     /// Returns the array-decayed pointer form used in value contexts.
-    pub const fn decay(self) -> Self {
+    pub fn decay(self) -> Self {
         self.element_type().pointer_to()
     }
 
@@ -201,7 +227,7 @@ impl Type {
             && self.struct_id.is_none()
             && self.union_id.is_none()
             && self.pointer_depth == 0
-            && self.array_len.is_none()
+            && self.array_rank == 0
     }
 
     /// Returns true when this type is a complete struct object type.
@@ -209,7 +235,7 @@ impl Type {
         self.struct_id.is_some()
             && self.union_id.is_none()
             && self.pointer_depth == 0
-            && self.array_len.is_none()
+            && self.array_rank == 0
     }
 
     /// Returns true when this type's base object is a struct.
@@ -222,7 +248,7 @@ impl Type {
         self.union_id.is_some()
             && self.struct_id.is_none()
             && self.pointer_depth == 0
-            && self.array_len.is_none()
+            && self.array_rank == 0
     }
 
     /// Returns true when this type's base object is a union.
@@ -237,17 +263,34 @@ impl Type {
 
     /// Returns true when this type is a constrained Phase 3 data pointer.
     pub fn is_pointer(self) -> bool {
-        self.pointer_depth > 0 && self.array_len.is_none()
+        self.pointer_depth > 0 && self.array_rank == 0
     }
 
-    /// Returns true when this type is a fixed-size one-dimensional array.
+    /// Returns true when this type is an array object.
     pub fn is_array(self) -> bool {
-        self.array_len.is_some()
+        self.array_rank > 0
     }
 
-    /// Returns true when this array was declared with `[]` and still needs size inference.
+    /// Returns true when one array dimension is still incomplete.
     pub fn is_incomplete_array(self) -> bool {
-        self.array_len == Some(0)
+        self.array_rank > 0
+            && self.array_dims[..self.array_rank as usize]
+                .iter()
+                .any(|len| *len == 0)
+    }
+
+    /// Returns the current outermost array length when this type is an array.
+    pub fn top_array_len(self) -> Option<usize> {
+        (self.array_rank > 0).then_some(self.array_dims[0])
+    }
+
+    /// Returns the innermost non-array element type.
+    pub fn innermost_element_type(self) -> Self {
+        let mut ty = self;
+        while ty.is_array() {
+            ty = ty.element_type();
+        }
+        ty
     }
 
     /// Returns true when this type can currently be lowered by the backend.
@@ -301,7 +344,7 @@ impl Type {
 
     /// Returns true when the type can be the target of a Phase 3 data pointer.
     pub fn is_supported_pointer_target(self) -> bool {
-        self.array_len.is_none() && self.has_size() && self.address_space == AddressSpace::Data
+        self.has_size() && self.address_space == AddressSpace::Data
     }
 
     /// Returns true when the type can live in a scalar value position in Phase 3.
@@ -326,8 +369,12 @@ impl Type {
 
     /// Returns the byte width needed to store this type in data memory.
     pub fn byte_width(self) -> usize {
-        if let Some(len) = self.array_len {
-            return self.element_type().byte_width() * len;
+        if self.array_rank > 0 {
+            let mut width = self.element_type().byte_width();
+            for len in &self.array_dims[..self.array_rank as usize] {
+                width *= *len;
+            }
+            return width;
         }
         if self.is_pointer() {
             return 2;
@@ -452,8 +499,8 @@ impl Display for Type {
                 formatter.write_str(" volatile")?;
             }
         }
-        if let Some(len) = self.array_len {
-            if len == 0 {
+        for len in &self.array_dims[..self.array_rank as usize] {
+            if *len == 0 {
                 formatter.write_str("[]")?;
             } else {
                 write!(formatter, "[{len}]")?;

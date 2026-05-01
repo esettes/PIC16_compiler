@@ -200,6 +200,18 @@ struct BitfieldLocation {
     bit_width: u8,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum ResolvedDesignatorTarget {
+    Object {
+        ty: Type,
+        offset: usize,
+    },
+    BitField {
+        storage_ty: Type,
+        location: BitfieldLocation,
+    },
+}
+
 #[derive(Clone, Debug)]
 struct AggregateInitPlan {
     size: usize,
@@ -1023,6 +1035,15 @@ impl<'a> SemanticAnalyzer<'a> {
                 );
                 return Some(typed);
             }
+            if typed.ty.array_rank > 1 {
+                diagnostics.error(
+                    "semantic",
+                    Some(expr.span),
+                    "multidimensional arrays do not decay to data pointers in phase 16",
+                    Some("index multidimensional arrays directly, e.g. `matrix[i][j]`".to_string()),
+                );
+                return Some(typed);
+            }
             Some(self.decay_array_expr(typed, expr.span))
         } else {
             Some(typed)
@@ -1739,11 +1760,64 @@ impl<'a> SemanticAnalyzer<'a> {
             if base.ty.is_rom() {
                 return self.analyze_rom_index_expr(base, index, span, diagnostics);
             }
-            let base_span = base.span;
-            let base = self.decay_array_expr(base, base_span);
-            return self.analyze_data_index_expr(base, index, span, diagnostics);
+            return self.analyze_array_index_expr(base, index, span, diagnostics);
         }
         self.analyze_data_index_expr(base, index, span, diagnostics)
+    }
+
+    /// Lowers one RAM-backed array indexing expression without requiring a general pointer-to-array type model.
+    fn analyze_array_index_expr(
+        &mut self,
+        base: TypedExpr,
+        index: TypedExpr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        if !index.ty.is_integer() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "array and pointer indices must be integers",
+                None,
+            );
+            return None;
+        }
+
+        let element_ty = base.ty.element_type();
+        if !element_ty.is_supported_pointer_target() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("indexed element type `{}` is not supported in phase 16", element_ty),
+                None,
+            );
+            return None;
+        }
+
+        let raw_ptr_ty = element_ty.pointer_to();
+        let base_ptr = TypedExpr {
+            kind: TypedExprKind::ArrayDecay(Box::new(base)),
+            ty: raw_ptr_ty,
+            span,
+            value_category: ValueCategory::RValue,
+        };
+        let scaled = self.scale_index_expr(index, element_ty, diagnostics);
+        let address = TypedExpr {
+            kind: TypedExprKind::Binary {
+                op: BinaryOp::Add,
+                lhs: Box::new(base_ptr.clone()),
+                rhs: Box::new(scaled),
+            },
+            ty: raw_ptr_ty,
+            span,
+            value_category: ValueCategory::RValue,
+        };
+        Some(TypedExpr {
+            kind: TypedExprKind::Deref(Box::new(address)),
+            ty: element_ty,
+            span,
+            value_category: ValueCategory::LValue,
+        })
     }
 
     /// Lowers one data-space indexing expression into pointer arithmetic followed by dereference.
@@ -2366,6 +2440,15 @@ impl<'a> SemanticAnalyzer<'a> {
     ) -> Type {
         let mut ty = ty;
         if ty.is_incomplete_array() {
+            if ty.array_rank > 1 {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    format!("{context} `{name}` uses unsupported incomplete multidimensional array type `{ty}`"),
+                    Some("phase 16 requires every multidimensional array bound to be explicit".to_string()),
+                );
+                return ty.complete_outer_array(1);
+            }
             let inferred_len = match initializer {
                 Some(Initializer::List(items, _)) => {
                     if items.is_empty() {
@@ -2403,7 +2486,7 @@ impl<'a> SemanticAnalyzer<'a> {
                     1
                 }
             };
-            ty = ty.array_of(inferred_len);
+            ty = ty.complete_outer_array(inferred_len);
         }
         ty
     }
@@ -2549,58 +2632,78 @@ impl<'a> SemanticAnalyzer<'a> {
         base_offset: usize,
         init_context: &mut AggregateInitContext<'_>,
     ) -> bool {
-        let len = target_ty.array_len.unwrap_or(0);
+        let len = target_ty.top_array_len().unwrap_or(0);
         let element_ty = target_ty.element_type();
         let stride = element_ty.byte_width();
         let mut next_index = 0usize;
-        let mut seen = BTreeSet::new();
+        let mut seen_positional = BTreeSet::new();
+        let mut seen_designated = BTreeSet::new();
         let mut valid = true;
 
         for entry in items {
-            let index = match &entry.designator {
-                Some(Designator::Index(expr, designator_span)) => {
-                    let Some(index) =
-                        self.evaluate_array_designator_index(
-                            expr,
-                            len,
-                            *designator_span,
-                            init_context.diagnostics,
-                        )
-                    else {
-                        valid = false;
-                        continue;
-                    };
-                    next_index = index.saturating_add(1);
-                    index
-                }
-                Some(Designator::Field(field, designator_span)) => {
+            if let Some(path) = &entry.designator {
+                let Some((index, index_span)) = self.first_array_designator(path) else {
                     init_context.diagnostics.error(
                         "semantic",
-                        Some(*designator_span),
-                        format!("array initializer does not accept field designator `.{field}`"),
+                        Some(path.span),
+                        "array initializer requires an array index designator",
+                        None,
+                    );
+                    valid = false;
+                    continue;
+                };
+                let Some(index) = self.evaluate_array_designator_index(
+                    &index,
+                    len,
+                    index_span,
+                    init_context.diagnostics,
+                ) else {
+                    valid = false;
+                    continue;
+                };
+                next_index = index.saturating_add(1);
+
+                let Some(target) = self.resolve_designator_target(
+                    target_ty,
+                    &path.items,
+                    base_offset,
+                    init_context.diagnostics,
+                ) else {
+                    valid = false;
+                    continue;
+                };
+                let target_key = resolved_designator_target_key(target);
+                if !seen_designated.insert(target_key) {
+                    init_context.diagnostics.error(
+                        "semantic",
+                        Some(initializer_entry_span(entry)),
+                        format!("duplicate initializer for designator {}", render_designator_path(path)),
                         None,
                     );
                     valid = false;
                     continue;
                 }
-                None => {
-                    if next_index >= len {
-                        init_context.diagnostics.error(
-                            "semantic",
-                            Some(span),
-                            "too many initializer elements for array",
-                            None,
-                        );
-                        valid = false;
-                        continue;
-                    }
-                    let index = next_index;
-                    next_index += 1;
-                    index
-                }
-            };
+                valid &= self.apply_resolved_designator_target(
+                    target,
+                    &entry.initializer,
+                    init_context,
+                );
+                continue;
+            }
 
-            if !seen.insert(index) {
+            if next_index >= len {
+                init_context.diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    "too many initializer elements for array",
+                    None,
+                );
+                valid = false;
+                continue;
+            }
+            let index = next_index;
+            next_index += 1;
+            if !seen_positional.insert(index) {
                 init_context.diagnostics.error(
                     "semantic",
                     Some(initializer_entry_span(entry)),
@@ -2651,54 +2754,59 @@ impl<'a> SemanticAnalyzer<'a> {
         };
         let fields = def.fields.clone();
         let mut next_index = 0usize;
-        let mut seen = BTreeSet::new();
+        let mut seen_positional = BTreeSet::new();
+        let mut seen_designated = BTreeSet::new();
         let mut valid = true;
 
         for entry in items {
-            let field_index = match &entry.designator {
-                Some(Designator::Field(field_name, designator_span)) => {
-                    let Some(index) = fields.iter().position(|field| field.name == *field_name) else {
-                        init_context.diagnostics.error(
-                            "semantic",
-                            Some(*designator_span),
-                            format!("unknown designated field `.{field_name}`"),
-                            None,
-                        );
-                        valid = false;
-                        continue;
-                    };
-                    next_index = index.saturating_add(1);
-                    index
-                }
-                Some(Designator::Index(_, designator_span)) => {
+            if let Some(path) = &entry.designator {
+                let Some((field_index, _)) = self.first_struct_designator(&fields, path, init_context.diagnostics) else {
+                    valid = false;
+                    continue;
+                };
+                next_index = field_index.saturating_add(1);
+                let Some(target) = self.resolve_designator_target(
+                    target_ty,
+                    &path.items,
+                    base_offset,
+                    init_context.diagnostics,
+                ) else {
+                    valid = false;
+                    continue;
+                };
+                let target_key = resolved_designator_target_key(target);
+                if !seen_designated.insert(target_key) {
                     init_context.diagnostics.error(
                         "semantic",
-                        Some(*designator_span),
-                        "struct initializer does not accept array index designators",
+                        Some(initializer_entry_span(entry)),
+                        format!("duplicate initializer for designator {}", render_designator_path(path)),
                         None,
                     );
                     valid = false;
                     continue;
                 }
-                None => {
-                    if next_index >= fields.len() {
-                        init_context.diagnostics.error(
-                            "semantic",
-                            Some(span),
-                            "too many initializer elements for struct",
-                            None,
-                        );
-                        valid = false;
-                        continue;
-                    }
-                    let index = next_index;
-                    next_index += 1;
-                    index
-                }
-            };
+                valid &= self.apply_resolved_designator_target(
+                    target,
+                    &entry.initializer,
+                    init_context,
+                );
+                continue;
+            }
 
+            if next_index >= fields.len() {
+                init_context.diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    "too many initializer elements for struct",
+                    None,
+                );
+                valid = false;
+                continue;
+            }
+            let field_index = next_index;
+            next_index += 1;
             let field = &fields[field_index];
-            if !seen.insert(field_index) {
+            if !seen_positional.insert(field_index) {
                 init_context.diagnostics.error(
                     "semantic",
                     Some(initializer_entry_span(entry)),
@@ -2773,34 +2881,24 @@ impl<'a> SemanticAnalyzer<'a> {
         }
 
         let entry = &items[0];
-        let Some(field) = (match &entry.designator {
-            Some(Designator::Field(field_name, designator_span)) => fields
-                .iter()
-                .find(|field| field.name == *field_name)
-                .cloned()
-                .or_else(|| {
-                    init_context.diagnostics.error(
-                        "semantic",
-                        Some(*designator_span),
-                        format!("unknown designated union field `.{field_name}`"),
-                        None,
-                    );
-                    None
-                }),
-            Some(Designator::Index(_, designator_span)) => {
-                init_context.diagnostics.error(
-                    "semantic",
-                    Some(*designator_span),
-                    "union initializer does not accept array index designators",
-                    None,
-                );
-                None
-            }
-            None => fields.first().cloned(),
-        }) else {
-            return false;
-        };
+        if let Some(path) = &entry.designator {
+            let Some(_) = self.first_union_designator(&fields, path, init_context.diagnostics) else {
+                return false;
+            };
+            let Some(target) = self.resolve_designator_target(
+                target_ty,
+                &path.items,
+                base_offset,
+                init_context.diagnostics,
+            ) else {
+                return false;
+            };
+            return self.apply_resolved_designator_target(target, &entry.initializer, init_context);
+        }
 
+        let Some(field) = fields.first().cloned() else {
+            return true;
+        };
         if let Some(bit_width) = field.bit_width {
             self.apply_bitfield_initializer(
                 field.ty,
@@ -2849,6 +2947,259 @@ impl<'a> SemanticAnalyzer<'a> {
             init_context.assignments,
             init_context.diagnostics,
         )
+    }
+
+    /// Applies one fully resolved designated initializer target.
+    fn apply_resolved_designator_target(
+        &mut self,
+        target: ResolvedDesignatorTarget,
+        initializer: &Initializer,
+        init_context: &mut AggregateInitContext<'_>,
+    ) -> bool {
+        match target {
+            ResolvedDesignatorTarget::Object { ty, offset } => {
+                self.apply_initializer_to_object(ty, initializer, offset, init_context)
+            }
+            ResolvedDesignatorTarget::BitField {
+                storage_ty,
+                location,
+            } => self.apply_bitfield_initializer(
+                storage_ty,
+                location.bit_offset,
+                location.bit_width,
+                initializer,
+                location.offset,
+                init_context,
+            ),
+        }
+    }
+
+    /// Resolves one chained designator path to a final aggregate subobject or bitfield slot.
+    fn resolve_designator_target(
+        &mut self,
+        target_ty: Type,
+        path: &[Designator],
+        base_offset: usize,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<ResolvedDesignatorTarget> {
+        let Some((head, tail)) = path.split_first() else {
+            return Some(ResolvedDesignatorTarget::Object {
+                ty: target_ty,
+                offset: base_offset,
+            });
+        };
+
+        match head {
+            Designator::Index(expr, span) => {
+                if !target_ty.is_array() {
+                    diagnostics.error(
+                        "semantic",
+                        Some(*span),
+                        format!("initializer path cannot index non-array type `{}`", target_ty),
+                        None,
+                    );
+                    return None;
+                }
+                let len = target_ty.top_array_len().unwrap_or(0);
+                let index =
+                    self.evaluate_array_designator_index(expr, len, *span, diagnostics)?;
+                let element_ty = target_ty.element_type();
+                self.resolve_designator_target(
+                    element_ty,
+                    tail,
+                    base_offset + index * element_ty.byte_width(),
+                    diagnostics,
+                )
+            }
+            Designator::Field(field_name, span) => {
+                let Some(field) = self.lookup_aggregate_designator_field(
+                    target_ty,
+                    field_name,
+                    *span,
+                    diagnostics,
+                ) else {
+                    return None;
+                };
+                if let Some(bit_width) = field.bit_width {
+                    if !tail.is_empty() {
+                        diagnostics.error(
+                            "semantic",
+                            Some(*span),
+                            format!("designator path cannot continue through bitfield `.{field_name}`"),
+                            None,
+                        );
+                        return None;
+                    }
+                    return Some(ResolvedDesignatorTarget::BitField {
+                        storage_ty: field.ty,
+                        location: BitfieldLocation {
+                            offset: base_offset + field.offset,
+                            bit_offset: field.bit_offset,
+                            bit_width,
+                        },
+                    });
+                }
+                self.resolve_designator_target(
+                    field.ty,
+                    tail,
+                    base_offset + field.offset,
+                    diagnostics,
+                )
+            }
+        }
+    }
+
+    /// Looks up one aggregate field used by a designated initializer path.
+    fn lookup_aggregate_designator_field(
+        &mut self,
+        target_ty: Type,
+        field_name: &str,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<super::ast::StructField> {
+        if target_ty.is_struct() {
+            let Some(struct_id) = target_ty.struct_id else {
+                return None;
+            };
+            let Some(def) = self.struct_defs.get(struct_id) else {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    "unknown struct layout during initializer analysis",
+                    None,
+                );
+                return None;
+            };
+            return def
+                .fields
+                .iter()
+                .find(|field| field.name == field_name)
+                .cloned()
+                .or_else(|| {
+                    diagnostics.error(
+                        "semantic",
+                        Some(span),
+                        format!("unknown designated field `.{field_name}`"),
+                        None,
+                    );
+                    None
+                });
+        }
+        if target_ty.is_union() {
+            let Some(union_id) = target_ty.union_id else {
+                return None;
+            };
+            let Some(def) = self.union_defs.get(union_id) else {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    "unknown union layout during initializer analysis",
+                    None,
+                );
+                return None;
+            };
+            return def
+                .fields
+                .iter()
+                .find(|field| field.name == field_name)
+                .cloned()
+                .or_else(|| {
+                    diagnostics.error(
+                        "semantic",
+                        Some(span),
+                        format!("unknown designated union field `.{field_name}`"),
+                        None,
+                    );
+                    None
+                });
+        }
+
+        diagnostics.error(
+            "semantic",
+            Some(span),
+            format!("initializer path cannot select field `.{field_name}` from non-aggregate type `{}`", target_ty),
+            None,
+        );
+        None
+    }
+
+    /// Returns the top-level array designator component required by one array initializer entry.
+    fn first_array_designator(
+        &self,
+        path: &super::ast::DesignatorPath,
+    ) -> Option<(Expr, Span)> {
+        match path.items.first() {
+            Some(Designator::Index(expr, span)) => Some((expr.clone(), *span)),
+            _ => None,
+        }
+    }
+
+    /// Returns the top-level struct designator component required by one struct initializer entry.
+    fn first_struct_designator(
+        &self,
+        fields: &[super::ast::StructField],
+        path: &super::ast::DesignatorPath,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<(usize, Span)> {
+        match path.items.first() {
+            Some(Designator::Field(field_name, span)) => fields
+                .iter()
+                .position(|field| field.name == *field_name)
+                .map(|index| (index, *span))
+                .or_else(|| {
+                    diagnostics.error(
+                        "semantic",
+                        Some(*span),
+                        format!("unknown designated field `.{field_name}`"),
+                        None,
+                    );
+                    None
+                }),
+            Some(Designator::Index(_, span)) => {
+                diagnostics.error(
+                    "semantic",
+                    Some(*span),
+                    "struct initializer does not accept array index designators",
+                    None,
+                );
+                None
+            }
+            None => None,
+        }
+    }
+
+    /// Returns the top-level union designator component required by one union initializer entry.
+    fn first_union_designator(
+        &self,
+        fields: &[super::ast::StructField],
+        path: &super::ast::DesignatorPath,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<(usize, Span)> {
+        match path.items.first() {
+            Some(Designator::Field(field_name, span)) => fields
+                .iter()
+                .position(|field| field.name == *field_name)
+                .map(|index| (index, *span))
+                .or_else(|| {
+                    diagnostics.error(
+                        "semantic",
+                        Some(*span),
+                        format!("unknown designated union field `.{field_name}`"),
+                        None,
+                    );
+                    None
+                }),
+            Some(Designator::Index(_, span)) => {
+                diagnostics.error(
+                    "semantic",
+                    Some(*span),
+                    "union initializer does not accept array index designators",
+                    None,
+                );
+                None
+            }
+            None => None,
+        }
     }
 
     /// Resolves and checks one array designator index against a concrete element count.
@@ -2921,23 +3272,23 @@ impl<'a> SemanticAnalyzer<'a> {
 
         for entry in items {
             let index = match &entry.designator {
-                Some(Designator::Index(expr, designator_span)) => {
+                Some(path) => {
+                    let Some((expr, designator_span)) = self.first_array_designator(path) else {
+                        diagnostics.error(
+                            "semantic",
+                            Some(path.span),
+                            "array initializer requires an array index designator",
+                            None,
+                        );
+                        continue;
+                    };
                     let Some(index) =
-                        self.evaluate_array_designator_index(expr, usize::MAX, *designator_span, diagnostics)
+                        self.evaluate_array_designator_index(&expr, usize::MAX, designator_span, diagnostics)
                     else {
                         continue;
                     };
                     next_index = index.saturating_add(1);
                     index
-                }
-                Some(Designator::Field(field, designator_span)) => {
-                    diagnostics.error(
-                        "semantic",
-                        Some(*designator_span),
-                        format!("array initializer does not accept field designator `.{field}`"),
-                        None,
-                    );
-                    continue;
                 }
                 None => {
                     let index = next_index;
@@ -3027,7 +3378,7 @@ impl<'a> SemanticAnalyzer<'a> {
         span: Span,
         diagnostics: &mut DiagnosticBag,
     ) -> Option<Vec<AggregateAssignment>> {
-        let len = target_ty.array_len?;
+        let len = target_ty.top_array_len()?;
         let element_ty = target_ty.element_type();
         if !matches!(element_ty.scalar, ScalarType::I8 | ScalarType::U8)
             || element_ty.is_pointer()
@@ -3743,11 +4094,17 @@ impl<'a> SemanticAnalyzer<'a> {
                 value_category: ValueCategory::RValue,
             };
         }
+        let scale = TypedExpr {
+            kind: TypedExprKind::IntLiteral(element_ty.byte_width() as i64),
+            ty: Type::new(ScalarType::U16),
+            span,
+            value_category: ValueCategory::RValue,
+        };
         TypedExpr {
             kind: TypedExprKind::Binary {
-                op: BinaryOp::Add,
-                lhs: Box::new(expr.clone()),
-                rhs: Box::new(expr),
+                op: BinaryOp::Multiply,
+                lhs: Box::new(expr),
+                rhs: Box::new(scale),
             },
             ty: Type::new(ScalarType::U16),
             span,
@@ -4030,6 +4387,15 @@ impl<'a> SemanticAnalyzer<'a> {
         diagnostics: &mut DiagnosticBag,
     ) {
         self.validate_const_placement(ty, span, &format!("parameter `{name}`"), diagnostics);
+        if ty.is_array() && ty.array_rank > 1 {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("parameter `{name}` uses unsupported multidimensional array type `{ty}`"),
+                Some("pass a pointer explicitly or keep multidimensional arrays in local/global storage".to_string()),
+            );
+            return;
+        }
         if ty.is_void() || !ty.is_supported_value_type() {
             diagnostics.error(
                 "semantic",
@@ -4078,13 +4444,22 @@ impl<'a> SemanticAnalyzer<'a> {
                 );
                 return;
             }
+            if ty.array_rank > 1 {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    format!("program-memory object `{name}` uses unsupported multidimensional ROM array type `{ty}`"),
+                    Some("phase 16 still limits `__rom` objects to one-dimensional arrays".to_string()),
+                );
+                return;
+            }
             let element_ty = ty.element_type();
             if !matches!(
                 element_ty.scalar,
                 ScalarType::I8 | ScalarType::U8 | ScalarType::I16 | ScalarType::U16
             )
                 || element_ty.pointer_depth != 0
-                || element_ty.array_len.is_some()
+                || element_ty.is_array()
                 || element_ty.struct_id.is_some()
             {
                 diagnostics.error(
@@ -4108,22 +4483,13 @@ impl<'a> SemanticAnalyzer<'a> {
             }
             return;
         }
-        if ty.is_array() && ty.element_type().is_array() {
-            diagnostics.error(
-                "semantic",
-                Some(span),
-                format!("{context} `{name}` uses unsupported multidimensional array type `{ty}`"),
-                Some("phase 15 still supports one-dimensional arrays only".to_string()),
-            );
-            return;
-        }
         if ty.is_void() || !ty.is_supported_object_type() {
             diagnostics.error(
                 "semantic",
                 Some(span),
                 format!("{context} `{name}` uses unsupported type `{ty}`"),
                 Some(
-                    "phase 15 supports scalar objects, one-dimensional arrays, and packed struct/union aggregates"
+                    "phase 16 supports scalar objects, fixed arrays, and packed struct/union aggregates"
                         .to_string(),
                 ),
             );
@@ -4195,7 +4561,7 @@ impl<'a> SemanticAnalyzer<'a> {
 
         let field_ty = field.ty;
         let element_ty = if field_ty.is_array() {
-            Some(field_ty.element_type())
+            Some(field_ty.innermost_element_type())
         } else {
             None
         };
@@ -4267,19 +4633,6 @@ impl<'a> SemanticAnalyzer<'a> {
                     field.name
                 ),
                 Some(format!("spell an explicit array length for {aggregate_kind} fields")),
-            );
-            return;
-        }
-
-        if field_ty.is_array() && element_ty.is_some_and(Type::is_array) {
-            diagnostics.error(
-                "semantic",
-                Some(field.span),
-                format!(
-                    "{aggregate_kind} `{aggregate_name}` field `{}` uses unsupported multidimensional array type `{}`",
-                    field.name, field_ty
-                ),
-                Some("phase 15 still supports one-dimensional arrays only".to_string()),
             );
             return;
         }
@@ -5033,9 +5386,42 @@ fn initializer_entry_span(entry: &InitializerEntry) -> Span {
 }
 
 /// Returns the source span covering one parsed designator.
-fn designator_span(designator: &Designator) -> Span {
-    match designator {
-        Designator::Field(_, span) | Designator::Index(_, span) => *span,
+fn designator_span(designator: &super::ast::DesignatorPath) -> Span {
+    designator.span
+}
+
+/// Formats one chained designator path for diagnostics.
+fn render_designator_path(path: &super::ast::DesignatorPath) -> String {
+    let mut rendered = String::new();
+    for item in &path.items {
+        match item {
+            Designator::Field(name, _) => {
+                rendered.push('.');
+                rendered.push_str(name);
+            }
+            Designator::Index(expr, _) => {
+                rendered.push('[');
+                rendered.push_str(&format!("{expr:?}"));
+                rendered.push(']');
+            }
+        }
+    }
+    rendered
+}
+
+/// Builds one stable duplicate-detection key from a resolved designated target.
+fn resolved_designator_target_key(target: ResolvedDesignatorTarget) -> String {
+    match target {
+        ResolvedDesignatorTarget::Object { ty, offset } => {
+            format!("obj:{offset}:{}:{ty}", ty.byte_width())
+        }
+        ResolvedDesignatorTarget::BitField {
+            storage_ty,
+            location,
+        } => format!(
+            "bit:{}:{}:{}:{}",
+            location.offset, location.bit_offset, location.bit_width, storage_ty
+        ),
     }
 }
 

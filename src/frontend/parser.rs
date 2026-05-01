@@ -4,8 +4,9 @@ use crate::common::source::{PreprocessedSource, Span};
 use crate::diagnostics::DiagnosticBag;
 
 use super::ast::{
-    BinaryOp, Designator, EnumConstant, Expr, ExprKind, FunctionDecl, Initializer,
-    InitializerEntry, Item, Stmt, StructDef, StructField, TranslationUnit, UnaryOp, UnionDef,
+    BinaryOp, Designator, DesignatorPath, EnumConstant, Expr, ExprKind, FunctionDecl,
+    Initializer, InitializerEntry, Item, Stmt, StructDef, StructField, TranslationUnit, UnaryOp,
+    UnionDef,
     VarDecl,
 };
 use super::lexer::{Keyword, Symbol, Token, TokenKind};
@@ -448,27 +449,7 @@ impl<'a> Parser<'a> {
         }
 
         loop {
-            let designator = if self.match_symbol(Symbol::Dot) {
-                let start_span = self.previous_span();
-                let (field, end_span) = self.expect_identifier();
-                self.expect_symbol(Symbol::Assign);
-                Some(Designator::Field(
-                    field,
-                    Span::new(start_span.start, end_span.end),
-                ))
-            } else if self.match_symbol(Symbol::LBracket) {
-                let designator_start = self.previous_span().start;
-                let index = self.parse_expression();
-                self.expect_symbol(Symbol::RBracket);
-                let designator_end = self.previous_span().end;
-                self.expect_symbol(Symbol::Assign);
-                Some(Designator::Index(
-                    index,
-                    Span::new(designator_start, designator_end),
-                ))
-            } else {
-                None
-            };
+            let designator = self.parse_designator_path();
 
             items.push(InitializerEntry {
                 designator,
@@ -487,6 +468,51 @@ impl<'a> Parser<'a> {
         }
 
         Initializer::List(items, Span::new(start, self.previous_span().end))
+    }
+
+    /// Parses one optional chained designated-initializer prefix.
+    fn parse_designator_path(&mut self) -> Option<DesignatorPath> {
+        let mut items = Vec::new();
+        let mut start = None;
+        let mut end = None;
+
+        loop {
+            if self.match_symbol(Symbol::Dot) {
+                let start_span = self.previous_span();
+                let (field, end_span) = self.expect_identifier();
+                start.get_or_insert(start_span.start);
+                end = Some(end_span.end);
+                items.push(Designator::Field(
+                    field,
+                    Span::new(start_span.start, end_span.end),
+                ));
+                continue;
+            }
+            if self.match_symbol(Symbol::LBracket) {
+                let designator_start = self.previous_span().start;
+                let index = self.parse_expression();
+                self.expect_symbol(Symbol::RBracket);
+                let designator_end = self.previous_span().end;
+                start.get_or_insert(designator_start);
+                end = Some(designator_end);
+                items.push(Designator::Index(
+                    index,
+                    Span::new(designator_start, designator_end),
+                ));
+                continue;
+            }
+            break;
+        }
+
+        if items.is_empty() {
+            return None;
+        }
+
+        self.expect_symbol(Symbol::Assign);
+        Some(DesignatorPath {
+            items,
+            span: Span::new(start.unwrap_or(self.current_span().start), end.unwrap_or(self.current_span().end)),
+        })
     }
 
     /// Parses right-associative assignment expressions.
@@ -1322,7 +1348,7 @@ impl<'a> Parser<'a> {
                 8
             }
         };
-        if ty.pointer_depth != 0 || ty.array_len.is_some() || ty.struct_id.is_some() || ty.union_id.is_some() {
+        if ty.is_pointer() || ty.is_array() || ty.struct_id.is_some() || ty.union_id.is_some() {
             self.diagnostics.error(
                 "parser",
                 Some(width_span),
@@ -1772,25 +1798,32 @@ impl<'a> Parser<'a> {
         qualifiers
     }
 
-    /// Parses the supported one-dimensional array suffix for one declarator.
+    /// Parses fixed array suffixes for one declarator.
     fn parse_type_suffixes(&mut self, mut ty: Type) -> Type {
-        if self.match_symbol(Symbol::LBracket) {
+        while self.match_symbol(Symbol::LBracket) {
             let len = if self.check_symbol(Symbol::RBracket) {
                 0
             } else {
                 self.parse_array_len()
             };
             self.expect_symbol(Symbol::RBracket);
-            ty = ty.array_of(len);
-            while self.match_symbol(Symbol::LBracket) {
+
+            if ty.is_incomplete_array() {
                 self.diagnostics.error(
                     "parser",
                     Some(self.previous_span()),
-                    "multidimensional arrays are not supported in phase 8",
-                    Some("use one-dimensional arrays only for now".to_string()),
+                    "multidimensional arrays may not contain incomplete dimensions in phase 16",
+                    Some("spell every inner array bound explicitly".to_string()),
                 );
-                let _ = self.parse_array_len();
-                self.expect_symbol(Symbol::RBracket);
+            }
+            ty = ty.array_of(len);
+            if ty.array_rank as usize > crate::frontend::types::MAX_ARRAY_DIMS {
+                self.diagnostics.error(
+                    "parser",
+                    Some(self.previous_span()),
+                    "array rank exceeds the supported phase 16 limit",
+                    Some("reduce the number of nested array dimensions".to_string()),
+                );
             }
         }
         ty
@@ -2281,6 +2314,46 @@ struct Flags {
         assert!(diagnostics.has_errors());
         assert!(rendered.contains("width must be positive"));
         assert!(rendered.contains("exceeds its 8-bit storage unit"));
+    }
+
+    #[test]
+    /// Verifies fixed multidimensional arrays and chained indexing parse cleanly.
+    fn parses_phase16_multidimensional_array_and_indexing() {
+        let (ast, diagnostics) = parse_source(
+            "\
+unsigned char matrix[2][3];
+void main(void) {
+    unsigned char i;
+    unsigned char j;
+    PORTB = matrix[i][j];
+}
+",
+        );
+
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert!(ast.contains("global unsigned char[2][3] matrix"));
+        assert!(ast.contains("matrix[i][j]"));
+    }
+
+    #[test]
+    /// Verifies chained field/index designators parse for later aggregate lowering.
+    fn parses_phase16_chained_designators() {
+        let (ast, diagnostics) = parse_source(
+            "\
+struct Font {
+    unsigned char glyph[2][3];
+};
+struct Font font = {
+    .glyph[1][2] = 7
+};
+void main(void) {
+}
+",
+        );
+
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert!(ast.contains("struct Font"));
+        assert!(ast.contains("global struct#0 font"));
     }
 }
 // SPDX-License-Identifier: GPL-3.0-or-later

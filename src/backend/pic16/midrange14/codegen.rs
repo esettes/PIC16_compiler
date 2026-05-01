@@ -2685,7 +2685,7 @@ impl<'a> CodegenContext<'a> {
                 "ROM {} @0x{:04X} ({} element(s), {} byte payload as RETLW table)",
                 format_rom_symbol_name(symbol),
                 placement.start,
-                symbol.ty.array_len.unwrap_or(0),
+                symbol.ty.top_array_len().unwrap_or(0),
                 bytes.len()
             )));
             self.program.push(AsmLine::Label(rom_object_label(symbol.id)));
@@ -3392,7 +3392,7 @@ fn format_rom_symbol_name(symbol: &Symbol) -> String {
     if symbol.storage_class == StorageClass::Static {
         tags.push("static".to_string());
     }
-    if let Some(len) = symbol.ty.array_len {
+    if let Some(len) = symbol.ty.top_array_len() {
         let bytes = symbol.ty.byte_width();
         tags.push(format!("{len} element(s)"));
         tags.push(format!("{bytes} byte(s)"));

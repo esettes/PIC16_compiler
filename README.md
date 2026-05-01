@@ -30,9 +30,18 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 15: named `union` support and basic unsigned bitfields on top of Phase 14 richer program-memory data usability, Phase 13 explicit ROM objects, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 string/static-data cleanup, Phase 9 `switch` control flow, Phase 8 type-system work, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
+Current implementation is **Phase 16: multidimensional arrays and aggregate-polish support on top of Phase 15 named `union` support and basic unsigned bitfields, Phase 14 richer program-memory data usability, Phase 13 explicit ROM objects, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 string/static-data cleanup, Phase 9 `switch` control flow, Phase 8 type-system work, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
 
-Phase 15 scope:
+Phase 16 scope:
+
+- fixed multidimensional RAM arrays with row-major layout
+- repeated indexing like `matrix[i][j]`
+- nested multidimensional initializer lists with zero-fill
+- multidimensional array fields inside structs and unions
+- chained designated initializers over mixed `.field` / `[index]` paths
+- explicit diagnostics for multidimensional ROM arrays, incomplete multidimensional dimensions, and helper-requiring ISR index paths
+
+Phase 15 scope remains:
 
 - named `union` declarations for globals, locals, pointers, and nested struct fields
 - union first-field and designated union initializers with whole-storage zero-fill
@@ -117,6 +126,7 @@ What changed from Phase 3:
 - Phase 13 introduces explicit `__rom` ROM arrays, RETLW-backed ROM tables, `__rom_read8()`, and separate ROM map/listing output
 - Phase 14 adds direct ROM indexing, 16-bit ROM tables, `__rom_read16()`, constant-index inline ROM reads, and constant-only ISR ROM access
 - Phase 15 adds named unions, union initializers/copy, and basic unsigned bitfield layout/read/write lowering
+- Phase 16 adds row-major multidimensional RAM arrays, chained designators, and multidimensional aggregate field access
 - active docs now describe stack-first behavior; old Phase 2/3 docs remain historical
 
 Historical milestone snapshots below describe what each phase introduced at the time. The current supported subset is summarized later under `Supported Subset`, `Current constraints`, and `Current Limits`.
@@ -444,7 +454,7 @@ Supported:
 - static locals
 - file-scope `typedef` aliases for supported object/value types
 - `enum` declarations and enumerator constants
-- named packed `struct` declarations with nested struct, named union, one-dimensional array, and basic unsigned bitfield fields
+- named packed `struct` declarations with nested struct, named union, fixed-size array, and basic unsigned bitfield fields
 - named packed `union` declarations with supported scalar, pointer, array, struct, or union members
 - file-scope `const __rom char[]`, `const __rom unsigned char[]`, `const __rom int[]`, and `const __rom unsigned int[]`
 - `if` / `else`
@@ -456,9 +466,9 @@ Supported:
 - `return`
 - direct calls
 - `char`, `unsigned char`, `int`, `unsigned int`, `void`
-- fixed-size one-dimensional arrays of supported scalar types and complete named struct/union types
+- fixed-size arrays of supported scalar types and complete named struct/union types
 - omitted array size when inferred from a brace initializer list or string literal
-- complete named struct objects with scalar, one-dimensional array, nested struct, named union, bitfield, or supported pointer fields
+- complete named struct objects with scalar, fixed-size array, nested struct, named union, bitfield, or supported pointer fields
 - complete named union objects with supported scalar, pointer, array, struct, or union fields
 - `const` scalar, one-dimensional array, and complete named struct/union objects
 - nested data-space pointers to supported scalar, pointer, or complete named struct/union types in PIC16 RAM
@@ -466,6 +476,7 @@ Supported:
 - `*ptr`
 - `a[i]`
 - `p[i]`
+- repeated array indexing like `matrix[i][j]`
 - `.` and `->`
 - basic unsigned bitfield member access and assignment
 - unary `!`, `~`, unary `-`
@@ -476,6 +487,7 @@ Supported:
 - `__rom_read8(table, index)` for program-memory byte arrays
 - `__rom_read16(table, index)` for program-memory 16-bit arrays
 - positional and designated array/struct/union initializer lists with zero-fill
+- chained designated initializer paths such as `.a.x`, `[1][2]`, and `.field[1][2]`
 - nested aggregate initializer lists
 - string literal initialization for char/unsigned-char array fields and char/unsigned-char array fields inside structs
 - RAM-backed string literal initialization of `char *` and `const char *`
@@ -497,7 +509,8 @@ Partially supported / constrained:
 - unions use packed max-field-size layout with every field at byte offset `0`
 - struct/union copy lowers byte-by-byte through ordinary indirect memory operations
 - bitfields are limited to `unsigned char` and `unsigned int`, pack LSB-first within one storage unit, and reject address-taking
-- designated initializers support only single-step `.field` and `[index]` forms; chained designators are still deferred
+- multidimensional arrays use row-major layout and support fixed explicit RAM dimensions only
+- designated initializers support chained `.field` / `[index]` paths over complete array/struct/union subobjects
 - global aggregate initializer elements must be constant expressions
 - explicit casts are limited to scalar conversions, data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
 - string literals become RAM-backed static data objects when used in pointer-initializer contexts; duplicate pooling is not attempted
@@ -507,18 +520,19 @@ Partially supported / constrained:
 - nested pointer qualifier conversions are intentionally conservative: exact nested qualifiers are required beyond one-level `T *` to `const T *`
 - pointer subtraction assumes the compared pointers refer into the same object, matching ordinary C same-object expectations
 - pointer subtraction supports only element sizes of 1 or 2 bytes in this phase
+- multidimensional arrays do not decay to data pointers in this phase; use direct indexing instead of passing them as pointer values
+- multidimensional array parameter types remain rejected rather than introducing an incorrect pointer-to-array ABI model
 - local aggregate initializers and whole-aggregate copies remain rejected inside interrupt handlers
 - ROM objects are limited to file-scope 8-bit/16-bit integer arrays whose byte payload fits one 255-byte RETLW table page
+- multidimensional ROM arrays remain deferred; `__rom` currently stays one-dimensional only
 - switch lowering uses linear compare chains; no jump tables are emitted in this phase
 - case/default labels must stay in the switch body flow or nested blocks; labels under unrelated control statements like `if`, `while`, or `for` are rejected in phase 9
 
 Unsupported:
 
 - source-level function pointers
-- multidimensional arrays
 - anonymous nested struct/union/enum fields without declarators
 - signed bitfields
-- chained designators such as `.outer.inner = 1`
 - pointers to incomplete struct/union types
 - program-memory / code-space pointers
 - `float`
@@ -540,6 +554,9 @@ Current constraints:
 - implicit nested-pointer qualifier changes beyond `T *` to `const T *` are rejected conservatively
 - pointer subtraction is limited to compatible pointer types whose element size is 1 or 2 bytes
 - ROM reads use direct indexing plus `__rom_read8()` / `__rom_read16()` only; general ROM address values and ROM pointers are still unsupported
+- multidimensional arrays are RAM-only in this phase; multidimensional `__rom` arrays are rejected explicitly
+- multidimensional arrays do not decay to pointers; direct indexing like `matrix[i][j]` is the supported access path
+- multidimensional array parameter types remain unsupported
 - unions are named only; anonymous union fields remain deferred
 - bitfields support only unsigned base types, pack LSB-first within one storage unit, and reject `&field`
 - ROM unions and ROM bitfield objects are still unsupported
@@ -830,4 +847,4 @@ picc --list-targets
 
 ## Current Limits
 
-Phase 15 adds named unions, union initialization/copy, and basic unsigned bitfield lowering. Current hard limits remain: no general ROM pointer model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional arrays, no chained designators, no incomplete-struct/union pointers, no function pointers, no `float`, and no recursion.
+Phase 16 adds row-major multidimensional RAM arrays and chained designators. Current hard limits remain: no general ROM pointer model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no function pointers, no `float`, and no recursion.
