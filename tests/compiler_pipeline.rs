@@ -3324,7 +3324,7 @@ void main(void) {
     let map = read_artifact(&output, "map");
     let listing = read_artifact(&output, "lst");
     let hex = read_hex_bytes(&output);
-    let rom_addr = map_symbol_address(&map, "table [rom, const]").expect("rom symbol");
+    let rom_addr = map_symbol_address(&map, "table [rom, const").expect("rom symbol");
 
     assert_hex_is_programmable(&output);
     assert!(map.contains("ROM Symbols"));
@@ -3359,7 +3359,7 @@ void main(void) {
     let map = read_artifact(&output, "map");
     let listing = read_artifact(&output, "lst");
     assert_hex_is_programmable(&output);
-    assert!(map.contains("msg [rom, const]"));
+    assert!(map.contains("msg [rom, const"));
     assert!(listing.contains("retlw 0x4F"));
     assert!(listing.contains("retlw 0x4B"));
     assert!(listing.contains("retlw 0x00"));
@@ -3402,21 +3402,137 @@ void main(void) {
 }
 
 #[test]
-/// Verifies direct ROM indexing stays rejected in favor of the explicit builtin.
-fn reports_phase13_direct_rom_indexing() {
-    let error = compile_error(
+/// Verifies direct ROM byte indexing lowers through the same RETLW-table mechanism as the builtin.
+fn compiles_phase14_direct_rom_byte_index() {
+    let output = compile_source(
         "pic16f628a",
-        "phase13-rom-indexing.c",
+        "phase14-rom-index.c",
         "\
 #include <pic16/pic16f628a.h>
-const __rom unsigned char table[] = {1, 2, 3};
+const __rom unsigned char table[] = {1, 2, 3, 4};
 void main(void) {
-    PORTB = table[0];
+    unsigned char i;
+    TRISB = 0x00;
+    i = 3;
+    PORTB = table[i];
 }
 ",
     );
 
-    assert!(error.contains("direct indexing of program-memory arrays"));
+    let asm = read_artifact(&output, "asm");
+    let map = read_artifact(&output, "map");
+    let listing = read_artifact(&output, "lst");
+    assert_hex_is_programmable(&output);
+    assert!(asm.contains("call __romobj"));
+    assert!(asm.contains("program-memory ROM tables (Phase 14)"));
+    assert!(map.contains("table [rom, const"));
+    assert!(listing.contains("__romobj"));
+}
+
+#[test]
+/// Verifies constant-index ROM reads optimize to inline literals instead of dynamic RETLW dispatch.
+fn compiles_phase14_constant_rom_index_optimizes_inline() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase14-rom-const-index.c",
+        "\
+#include <pic16/pic16f628a.h>
+const __rom unsigned char table[] = {1, 2, 3, 4};
+void main(void) {
+    TRISB = 0x00;
+    PORTB = table[2];
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    assert_hex_is_programmable(&output);
+    assert_eq!(count_occurrences(&asm, "call __romobj"), 0);
+    assert!(asm.contains("movlw 0x03"));
+}
+
+#[test]
+/// Verifies direct ROM string indexing works and the trailing null remains visible in the RETLW table.
+fn compiles_phase14_rom_string_direct_index() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase14-rom-string-index.c",
+        "\
+#include <pic16/pic16f877a.h>
+const __rom char msg[] = \"OK\";
+void main(void) {
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    PORTB = msg[1];
+}
+",
+    );
+
+    let listing = read_artifact(&output, "lst");
+    assert_hex_is_programmable(&output);
+    assert!(listing.contains("retlw 0x4F"));
+    assert!(listing.contains("retlw 0x4B"));
+    assert!(listing.contains("retlw 0x00"));
+}
+
+#[test]
+/// Verifies unsigned 16-bit ROM tables read correctly and stay little-endian in the RETLW payload.
+fn compiles_phase14_rom_table16_unsigned() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase14-rom-table16.c",
+        "\
+#include <pic16/pic16f877a.h>
+const __rom unsigned int table16[] = {100, 200, 300};
+unsigned int read_value(unsigned char index) {
+    return table16[index];
+}
+void main(void) {
+    unsigned int value;
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    value = read_value(2);
+    PORTB = (unsigned char)value;
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    let map = read_artifact(&output, "map");
+    let listing = read_artifact(&output, "lst");
+    assert_hex_is_programmable(&output);
+    assert!(asm.contains("call __romobj"));
+    assert!(map.contains("table16 [rom, const"));
+    assert!(listing.contains("retlw 0x64"));
+    assert!(listing.contains("retlw 0xC8"));
+    assert!(listing.contains("retlw 0x2C"));
+    assert!(listing.contains("retlw 0x01"));
+}
+
+#[test]
+/// Verifies signed 16-bit ROM tables pack negative values as little-endian two's complement bytes.
+fn compiles_phase14_rom_table16_signed() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase14-rom-table16-signed.c",
+        "\
+#include <pic16/pic16f877a.h>
+const __rom int signed_table16[] = {-1, 0, 1};
+void main(void) {
+    unsigned int value;
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    value = signed_table16[2];
+    PORTB = (unsigned char)value;
+}
+",
+    );
+
+    let listing = read_artifact(&output, "lst");
+    assert_hex_is_programmable(&output);
+    assert!(listing.contains("retlw 0xFF"));
+    assert!(listing.contains("retlw 0x00"));
+    assert!(listing.contains("retlw 0x01"));
 }
 
 #[test]
@@ -3439,16 +3555,91 @@ void main(void) {
 }
 
 #[test]
-/// Verifies ROM reads remain forbidden inside interrupt handlers in this phase.
-fn reports_phase13_rom_read_in_isr() {
+/// Verifies writes through direct ROM indexing are rejected explicitly.
+fn reports_phase14_rom_write_rejected() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase14-rom-write.c",
+        "\
+#include <pic16/pic16f628a.h>
+const __rom unsigned char table[] = {1, 2, 3};
+void main(void) {
+    table[0] = 7;
+}
+",
+    );
+
+    assert!(error.contains("writing to a program-memory array element"));
+}
+
+#[test]
+/// Verifies taking the address of one ROM element stays rejected until a ROM-pointer model exists.
+fn reports_phase14_rom_element_address_rejected() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase14-rom-address.c",
+        "\
+#include <pic16/pic16f628a.h>
+const __rom unsigned char table[] = {1, 2, 3};
+unsigned char *ptr;
+void main(void) {
+    ptr = &table[0];
+}
+",
+    );
+
+    assert!(error.contains("taking the address of a program-memory array element"));
+}
+
+#[test]
+/// Verifies `__rom_read8` rejects RAM objects as its first argument.
+fn reports_phase14_invalid_rom_read8_object_type() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase14-rom-read8-ram.c",
+        "\
+#include <pic16/pic16f628a.h>
+unsigned char table[] = {1, 2, 3};
+void main(void) {
+    PORTB = __rom_read8(table, 1);
+}
+",
+    );
+
+    assert!(error.contains("first `__rom_read8` argument must be a `const __rom` array object"));
+}
+
+#[test]
+/// Verifies `__rom_read16` rejects byte-array ROM objects with the wrong element width.
+fn reports_phase14_invalid_rom_read16_object_type() {
     let error = compile_error(
         "pic16f877a",
-        "phase13-rom-isr.c",
+        "phase14-rom-read16-width.c",
+        "\
+#include <pic16/pic16f877a.h>
+const __rom unsigned char table[] = {1, 2, 3, 4};
+void main(void) {
+    unsigned int value;
+    value = __rom_read16(table, 1);
+}
+",
+    );
+
+    assert!(error.contains("`__rom_read16` only supports ROM arrays of `int` or `unsigned int`"));
+}
+
+#[test]
+/// Verifies dynamic ROM reads remain forbidden inside interrupt handlers in this phase.
+fn reports_phase14_dynamic_rom_read_in_isr() {
+    let error = compile_error(
+        "pic16f877a",
+        "phase14-rom-isr.c",
         "\
 #include <pic16/pic16f877a.h>
 const __rom unsigned char table[] = {1, 2, 3};
+unsigned char i;
 void __interrupt isr(void) {
-    PORTB = __rom_read8(table, 1);
+    PORTB = table[i];
 }
 void main(void) {
     ADCON1 = 0x06;
@@ -3457,7 +3648,31 @@ void main(void) {
 ",
     );
 
-    assert!(error.contains("ROM reads are not supported inside interrupt handlers"));
+    assert!(error.contains("cannot perform dynamic ROM reads in phase 14"));
+}
+
+#[test]
+/// Verifies constant-index ROM reads stay allowed inside ISRs because they lower inline.
+fn compiles_phase14_constant_rom_read_in_isr() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase14-rom-isr-const.c",
+        "\
+#include <pic16/pic16f877a.h>
+const __rom unsigned char table[] = {1, 2, 3};
+void __interrupt isr(void) {
+    PORTB = table[1];
+}
+void main(void) {
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    assert_hex_is_programmable(&output);
+    assert_eq!(count_occurrences(&asm, "call __romobj"), 0);
 }
 
 #[test]
@@ -3467,6 +3682,24 @@ fn phase13_examples_compile_via_picc() {
         ("pic16f628a", "examples/pic16f628a/rom_table.c"),
         ("pic16f877a", "examples/pic16f877a/rom_string.c"),
         ("pic16f877a", "examples/pic16f877a/rom_lookup.c"),
+    ];
+
+    for (target, example) in examples {
+        let output = compile_example_via_picc_cli(target, example);
+        assert_hex_is_programmable(&output);
+        assert!(output.with_extension("map").exists());
+        assert!(output.with_extension("lst").exists());
+    }
+}
+
+#[test]
+/// Verifies checked-in Phase 14 examples compile cleanly through the `picc` CLI.
+fn phase14_examples_compile_via_picc() {
+    let examples = [
+        ("pic16f628a", "examples/pic16f628a/rom_index.c"),
+        ("pic16f877a", "examples/pic16f877a/rom_table16.c"),
+        ("pic16f877a", "examples/pic16f877a/rom_string_index.c"),
+        ("pic16f877a", "examples/pic16f877a/rom_lookup_direct.c"),
     ];
 
     for (target, example) in examples {

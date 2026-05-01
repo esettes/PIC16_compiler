@@ -11,7 +11,7 @@ use super::ast::{
     BinaryOp, Designator, Expr, ExprKind, FunctionDecl, Initializer, InitializerEntry, Item,
     Stmt, StructDef, TranslationUnit, UnaryOp, VarDecl,
 };
-use super::types::{CastKind, Qualifiers, ScalarType, StorageClass, StructId, Type};
+use super::types::{AddressSpace, CastKind, Qualifiers, ScalarType, StorageClass, StructId, Type};
 
 pub type SymbolId = usize;
 
@@ -160,6 +160,10 @@ pub enum TypedExprKind {
         size: usize,
     },
     RomRead8 {
+        symbol: SymbolId,
+        index: Box<TypedExpr>,
+    },
+    RomRead16 {
         symbol: SymbolId,
         index: Box<TypedExpr>,
     },
@@ -947,8 +951,8 @@ impl<'a> SemanticAnalyzer<'a> {
                 diagnostics.error(
                     "semantic",
                     Some(expr.span),
-                    "program-memory arrays do not decay to data-space pointers in phase 13",
-                    Some("read ROM arrays with `__rom_read8(table, index)`".to_string()),
+                    "program-memory arrays do not decay to data-space pointers in phase 14",
+                    Some("read ROM arrays with `table[index]`, `__rom_read8()`, or `__rom_read16()`".to_string()),
                 );
                 return Some(typed);
             }
@@ -1079,6 +1083,15 @@ impl<'a> SemanticAnalyzer<'a> {
         diagnostics: &mut DiagnosticBag,
     ) -> Option<TypedExpr> {
         let value = self.analyze_expr_with_decay(expr, diagnostics, false)?;
+        if matches!(value.kind, TypedExprKind::RomRead8 { .. } | TypedExprKind::RomRead16 { .. }) {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "taking the address of a program-memory array element is not supported in phase 14",
+                Some("ROM pointers are still unsupported; read the element value directly instead".to_string()),
+            );
+            return None;
+        }
         if value.value_category != ValueCategory::LValue {
             diagnostics.error(
                 "semantic",
@@ -1101,8 +1114,8 @@ impl<'a> SemanticAnalyzer<'a> {
             diagnostics.error(
                 "semantic",
                 Some(span),
-                "taking the address of a program-memory object is not supported in phase 13",
-                Some("read ROM data through `__rom_read8()`; ROM pointers are not modeled yet".to_string()),
+                "taking the address of a program-memory object is not supported in phase 14",
+                Some("read ROM data through direct indexing or `__rom_read8()` / `__rom_read16()`; ROM pointers are not modeled yet".to_string()),
             );
             return None;
         }
@@ -1630,17 +1643,27 @@ impl<'a> SemanticAnalyzer<'a> {
         span: Span,
         diagnostics: &mut DiagnosticBag,
     ) -> Option<TypedExpr> {
-        let base = self.analyze_expr(base, diagnostics)?;
+        let base = self.analyze_expr_with_decay(base, diagnostics, false)?;
         let index = self.analyze_expr(index, diagnostics)?;
-        if base.ty.is_array() && base.ty.is_rom() {
-            diagnostics.error(
-                "semantic",
-                Some(span),
-                "direct indexing of program-memory arrays is not supported in phase 13",
-                Some("use `__rom_read8(table, index)` for ROM byte arrays".to_string()),
-            );
-            return None;
+        if base.ty.is_array() {
+            if base.ty.is_rom() {
+                return self.analyze_rom_index_expr(base, index, span, diagnostics);
+            }
+            let base_span = base.span;
+            let base = self.decay_array_expr(base, base_span);
+            return self.analyze_data_index_expr(base, index, span, diagnostics);
         }
+        self.analyze_data_index_expr(base, index, span, diagnostics)
+    }
+
+    /// Lowers one data-space indexing expression into pointer arithmetic followed by dereference.
+    fn analyze_data_index_expr(
+        &mut self,
+        base: TypedExpr,
+        index: TypedExpr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
         if !base.ty.is_pointer() {
             diagnostics.error(
                 "semantic",
@@ -1690,6 +1713,82 @@ impl<'a> SemanticAnalyzer<'a> {
         })
     }
 
+    /// Lowers one direct ROM array read into a dedicated typed ROM-read expression.
+    fn analyze_rom_index_expr(
+        &mut self,
+        base: TypedExpr,
+        index: TypedExpr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        let TypedExprKind::Symbol(symbol) = base.kind else {
+            diagnostics.error(
+                "semantic",
+                Some(base.span),
+                "direct ROM indexing requires a named file-scope ROM array object",
+                Some("index the declared ROM table name directly".to_string()),
+            );
+            return None;
+        };
+        if self.symbols[symbol].kind != SymbolKind::Global {
+            diagnostics.error(
+                "semantic",
+                Some(base.span),
+                "direct ROM indexing only accepts file-scope ROM objects in phase 14",
+                None,
+            );
+            return None;
+        }
+        if !index.ty.is_integer() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "array and pointer indices must be integers",
+                None,
+            );
+            return None;
+        }
+
+        let element_ty = base.ty.element_type();
+        let result_ty = Type::new(element_ty.scalar)
+            .with_qualifiers(Qualifiers::default())
+            .with_address_space(AddressSpace::Data);
+        let index = self.coerce_expr(index, Type::new(ScalarType::U16), diagnostics, "ROM index", true);
+
+        match element_ty.scalar {
+            ScalarType::I8 | ScalarType::U8 => Some(TypedExpr {
+                kind: TypedExprKind::RomRead8 {
+                    symbol,
+                    index: Box::new(index),
+                },
+                ty: result_ty,
+                span,
+                value_category: ValueCategory::RValue,
+            }),
+            ScalarType::I16 | ScalarType::U16 => Some(TypedExpr {
+                kind: TypedExprKind::RomRead16 {
+                    symbol,
+                    index: Box::new(index),
+                },
+                ty: result_ty,
+                span,
+                value_category: ValueCategory::RValue,
+            }),
+            ScalarType::Void => {
+                diagnostics.error(
+                    "semantic",
+                    Some(base.span),
+                    format!(
+                        "direct ROM indexing supports only `char`, `unsigned char`, `int`, or `unsigned int`, got `{}`",
+                        base.ty
+                    ),
+                    None,
+                );
+                None
+            }
+        }
+    }
+
     /// Analyzes one assignment and preserves the target place for later lowering.
     fn analyze_assign_expr(
         &mut self,
@@ -1699,6 +1798,15 @@ impl<'a> SemanticAnalyzer<'a> {
         diagnostics: &mut DiagnosticBag,
     ) -> Option<TypedExpr> {
         let target = self.analyze_expr_with_decay(target, diagnostics, false)?;
+        if matches!(target.kind, TypedExprKind::RomRead8 { .. } | TypedExprKind::RomRead16 { .. }) {
+            diagnostics.error(
+                "semantic",
+                Some(target.span),
+                "writing to a program-memory array element is not allowed in phase 14",
+                Some("ROM data is read-only; copy into RAM first if you need writable storage".to_string()),
+            );
+            return None;
+        }
         if target.ty.object_is_const() {
             diagnostics.error(
                 "semantic",
@@ -1775,6 +1883,9 @@ impl<'a> SemanticAnalyzer<'a> {
         if callee == "__rom_read8" {
             return self.analyze_rom_read8_expr(args, span, diagnostics);
         }
+        if callee == "__rom_read16" {
+            return self.analyze_rom_read16_expr(args, span, diagnostics);
+        }
 
         let Some(function) = self.globals_by_name.get(callee).copied() else {
             diagnostics.error(
@@ -1832,28 +1943,41 @@ impl<'a> SemanticAnalyzer<'a> {
         })
     }
 
-    /// Analyzes the Phase 13 ROM-byte intrinsic over one named `const __rom` byte array object.
+    /// Analyzes the Phase 14 ROM-byte intrinsic over one named `const __rom` byte array object.
     fn analyze_rom_read8_expr(
         &mut self,
         args: &[Expr],
         span: Span,
         diagnostics: &mut DiagnosticBag,
     ) -> Option<TypedExpr> {
+        self.analyze_rom_read_expr(args, span, diagnostics, 1, "__rom_read8")
+    }
+
+    /// Analyzes the Phase 14 ROM-word intrinsic over one named `const __rom` 16-bit array object.
+    fn analyze_rom_read16_expr(
+        &mut self,
+        args: &[Expr],
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        self.analyze_rom_read_expr(args, span, diagnostics, 2, "__rom_read16")
+    }
+
+    /// Analyzes one explicit ROM-read builtin over a named file-scope ROM array object.
+    fn analyze_rom_read_expr(
+        &mut self,
+        args: &[Expr],
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+        element_width: usize,
+        builtin: &str,
+    ) -> Option<TypedExpr> {
         if args.len() != 2 {
             diagnostics.error(
                 "semantic",
                 Some(span),
-                format!("`__rom_read8` expects 2 argument(s), got {}", args.len()),
-                Some("use `__rom_read8(table, index)`".to_string()),
-            );
-            return None;
-        }
-        if self.current_function_is_interrupt() {
-            diagnostics.error(
-                "semantic",
-                Some(span),
-                "ROM reads are not supported inside interrupt handlers in phase 13",
-                Some("read ROM data outside the ISR and pass scalar values into the handler".to_string()),
+                format!("`{builtin}` expects 2 argument(s), got {}", args.len()),
+                Some(format!("use `{builtin}(table, index)`")),
             );
             return None;
         }
@@ -1863,7 +1987,7 @@ impl<'a> SemanticAnalyzer<'a> {
             diagnostics.error(
                 "semantic",
                 Some(object.span),
-                "`__rom_read8` requires a named ROM array object as its first argument",
+                format!("`{builtin}` requires a named ROM array object as its first argument"),
                 Some("pass the declared ROM table name directly".to_string()),
             );
             return None;
@@ -1872,7 +1996,7 @@ impl<'a> SemanticAnalyzer<'a> {
             diagnostics.error(
                 "semantic",
                 Some(object.span),
-                "first `__rom_read8` argument must be a `const __rom` byte array",
+                format!("first `{builtin}` argument must be a `const __rom` array object"),
                 None,
             );
             return None;
@@ -1881,13 +2005,16 @@ impl<'a> SemanticAnalyzer<'a> {
             diagnostics.error(
                 "semantic",
                 Some(object.span),
-                "`__rom_read8` only accepts file-scope ROM objects in phase 13",
+                format!("`{builtin}` only accepts file-scope ROM objects in phase 14"),
                 None,
             );
             return None;
         }
         let element_ty = object.ty.element_type();
-        if !matches!(element_ty.scalar, ScalarType::I8 | ScalarType::U8)
+        if !matches!(
+            (element_width, element_ty.scalar),
+            (1, ScalarType::I8 | ScalarType::U8) | (2, ScalarType::I16 | ScalarType::U16)
+        )
             || element_ty.pointer_depth != 0
             || element_ty.struct_id.is_some()
         {
@@ -1895,8 +2022,13 @@ impl<'a> SemanticAnalyzer<'a> {
                 "semantic",
                 Some(object.span),
                 format!(
-                    "`__rom_read8` only supports ROM arrays of `char` or `unsigned char`, got `{}`",
-                    object.ty
+                    "`{builtin}` only supports ROM arrays of {}, got `{}`",
+                    if element_width == 1 {
+                        "`char` or `unsigned char`"
+                    } else {
+                        "`int` or `unsigned int`"
+                    },
+                    object.ty,
                 ),
                 None,
             );
@@ -1909,7 +2041,7 @@ impl<'a> SemanticAnalyzer<'a> {
             diagnostics.error(
                 "semantic",
                 Some(index.span),
-                "`__rom_read8` index must be an integer expression",
+                format!("`{builtin}` index must be an integer expression"),
                 None,
             );
             return None;
@@ -1922,14 +2054,29 @@ impl<'a> SemanticAnalyzer<'a> {
             true,
         );
 
-        Some(TypedExpr {
-            kind: TypedExprKind::RomRead8 {
-                symbol,
-                index: Box::new(index),
+        let result_ty = Type::new(element_ty.scalar)
+            .with_qualifiers(Qualifiers::default())
+            .with_address_space(AddressSpace::Data);
+        Some(match element_width {
+            1 => TypedExpr {
+                kind: TypedExprKind::RomRead8 {
+                    symbol,
+                    index: Box::new(index),
+                },
+                ty: result_ty,
+                span,
+                value_category: ValueCategory::RValue,
             },
-            ty: Type::new(ScalarType::U8),
-            span,
-            value_category: ValueCategory::RValue,
+            2 => TypedExpr {
+                kind: TypedExprKind::RomRead16 {
+                    symbol,
+                    index: Box::new(index),
+                },
+                ty: result_ty,
+                span,
+                value_category: ValueCategory::RValue,
+            },
+            _ => unreachable!("unsupported ROM builtin width"),
         })
     }
 
@@ -3621,7 +3768,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 diagnostics.error(
                     "semantic",
                     Some(span),
-                    format!("{context} `{name}` cannot use `__rom` storage in phase 13"),
+                    format!("{context} `{name}` cannot use `__rom` storage in phase 14"),
                     Some("keep ROM objects at file scope only".to_string()),
                 );
                 return;
@@ -3640,12 +3787,15 @@ impl<'a> SemanticAnalyzer<'a> {
                     "semantic",
                     Some(span),
                     format!("program-memory object `{name}` uses unsupported type `{ty}`"),
-                    Some("phase 13 supports only ROM byte arrays".to_string()),
+                    Some("phase 14 supports only ROM arrays of 8-bit or 16-bit integers".to_string()),
                 );
                 return;
             }
             let element_ty = ty.element_type();
-            if !matches!(element_ty.scalar, ScalarType::I8 | ScalarType::U8)
+            if !matches!(
+                element_ty.scalar,
+                ScalarType::I8 | ScalarType::U8 | ScalarType::I16 | ScalarType::U16
+            )
                 || element_ty.pointer_depth != 0
                 || element_ty.array_len.is_some()
                 || element_ty.struct_id.is_some()
@@ -3654,15 +3804,19 @@ impl<'a> SemanticAnalyzer<'a> {
                     "semantic",
                     Some(span),
                     format!("program-memory object `{name}` uses unsupported ROM element type `{element_ty}`"),
-                    Some("use `const __rom char[]` or `const __rom unsigned char[]`".to_string()),
+                    Some(
+                        "use `const __rom char[]`, `const __rom unsigned char[]`, `const __rom int[]`, or `const __rom unsigned int[]`"
+                            .to_string(),
+                    ),
                 );
             }
-            if ty.array_len.is_some_and(|len| len > 255) {
+            let rom_bytes = ty.byte_width();
+            if rom_bytes > 255 {
                 diagnostics.error(
                     "semantic",
                     Some(span),
-                    format!("program-memory object `{name}` is too large for phase 13 ROM tables ({ty})"),
-                    Some("keep each ROM byte array at 255 elements or fewer".to_string()),
+                    format!("program-memory object `{name}` is too large for one phase 14 RETLW table page ({rom_bytes} bytes)"),
+                    Some("keep each ROM object at 255 data bytes or fewer".to_string()),
                 );
             }
             return;
@@ -3702,7 +3856,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 "semantic",
                 Some(span),
                 format!("{context} uses unsupported ROM pointer type `{ty}`"),
-                Some("phase 13 supports ROM objects plus `__rom_read8()`, not ROM pointers".to_string()),
+                Some("phase 14 supports direct ROM indexing plus `__rom_read8()` / `__rom_read16()`, not ROM pointers".to_string()),
             );
         }
     }
@@ -3730,7 +3884,7 @@ impl<'a> SemanticAnalyzer<'a> {
                         "semantic",
                         Some(field.span),
                         format!(
-                            "struct `{}` field `{}` cannot use program-memory type `{}` in phase 13",
+                            "struct `{}` field `{}` cannot use program-memory type `{}` in phase 14",
                             def.name, field.name, field_ty
                         ),
                         Some("keep `__rom` objects at file scope only".to_string()),
@@ -4112,7 +4266,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 let _ = self.track_stack_pointer_expr(value, tainted_locals);
                 false
             }
-            TypedExprKind::RomRead8 { index, .. } => {
+            TypedExprKind::RomRead8 { index, .. } | TypedExprKind::RomRead16 { index, .. } => {
                 let _ = self.track_stack_pointer_expr(index, tainted_locals);
                 false
             }
@@ -4293,16 +4447,18 @@ impl<'a> SemanticAnalyzer<'a> {
                 self.walk_interrupt_expr(function, target, diagnostics);
                 self.walk_interrupt_expr(function, value, diagnostics);
             }
-            TypedExprKind::RomRead8 { index, .. } => {
-                diagnostics.error(
-                    "semantic",
-                    Some(expr.span),
-                    format!(
-                        "interrupt handler `{}` cannot read ROM with `__rom_read8` in phase 13",
-                        self.symbols[function].name
-                    ),
-                    Some("read ROM outside the ISR and pass the byte in through normal state".to_string()),
-                );
+            TypedExprKind::RomRead8 { index, .. } | TypedExprKind::RomRead16 { index, .. } => {
+                if !is_constant_expression(index) {
+                    diagnostics.error(
+                        "semantic",
+                        Some(expr.span),
+                        format!(
+                            "interrupt handler `{}` cannot perform dynamic ROM reads in phase 14",
+                            self.symbols[function].name
+                        ),
+                        Some("use a constant ROM index inside the ISR or prefetch ROM data outside interrupt code".to_string()),
+                    );
+                }
                 self.walk_interrupt_expr(function, index, diagnostics);
             }
             TypedExprKind::IntLiteral(_) | TypedExprKind::Symbol(_) => {}
@@ -4501,6 +4657,7 @@ fn is_constant_expression(expr: &TypedExpr) -> bool {
         TypedExprKind::Assign { .. }
         | TypedExprKind::StructAssign { .. }
         | TypedExprKind::RomRead8 { .. }
+        | TypedExprKind::RomRead16 { .. }
         | TypedExprKind::Call { .. }
         | TypedExprKind::ArrayDecay(_)
         | TypedExprKind::AddressOf(_)
@@ -4538,6 +4695,7 @@ fn eval_integer_constant_expr(expr: &TypedExpr) -> Option<i64> {
         TypedExprKind::Assign { .. }
         | TypedExprKind::StructAssign { .. }
         | TypedExprKind::RomRead8 { .. }
+        | TypedExprKind::RomRead16 { .. }
         | TypedExprKind::Call { .. }
         | TypedExprKind::ArrayDecay(_)
         | TypedExprKind::AddressOf(_)
@@ -4700,7 +4858,9 @@ fn collect_expr_calls(expr: &TypedExpr, callees: &mut BTreeSet<SymbolId>) {
             collect_expr_calls(target, callees);
             collect_expr_calls(value, callees);
         }
-        TypedExprKind::RomRead8 { index, .. } => collect_expr_calls(index, callees),
+        TypedExprKind::RomRead8 { index, .. } | TypedExprKind::RomRead16 { index, .. } => {
+            collect_expr_calls(index, callees)
+        }
         TypedExprKind::Call { function, args } => {
             callees.insert(*function);
             for arg in args {

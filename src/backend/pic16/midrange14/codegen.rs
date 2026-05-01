@@ -784,6 +784,9 @@ impl<'a> CodegenContext<'a> {
             IrInstr::RomRead8 { dst, symbol, index } => {
                 self.emit_rom_read8(function, *symbol, *index, *dst, diagnostics);
             }
+            IrInstr::RomRead16 { dst, symbol, index } => {
+                self.emit_rom_read16(function, *symbol, *index, *dst, diagnostics);
+            }
             IrInstr::Call {
                 dst,
                 function: callee,
@@ -888,7 +891,7 @@ impl<'a> CodegenContext<'a> {
         }
     }
 
-    /// Lowers one Phase 13 ROM-byte intrinsic read with a bounds check and RETLW table call.
+    /// Lowers one Phase 14 ROM-byte read using either an inline constant or RETLW-table dispatch.
     fn emit_rom_read8(
         &mut self,
         function: &IrFunction,
@@ -898,17 +901,49 @@ impl<'a> CodegenContext<'a> {
         diagnostics: &mut DiagnosticBag,
     ) {
         let index_ty = self.operand_type(function, index);
-        let len = self.symbol_type(symbol).array_len.unwrap_or(0);
+        let Some(bytes) = self.rom_object_bytes(symbol) else {
+            diagnostics.error(
+                "backend",
+                None,
+                format!(
+                    "ROM object `{}` needs a byte-array initializer in phase 14",
+                    self.symbol_name(symbol)
+                ),
+                None,
+            );
+            self.clear_temp(function.symbol, dst, function.temp_types[dst]);
+            return;
+        };
+        let len = bytes.len();
         if len == 0 || len > 255 {
             diagnostics.error(
                 "backend",
                 None,
                 format!(
-                    "ROM object `{}` has unsupported Phase 13 table length {}",
+                    "ROM object `{}` has unsupported phase 14 byte-table length {}",
                     self.symbol_name(symbol),
                     len
                 ),
                 None,
+            );
+            self.clear_temp(function.symbol, dst, function.temp_types[dst]);
+            return;
+        }
+        if let Some(index_value) = constant_operand_value(index, index_ty).map(|value| normalize_value(value, index_ty) as usize) {
+            let byte = bytes.get(index_value).copied().unwrap_or(0);
+            self.emit_const_to_w(byte);
+            self.store_w_to_temp_byte(function.symbol, dst, 0);
+            return;
+        }
+        if function.is_interrupt {
+            diagnostics.error(
+                "backend",
+                None,
+                format!(
+                    "interrupt handler `{}` reached dynamic ROM-byte lowering in phase 14",
+                    self.symbol_name(function.symbol)
+                ),
+                Some("only constant-index ROM reads are allowed inside ISRs".to_string()),
             );
             self.clear_temp(function.symbol, dst, function.temp_types[dst]);
             return;
@@ -930,10 +965,7 @@ impl<'a> CodegenContext<'a> {
         );
 
         self.program.push(AsmLine::Label(read_label.clone()));
-        self.load_operand_byte_to_w(function.symbol, index, index_ty, 0);
-        let label = rom_object_label(symbol);
-        self.program.push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
-        self.program.push(AsmLine::Instr(AsmInstr::Call(label)));
+        self.emit_dynamic_rom_byte_call(function.symbol, symbol, index, index_ty);
         self.store_w_to_temp_byte(function.symbol, dst, 0);
         self.branch_to_label(&done_label);
 
@@ -941,6 +973,160 @@ impl<'a> CodegenContext<'a> {
         self.emit_const_to_w(0);
         self.store_w_to_temp_byte(function.symbol, dst, 0);
         self.program.push(AsmLine::Label(done_label));
+    }
+
+    /// Lowers one Phase 14 ROM-word read using little-endian byte packing in one RETLW table.
+    fn emit_rom_read16(
+        &mut self,
+        function: &IrFunction,
+        symbol: SymbolId,
+        index: Operand,
+        dst: usize,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        let index_ty = self.operand_type(function, index);
+        let Some(bytes) = self.rom_object_bytes(symbol) else {
+            diagnostics.error(
+                "backend",
+                None,
+                format!(
+                    "ROM object `{}` needs a byte-array initializer in phase 14",
+                    self.symbol_name(symbol)
+                ),
+                None,
+            );
+            self.clear_temp(function.symbol, dst, function.temp_types[dst]);
+            return;
+        };
+        if bytes.len() % 2 != 0 {
+            diagnostics.error(
+                "backend",
+                None,
+                format!(
+                    "ROM object `{}` has an invalid 16-bit byte layout in phase 14",
+                    self.symbol_name(symbol)
+                ),
+                None,
+            );
+            self.clear_temp(function.symbol, dst, function.temp_types[dst]);
+            return;
+        }
+
+        let len = bytes.len() / 2;
+        if len == 0 || bytes.len() > 255 {
+            diagnostics.error(
+                "backend",
+                None,
+                format!(
+                    "ROM object `{}` has unsupported phase 14 word-table length {} ({} bytes)",
+                    self.symbol_name(symbol),
+                    len,
+                    bytes.len()
+                ),
+                Some("keep each 16-bit ROM table within one 255-byte RETLW payload page".to_string()),
+            );
+            self.clear_temp(function.symbol, dst, function.temp_types[dst]);
+            return;
+        }
+        if let Some(index_value) = constant_operand_value(index, index_ty).map(|value| normalize_value(value, index_ty) as usize) {
+            let byte_index = index_value.saturating_mul(2);
+            let lo = bytes.get(byte_index).copied().unwrap_or(0);
+            let hi = bytes.get(byte_index + 1).copied().unwrap_or(0);
+            self.emit_const_to_w(lo);
+            self.store_w_to_temp_byte(function.symbol, dst, 0);
+            self.emit_const_to_w(hi);
+            self.store_w_to_temp_byte(function.symbol, dst, 1);
+            return;
+        }
+        if function.is_interrupt {
+            diagnostics.error(
+                "backend",
+                None,
+                format!(
+                    "interrupt handler `{}` reached dynamic ROM-word lowering in phase 14",
+                    self.symbol_name(function.symbol)
+                ),
+                Some("only constant-index ROM reads are allowed inside ISRs".to_string()),
+            );
+            self.clear_temp(function.symbol, dst, function.temp_types[dst]);
+            return;
+        }
+
+        let read_label = self.unique_label("rom16_read");
+        let miss_label = self.unique_label("rom16_miss");
+        let done_label = self.unique_label("rom16_done");
+        self.emit_unsigned_relation_branch(
+            function.symbol,
+            index,
+            Operand::Constant(len as i64),
+            index_ty,
+            BinaryOp::Less,
+            BranchTargets {
+                then_label: &read_label,
+                else_label: &miss_label,
+            },
+        );
+
+        self.program.push(AsmLine::Label(read_label.clone()));
+        self.load_operand_byte_to_w(function.symbol, index, index_ty, 0);
+        self.store_w_to_addr(self.layout.helpers.scratch0);
+        self.select_bank(self.layout.helpers.scratch0);
+        self.program.push(AsmLine::Instr(AsmInstr::Addwf {
+            f: low7(self.layout.helpers.scratch0),
+            d: Dest::W,
+        }));
+        self.store_w_to_addr(self.layout.helpers.scratch0);
+        self.load_addr_to_w(self.layout.helpers.scratch0);
+        self.emit_dynamic_rom_byte_call_from_w(symbol);
+        self.store_w_to_temp_byte(function.symbol, dst, 0);
+
+        self.load_addr_to_w(self.layout.helpers.scratch0);
+        self.program.push(AsmLine::Instr(AsmInstr::Addlw(1)));
+        self.store_w_to_addr(self.layout.helpers.scratch0);
+        self.load_addr_to_w(self.layout.helpers.scratch0);
+        self.emit_dynamic_rom_byte_call_from_w(symbol);
+        self.store_w_to_temp_byte(function.symbol, dst, 1);
+        self.branch_to_label(&done_label);
+
+        self.program.push(AsmLine::Label(miss_label));
+        self.emit_const_to_w(0);
+        self.store_w_to_temp_byte(function.symbol, dst, 0);
+        self.emit_const_to_w(0);
+        self.store_w_to_temp_byte(function.symbol, dst, 1);
+        self.program.push(AsmLine::Label(done_label));
+    }
+
+    /// Emits one dynamic ROM-byte table call after first loading the byte index into `W`.
+    fn emit_dynamic_rom_byte_call(
+        &mut self,
+        function_symbol: SymbolId,
+        symbol: SymbolId,
+        index: Operand,
+        index_ty: Type,
+    ) {
+        self.load_operand_byte_to_w(function_symbol, index, index_ty, 0);
+        self.emit_dynamic_rom_byte_call_from_w(symbol);
+    }
+
+    /// Emits one ROM RETLW-table call assuming the byte index already lives in `W`.
+    fn emit_dynamic_rom_byte_call_from_w(&mut self, symbol: SymbolId) {
+        let label = rom_object_label(symbol);
+        self.program.push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
+        self.program.push(AsmLine::Instr(AsmInstr::Call(label)));
+    }
+
+    /// Returns the flattened ROM byte payload for one declared program-memory object.
+    fn rom_object_bytes(&self, symbol: SymbolId) -> Option<&[u8]> {
+        self.typed_program
+            .globals
+            .iter()
+            .find(|global| global.symbol == symbol)
+            .and_then(|global| match &global.initializer {
+                Some(TypedGlobalInitializer::Bytes(bytes)) => Some(bytes.as_slice()),
+                Some(TypedGlobalInitializer::Scalar(_))
+                | Some(TypedGlobalInitializer::Address { .. })
+                | None => None,
+            })
     }
 
     /// Places a return operand into the Phase 4 return convention locations.
@@ -2461,7 +2647,7 @@ impl<'a> CodegenContext<'a> {
         }
     }
 
-    /// Emits every Phase 13 ROM object as one callable RETLW table in program memory.
+    /// Emits every Phase 14 ROM object as one callable RETLW table in program memory.
     fn emit_rom_objects(&mut self, diagnostics: &mut DiagnosticBag) {
         let placements = self.allocate_rom_tables(diagnostics);
         if diagnostics.has_errors() || placements.is_empty() {
@@ -2469,7 +2655,7 @@ impl<'a> CodegenContext<'a> {
         }
 
         self.program.push(AsmLine::Comment(
-            "program-memory ROM tables (Phase 13)".to_string(),
+            "program-memory ROM tables (Phase 14)".to_string(),
         ));
         for placement in placements {
             let Some(global) = self
@@ -2487,7 +2673,7 @@ impl<'a> CodegenContext<'a> {
                     "backend",
                     None,
                     format!(
-                        "ROM object `{}` needs a byte-array initializer in phase 13",
+                        "ROM object `{}` needs a constant byte payload initializer in phase 14",
                         symbol.name
                     ),
                     None,
@@ -2496,9 +2682,10 @@ impl<'a> CodegenContext<'a> {
             };
             self.program.push(AsmLine::Org(placement.start));
             self.program.push(AsmLine::Comment(format!(
-                "ROM {} @0x{:04X} ({} bytes as RETLW table)",
+                "ROM {} @0x{:04X} ({} element(s), {} byte payload as RETLW table)",
                 format_rom_symbol_name(symbol),
                 placement.start,
+                symbol.ty.array_len.unwrap_or(0),
                 bytes.len()
             )));
             self.program.push(AsmLine::Label(rom_object_label(symbol.id)));
@@ -2512,7 +2699,7 @@ impl<'a> CodegenContext<'a> {
         }
     }
 
-    /// Allocates top-level ROM tables from high program memory without crossing a 256-word page.
+    /// Allocates top-level ROM tables from high program memory without crossing one 256-word page.
     fn allocate_rom_tables(&self, diagnostics: &mut DiagnosticBag) -> Vec<RomTablePlacement> {
         let rom_globals = self
             .typed_program
@@ -2539,7 +2726,7 @@ impl<'a> CodegenContext<'a> {
                         "backend",
                         None,
                         format!(
-                            "ROM object `{}` needs a byte-array initializer in phase 13",
+                            "ROM object `{}` needs a constant byte payload initializer in phase 14",
                             symbol.name
                         ),
                         None,
@@ -2554,11 +2741,11 @@ impl<'a> CodegenContext<'a> {
                     "backend",
                     None,
                     format!(
-                        "ROM object `{}` is too large for one Phase 13 RETLW page ({} bytes)",
+                        "ROM object `{}` is too large for one phase 14 RETLW page ({} data bytes)",
                         symbol.name,
                         bytes.len()
                     ),
-                    None,
+                    Some("shrink the ROM object so one RETLW table fits within a single 256-word page".to_string()),
                 );
                 continue;
             }
@@ -3201,9 +3388,14 @@ fn format_data_symbol_name(symbol: &Symbol) -> String {
 
 /// Formats one ROM symbol with tags that explain the callable RETLW-table representation.
 fn format_rom_symbol_name(symbol: &Symbol) -> String {
-    let mut tags = vec!["rom", "const"];
+    let mut tags = vec!["rom".to_string(), "const".to_string()];
     if symbol.storage_class == StorageClass::Static {
-        tags.push("static");
+        tags.push("static".to_string());
+    }
+    if let Some(len) = symbol.ty.array_len {
+        let bytes = symbol.ty.byte_width();
+        tags.push(format!("{len} element(s)"));
+        tags.push(format!("{bytes} byte(s)"));
     }
     format!("{} [{}]", symbol.name, tags.join(", "))
 }
@@ -3237,6 +3429,7 @@ fn eval_const_expr(expr: &TypedExpr) -> i64 {
         TypedExprKind::Assign { .. }
         | TypedExprKind::StructAssign { .. }
         | TypedExprKind::RomRead8 { .. }
+        | TypedExprKind::RomRead16 { .. }
         | TypedExprKind::Call { .. }
         | TypedExprKind::ArrayDecay(_)
         | TypedExprKind::AddressOf(_)

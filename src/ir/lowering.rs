@@ -485,6 +485,16 @@ impl FunctionBuilder {
                 });
                 Operand::Temp(dst)
             }
+            TypedExprKind::RomRead16 { symbol, index } => {
+                let index = self.lower_expr(index);
+                let dst = self.new_temp(expr.ty);
+                self.emit(IrInstr::RomRead16 {
+                    dst,
+                    symbol: *symbol,
+                    index,
+                });
+                Operand::Temp(dst)
+            }
             TypedExprKind::Call { function, args } => {
                 let args = args.iter().map(|arg| self.lower_expr(arg)).collect::<Vec<_>>();
                 if expr.ty.is_void() {

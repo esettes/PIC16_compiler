@@ -1892,5 +1892,28 @@ void main(void) {
         assert!(ast.contains("global const __rom unsigned char[] table"));
         assert!(ast.contains("__rom_read8(table, 1)"));
     }
+
+    #[test]
+    /// Verifies direct ROM indexing and 16-bit ROM read builtins parse as ordinary expressions.
+    fn parses_phase14_rom_indexing_and_read16() {
+        let (ast, diagnostics) = parse_source(
+            "\
+const __rom unsigned char table[] = {1, 2, 3};
+const __rom unsigned int table16[] = {100, 200};
+void main(void) {
+    unsigned char i;
+    PORTB = table[i];
+    PORTA = table[2];
+    if (__rom_read16(table16, i) != 0) {
+    }
+}
+",
+        );
+
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert!(ast.contains("table[i]"));
+        assert!(ast.contains("table[2]"));
+        assert!(ast.contains("__rom_read16(table16, i)"));
+    }
 }
 // SPDX-License-Identifier: GPL-3.0-or-later
