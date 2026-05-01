@@ -6,7 +6,7 @@ use super::ast::{
     InitializerEntry, Item, Stmt, StructDef, StructField, TranslationUnit, UnaryOp, VarDecl,
 };
 use super::lexer::{Keyword, Symbol, Token, TokenKind};
-use super::types::{Qualifiers, ScalarType, StorageClass, StructId, Type};
+use super::types::{MAX_POINTER_DEPTH, Qualifiers, ScalarType, StorageClass, StructId, Type};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1301,7 +1301,19 @@ impl<'a> Parser<'a> {
             return ("__unsupported".to_string(), span, ty);
         }
         while self.match_symbol(Symbol::Star) {
-            ty = ty.pointer_to();
+            let qualifiers = self.parse_pointer_qualifiers();
+            if ty.pointer_depth >= MAX_POINTER_DEPTH as u8 {
+                self.diagnostics.error(
+                    "parser",
+                    Some(self.previous_span()),
+                    format!(
+                        "pointer depth greater than {MAX_POINTER_DEPTH} is not supported in phase 12"
+                    ),
+                    Some("reduce the number of nested `*` levels".to_string()),
+                );
+                continue;
+            }
+            ty = ty.pointer_to_with_qualifiers(qualifiers);
         }
         let (name, span) = self.expect_identifier();
         (name, span, self.parse_type_suffixes(ty))
@@ -1397,6 +1409,14 @@ impl<'a> Parser<'a> {
             .is_some_and(|token| matches!(token.kind, TokenKind::Symbol(Symbol::Star)))
         {
             cursor += 1;
+            while self.tokens.get(cursor).is_some_and(|token| {
+                matches!(
+                    token.kind,
+                    TokenKind::Keyword(Keyword::Const) | TokenKind::Keyword(Keyword::Volatile)
+                )
+            }) {
+                cursor += 1;
+            }
         }
 
         self.tokens
@@ -1407,9 +1427,40 @@ impl<'a> Parser<'a> {
     /// Parses the pointer and array suffix pieces of an abstract declarator.
     fn parse_abstract_declarator(&mut self, mut ty: Type) -> Type {
         while self.match_symbol(Symbol::Star) {
-            ty = ty.pointer_to();
+            let qualifiers = self.parse_pointer_qualifiers();
+            if ty.pointer_depth >= MAX_POINTER_DEPTH as u8 {
+                self.diagnostics.error(
+                    "parser",
+                    Some(self.previous_span()),
+                    format!(
+                        "pointer depth greater than {MAX_POINTER_DEPTH} is not supported in phase 12"
+                    ),
+                    Some("reduce the number of nested `*` levels".to_string()),
+                );
+                continue;
+            }
+            ty = ty.pointer_to_with_qualifiers(qualifiers);
         }
         self.parse_type_suffixes(ty)
+    }
+
+    /// Parses qualifiers attached to one `*` in a pointer declarator.
+    fn parse_pointer_qualifiers(&mut self) -> Qualifiers {
+        let mut qualifiers = Qualifiers::default();
+        loop {
+            match self.current().kind {
+                TokenKind::Keyword(Keyword::Const) => {
+                    qualifiers.is_const = true;
+                    self.advance();
+                }
+                TokenKind::Keyword(Keyword::Volatile) => {
+                    qualifiers.is_volatile = true;
+                    self.advance();
+                }
+                _ => break,
+            }
+        }
+        qualifiers
     }
 
     /// Parses the supported one-dimensional array suffix for one declarator.
@@ -1773,5 +1824,43 @@ void main(void) {
 
         assert!(!diagnostics.has_errors(), "{diagnostics}");
         assert!(ast.contains("expr (a = b)"));
+    }
+
+    #[test]
+    /// Verifies pointer-to-pointer declarators parse as ordinary nested data pointers.
+    fn parses_phase12_pointer_to_pointer_declarator() {
+        let (ast, diagnostics) = parse_source(
+            "\
+unsigned char value;
+unsigned char *p;
+unsigned char **pp;
+void main(void) {
+    pp = &p;
+}
+",
+        );
+
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert!(ast.contains("unsigned char** pp"));
+    }
+
+    #[test]
+    /// Verifies const-qualified pointer forms preserve qualifier placement around each `*`.
+    fn parses_phase12_const_qualified_pointer_forms() {
+        let (ast, diagnostics) = parse_source(
+            "\
+unsigned char x;
+const unsigned char *p;
+unsigned char * const p2 = &x;
+const unsigned char * const p3 = &x;
+void main(void) {
+}
+",
+        );
+
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert!(ast.contains("const unsigned char* p"));
+        assert!(ast.contains("unsigned char* const p2"));
+        assert!(ast.contains("const unsigned char* const p3"));
     }
 }

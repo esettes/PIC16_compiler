@@ -28,9 +28,18 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 11: richer aggregates and initializer completeness on top of Phase 10 string/static-data cleanup, Phase 9 `switch` control flow, Phase 8 type-system work, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
+Current implementation is **Phase 12: richer data-space pointer support on top of Phase 11 aggregate completeness, Phase 10 string/static-data cleanup, Phase 9 `switch` control flow, Phase 8 type-system work, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
 
-Phase 11 scope:
+Phase 12 scope:
+
+- pointer-to-pointer types in the current data-space pointer model
+- const-qualified pointer forms: pointer-to-const, const pointer, const pointer-to-const
+- pointer relational comparisons for compatible data-space pointers
+- pointer subtraction for compatible data-space pointers with 1-byte or 2-byte elements
+- RAM-backed string literal objects that may initialize `char *` and `const char *`
+- clearer pointer diagnostics for qualifier discard, invalid comparisons, and invalid subtraction
+
+Phase 11 scope remains:
 
 - arrays inside structs
 - nested struct fields with composed offsets for `.` and `->`
@@ -84,6 +93,7 @@ What changed from Phase 3:
 - Phase 9 adds compare-chain lowering for `switch` / `case` / `default`, fallthrough, and switch-aware `break`
 - Phase 10 adds string literal parsing, RAM-backed const/static initialization cleanup, and clearer startup data artifacts
 - Phase 11 adds nested aggregate layout/init support, designated initializers, and byte-wise whole-struct copy
+- Phase 12 adds nested data pointers, const-qualified pointer forms, pointer compare/subtract, and RAM-backed string-literal pointer initialization
 - active docs now describe stack-first behavior; old Phase 2/3 docs remain historical
 
 ## Phase 4 ABI Summary
@@ -270,7 +280,7 @@ Explicit casts:
 
 - scalar widening/narrowing and signedness casts are supported
 - explicit narrowing suppresses implicit narrowing warnings
-- casts between supported one-level data pointers are supported
+- casts between supported data pointers are supported
 - integer-to-pointer is restricted to integer zero (`(T*)0`)
 - pointer-to-integer is restricted to 16-bit integer targets
 
@@ -316,10 +326,9 @@ Diagnostics:
 - unterminated string literals
 - unsupported string escape sequences
 - string initializers that do not fit including the trailing null byte
-- string literals used outside supported char/unsigned-char array initializer contexts
+- string literals used with incompatible scalar or pointer targets
 - non-constant global/static initializer forms
 - assignment to const objects
-- unsupported const-qualified pointer forms
 
 ## Phase 11 Aggregate Summary
 
@@ -346,6 +355,29 @@ Diagnostics:
 - assignment to const aggregate objects
 - whole-struct assignment inside interrupt handlers
 
+## Phase 12 Pointer Summary
+
+Supported:
+
+- nested data-space pointer types including pointer-to-pointer values, parameters, and returns
+- const-qualified pointer forms: `const T *`, `T * const`, and `const T * const`
+- implicit conversion from `T *` to `const T *`
+- pointer equality/inequality and relational comparisons for compatible data-space pointer types
+- pointer subtraction for compatible data-space pointer types with 1-byte or 2-byte elements
+- RAM-backed string literal objects that may initialize `char *` and `const char *`
+- startup/listing comments that name string-literal symbols and pointer-valued static initializers
+- map output that groups string-literal data symbols explicitly
+
+Diagnostics:
+
+- incompatible pointer assignments
+- qualifier discard through pointers
+- writes through pointer-to-const
+- reassignment of const pointer objects
+- incompatible pointer relational comparisons
+- unsupported pointer subtraction element sizes
+- incompatible string-literal pointer targets
+
 ## Supported Subset
 
 Supported:
@@ -371,9 +403,9 @@ Supported:
 - `char`, `unsigned char`, `int`, `unsigned int`, `void`
 - fixed-size one-dimensional arrays of supported scalar types and complete named struct types
 - omitted array size when inferred from a brace initializer list or string literal
-- complete named struct objects with scalar, one-dimensional array, nested struct, or one-level pointer fields
+- complete named struct objects with scalar, one-dimensional array, nested struct, or supported pointer fields
 - `const` scalar, one-dimensional array, and complete named struct objects
-- one-level data pointers to supported scalar or complete named struct types in PIC16 data memory
+- nested data-space pointers to supported scalar, pointer, or complete named struct types in PIC16 RAM
 - `&obj`
 - `*ptr`
 - `a[i]`
@@ -386,8 +418,9 @@ Supported:
 - positional and designated array/struct initializer lists with zero-fill
 - nested aggregate initializer lists
 - string literal initialization for char/unsigned-char array fields and char/unsigned-char array fields inside structs
+- RAM-backed string literal initialization of `char *` and `const char *`
 - whole-struct assignment between compatible complete struct types
-- explicit casts for supported scalar and one-level data-pointer forms
+- explicit casts for supported scalar and data-pointer forms
 - indirect data access through `FSR/INDF`
 - 3+ argument stack calls
 - stack-backed local arrays
@@ -404,11 +437,13 @@ Partially supported / constrained:
 - struct copy lowers byte-by-byte through ordinary indirect memory operations
 - designated initializers support only single-step `.field` and `[index]` forms; chained designators are still deferred
 - global aggregate initializer elements must be constant expressions
-- explicit casts are limited to scalar conversions, one-level data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
-- string literals are frontend values only in this phase; they are consumed by char/unsigned-char array initializers and do not form standalone pointer-addressable pools
+- explicit casts are limited to scalar conversions, data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
+- string literals become RAM-backed static data objects when used in pointer-initializer contexts; duplicate pooling is not attempted
 - startup code writes initialized global/static bytes and clears zero-init storage; direct ROM-style data sections are not modeled yet
 - const objects are RAM-backed in this phase and rely on semantic immutability rather than a separate program-memory address space
-- const-qualified pointer forms are intentionally rejected because the current pointer model has only one data-space pointer kind
+- nested pointer qualifier conversions are intentionally conservative: exact nested qualifiers are required beyond one-level `T *` to `const T *`
+- pointer subtraction assumes the compared pointers refer into the same object, matching ordinary C same-object expectations
+- pointer subtraction supports only element sizes of 1 or 2 bytes in this phase
 - local aggregate initializers and whole-struct copies remain rejected inside interrupt handlers
 - switch lowering uses linear compare chains; no jump tables are emitted in this phase
 - case/default labels must stay in the switch body flow or nested blocks; labels under unrelated control statements like `if`, `while`, or `for` are rejected in phase 9
@@ -417,14 +452,11 @@ Unsupported:
 
 - `union`
 - source-level function pointers
-- pointer-to-pointer types
 - multidimensional arrays
 - anonymous nested struct/enum fields without declarators
 - chained designators such as `.outer.inner = 1`
 - pointers to incomplete struct types
-- pointer initialization from string literals
-- pointer subtraction between two pointers
-- pointer relational compares other than `==` / `!=`
+- program-memory / code-space pointers
 - `float`
 - recursion
 
@@ -432,13 +464,17 @@ Current constraints:
 
 - recursion is rejected because Phase 4 computes maximum software-stack depth statically and has no runtime overflow checks
 - returning a pointer to stack-local storage is rejected, including direct forms and obvious local alias chains
-- explicit casts stay limited to scalar conversions, one-level data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
+- explicit casts stay limited to scalar conversions, data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
 - aggregate initializers inside interrupt handlers remain rejected
 - whole-struct copy inside interrupt handlers remains rejected
 - global aggregate initializer elements must be constant expressions
-- string literal initializers are accepted only for `char` / `unsigned char` arrays, and explicit array sizes must fit the trailing null byte too
+- string literal array initializers are accepted only for `char` / `unsigned char` arrays, and explicit array sizes must fit the trailing null byte too
+- string literals that initialize pointers become anonymous RAM-backed static objects; map output groups them under string literals
 - globals, file-scope statics, and static locals are initialized by startup code in RAM, not by a separate read-only data segment
 - const data remains in RAM in this phase; writes are rejected semantically
+- nested data-space pointer comparisons are raw address-order comparisons in RAM
+- implicit nested-pointer qualifier changes beyond `T *` to `const T *` are rejected conservatively
+- pointer subtraction is limited to compatible pointer types whose element size is 1 or 2 bytes
 - switch expressions must stay in the supported integer subset; case labels must be constant and representable
 - switch inside ISR is allowed only when the controlling expression and body remain inline-safe under existing Phase 6 helper restrictions
 - reads from global/static/const RAM objects are allowed inside ISR when the resulting expressions stay inline-safe
@@ -447,22 +483,23 @@ Current constraints:
 - ISR code cannot call normal functions or Phase 5 runtime helpers
 - no emulator or hardware execution runs in CI; validation is compile/listing/map/HEX shape based
 
-## Known Limitations (Phase 11 Freeze)
+## Known Limitations (Phase 12 Freeze)
 
 - recursion is unsupported
 - no runtime software-stack overflow detection is implemented
 - ISR restrictions remain conservative: one ISR, no normal calls, no runtime-helper-requiring expressions
 - aggregate support is still intentionally constrained: no multidimensional arrays, no anonymous nested fields, no chained designators, and no incomplete-struct pointers
 - switch lowering stays intentionally simple: compare chains only, no jump tables, and labels nested under other control statements are rejected
-- string literals do not produce standalone pointer-addressable objects; only char/unsigned-char array initialization is supported
+- string literals are RAM-backed static data objects; there is still no program-memory/code-space string model or pooling pass
 - const storage remains RAM-backed; there is still no separate program-memory const model or code-space string pointers
-- const-qualified pointer forms are rejected rather than partially modeled
+- implicit nested-pointer qualifier conversions stay conservative beyond one-level `T *` to `const T *`
 - enums stay fixed to 16-bit `int`; structs stay packed with no padding
 - `union` and `float` are unsupported
 - source-level function pointers are unsupported
 - dynamic division/modulo by zero returns `0` (constant zero divisors are diagnostics)
 - pointers are data-space only; code pointers are unsupported
-- pointer-to-pointer types and multidimensional arrays are unsupported
+- pointer subtraction is intentionally limited to 1-byte and 2-byte element types
+- multidimensional arrays are unsupported
 
 ## Build
 
@@ -633,6 +670,7 @@ picc --list-targets
 - [examples/pic16f628a/array_fill.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/array_fill.c:1)
 - [examples/pic16f628a/array_initializer.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/array_initializer.c:1)
 - [examples/pic16f628a/casts.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/casts.c:1)
+- [examples/pic16f628a/pointer_to_pointer.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/pointer_to_pointer.c:1)
 - [examples/pic16f628a/stack_abi.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/stack_abi.c:1)
 - [examples/pic16f628a/string_array.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/string_array.c:1)
 - [examples/pic16f628a/struct_array_field.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/struct_array_field.c:1)
@@ -643,6 +681,7 @@ picc --list-targets
 - [examples/pic16f877a/blink.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/blink.c:1)
 - [examples/pic16f877a/call_chain.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/call_chain.c:1)
 - [examples/pic16f877a/compare16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/compare16.c:1)
+- [examples/pic16f877a/const_pointers.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/const_pointers.c:1)
 - [examples/pic16f877a/config_table.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/config_table.c:1)
 - [examples/pic16f877a/div16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/div16.c:1)
 - [examples/pic16f877a/designated_init.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/designated_init.c:1)
@@ -653,9 +692,12 @@ picc --list-targets
 - [examples/pic16f877a/mul16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/mul16.c:1)
 - [examples/pic16f877a/nested_struct.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/nested_struct.c:1)
 - [examples/pic16f877a/pointer16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/pointer16.c:1)
+- [examples/pic16f877a/pointer_compare.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/pointer_compare.c:1)
+- [examples/pic16f877a/pointer_subtract.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/pointer_subtract.c:1)
 - [examples/pic16f877a/shift_mix.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/shift_mix.c:1)
 - [examples/pic16f877a/static_table.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/static_table.c:1)
 - [examples/pic16f877a/struct_copy.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/struct_copy.c:1)
+- [examples/pic16f877a/string_pointer.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/string_pointer.c:1)
 - [examples/pic16f877a/switch_enum.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/switch_enum.c:1)
 - [examples/pic16f877a/switch_fallthrough.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/switch_fallthrough.c:1)
 - [examples/pic16f628a/timer_interrupt.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/timer_interrupt.c:1)
@@ -673,15 +715,18 @@ picc --list-targets
 - [docs/backend/phase4-stack-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-model.md:1)
 - [docs/backend/phase10-data-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase10-data-layout.md:1)
 - [docs/backend/phase11-aggregate-copy.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase11-aggregate-copy.md:1)
+- [docs/backend/phase12-string-pointer-data.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase12-string-pointer-data.md:1)
 - [docs/backend/phase9-switch-codegen.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase9-switch-codegen.md:1)
 - [docs/ir/phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
 - [docs/backend/phase5-helper-calling.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase5-helper-calling.md:1)
 - [docs/ir/phase5-arithmetic-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase5-arithmetic-lowering.md:1)
 - [docs/ir/phase10-static-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase10-static-initializers.md:1)
 - [docs/ir/phase11-aggregate-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase11-aggregate-initializers.md:1)
+- [docs/ir/phase12-pointer-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase12-pointer-lowering.md:1)
 - [docs/ir/phase9-switch-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase9-switch-lowering.md:1)
 - [docs/frontend/phase10-string-literals.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase10-string-literals.md:1)
 - [docs/frontend/phase11-aggregates.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase11-aggregates.md:1)
+- [docs/frontend/phase12-pointers.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase12-pointers.md:1)
 - [docs/frontend/phase9-switch.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase9-switch.md:1)
 - [docs/runtime/phase5-arithmetic-helpers.md](/home/settes/cursus/PIC16_compiler/docs/runtime/phase5-arithmetic-helpers.md:1)
 - [docs/migration/phase3-to-phase4-abi.md](/home/settes/cursus/PIC16_compiler/docs/migration/phase3-to-phase4-abi.md:1)
@@ -689,4 +734,4 @@ picc --list-targets
 
 ## Current Limits
 
-Phase 11 adds arrays inside structs, nested struct fields, nested aggregate initializer lists, designated initializers, and byte-wise whole-struct assignment on top of Phase 10 static-data cleanup and Phase 9 switch control flow. Current hard limits remain: no standalone pointer-addressable string literals, no const-qualified pointer forms, no program-memory const model, no jump tables, no case/default labels buried under other control statements, no `union`, no pointer-to-pointer types, no multidimensional arrays, no anonymous nested aggregate fields, no chained designators, no incomplete-struct pointers, no function pointers, no `float`, and no recursion.
+Phase 12 adds nested data-space pointers, const-qualified pointer forms, pointer relational comparisons, pointer subtraction for compatible 1-byte/2-byte element types, and RAM-backed string-literal pointer initialization. Current hard limits remain: no program-memory const model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no `union`, no multidimensional arrays, no anonymous nested aggregate fields, no chained designators, no incomplete-struct pointers, no function pointers, no `float`, and no recursion.

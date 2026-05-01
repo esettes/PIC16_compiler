@@ -29,7 +29,7 @@ Phase 7 optimization passes:
 - dead code elimination
 - temp-slot compaction
 
-Phase 8-11 aggregate lowering notes:
+Phase 8-12 lowering notes:
 
 - local array/struct initializers are flattened before or during IR lowering into per-slot stores
 - global array/struct initializers arrive as byte payloads for backend startup writes
@@ -47,19 +47,24 @@ Phase 9 lowering notes:
 - no jump tables are emitted in this phase because compare chains are simpler to verify on PIC16
 - case/default labels nested under unrelated control statements are rejected before IR generation
 
-Phase 10 lowering notes:
+Phase 10-12 static and pointer lowering notes:
 
-- string literals do not become general IR expressions in this phase
 - string-initialized arrays lower to ordinary byte payloads for globals/statics or ordinary per-slot stores for locals
+- pointer-initialized string literals lower as synthetic static RAM array symbols plus ordinary address values
 - static locals reuse the same startup-initializer path as globals and file-scope statics
 - zero-init and initialized static data remain explicit startup-store behavior instead of a separate ROM data section
+- pointer-to-pointer values remain ordinary 16-bit pointer temps/operands
+- pointer relational comparisons reuse ordinary typed 16-bit compare branches
+- pointer subtraction lowers to ordinary 16-bit subtraction plus optional shift-right scaling for 2-byte elements
 
-Current Phase 11 aggregate limits:
+Current Phase 12 limits:
 
 - no multidimensional arrays
 - no chained designators such as `.outer.inner = 1`
 - no incomplete-struct pointers
 - no whole-struct copy inside interrupt handlers
+- no program-memory / code-space pointer model
+- no pointer subtraction for element sizes larger than 2 bytes
 
 Current detail:
 
@@ -70,6 +75,7 @@ Current detail:
 - [phase9-switch-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase9-switch-lowering.md:1)
 - [phase10-static-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase10-static-initializers.md:1)
 - [phase11-aggregate-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase11-aggregate-initializers.md:1)
+- [phase12-pointer-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase12-pointer-lowering.md:1)
 
 Historical detail:
 

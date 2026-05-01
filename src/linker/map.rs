@@ -38,6 +38,12 @@ pub fn render_map(map: &MapFile) -> String {
     );
     render_grouped(
         &mut output,
+        "  String Literals",
+        &map.data_symbols,
+        |name| name.starts_with("__strlit"),
+    );
+    render_grouped(
+        &mut output,
         "  ABI / Stack",
         &map.data_symbols,
         |name| name.starts_with("__abi.") || name.starts_with("__stack."),

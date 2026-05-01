@@ -255,6 +255,7 @@ impl<'a> StorageAllocator<'a> {
                 continue;
             }
             if symbol.kind == SymbolKind::Global
+                || symbol.kind == SymbolKind::StringLiteral
                 || (symbol.kind == SymbolKind::Local && symbol.storage_class == crate::frontend::types::StorageClass::Static)
             {
                 let Some(base) = allocator.next_span(symbol.ty.byte_width()) else {
@@ -525,6 +526,25 @@ impl<'a> CodegenContext<'a> {
                             self.emit_const_to_w(*byte);
                             self.store_w_to_addr(base + index as u16);
                         }
+                    }
+                    TypedGlobalInitializer::Address { symbol, offset } => {
+                        let Some(SymbolStorage::Absolute(address_base)) =
+                            self.layout.symbol_storage.get(symbol).copied()
+                        else {
+                            diagnostics.error(
+                                "backend",
+                                None,
+                                "static pointer initializer references a non-static address",
+                                None,
+                            );
+                            continue;
+                        };
+                        let address = address_base + *offset as u16;
+                        self.program.push(AsmLine::Comment(format!(
+                            "init {symbol_name} @0x{base:04X} (address of {} + {offset})",
+                            format_data_symbol_name(&self.typed_program.symbols[*symbol])
+                        )));
+                        self.store_const_value(base, Type::new(ScalarType::U16), i64::from(address));
                     }
                 }
             } else {
@@ -2897,10 +2917,11 @@ fn build_map(
 /// Formats one data symbol with simple qualifiers that help map/listing readers.
 fn format_data_symbol_name(symbol: &Symbol) -> String {
     let mut tags = Vec::new();
-    if symbol.ty.qualifiers.is_const {
+    if symbol.ty.object_is_const() {
         tags.push("const");
     }
     match (symbol.kind, symbol.storage_class) {
+        (SymbolKind::StringLiteral, _) => tags.push("string literal"),
         (SymbolKind::Local, StorageClass::Static) => tags.push("static local"),
         (SymbolKind::Global, StorageClass::Static) => tags.push("static"),
         _ => {}

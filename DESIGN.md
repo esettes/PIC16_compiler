@@ -182,8 +182,8 @@ Supported:
 - named packed `struct` declarations with nested struct and one-dimensional array fields
 - fixed-size one-dimensional arrays of supported scalar types and complete named struct types
 - omitted array size when inferred from a brace initializer list or string literal
-- complete named struct objects with scalar, one-dimensional array, nested struct, or one-level pointer fields
-- one-level data pointers to supported scalar or complete named struct types
+- complete named struct objects with scalar, one-dimensional array, nested struct, or supported pointer fields
+- nested data-space pointers to supported scalar, pointer, or complete named struct types
 - `if/else`, `while`, `for`, `do while`, `switch/case/default`, `break`, `continue`, `return`
 - direct calls
 - `&obj`, `*ptr`, `a[i]`, `p[i]`
@@ -196,23 +196,22 @@ Supported:
 - string literal initialization for char/unsigned-char array fields inside structs
 - whole-struct assignment between compatible complete struct types
 - string literals for char/unsigned-char array initialization
-- explicit casts for supported scalar and one-level data-pointer forms
+- RAM-backed string literal initialization of `char *` and `const char *`
+- explicit casts for supported scalar and data-pointer forms
 
 Deferred:
-- richer pointer compatibility
 - chained designators
 - incomplete-struct pointers
 
 Not implemented:
 
 - `union`
-- pointer-to-pointer types
 - source-level function pointers
 - multidimensional arrays
-- pointer initialization from string literals
 - anonymous nested struct/enum fields without declarators
 - floats
 - recursion
+- program-memory / code-space pointer models
 
 ## Invariants
 
@@ -240,12 +239,14 @@ Not implemented:
 - enum constants are global compile-time 16-bit `int` values
 - structs are packed in declaration order and may nest complete struct fields and one-dimensional array fields
 - local aggregate initializers lower to per-slot stores; global and static initializers require constant elements and pre-materialize into byte arrays
-- string literals are parsed as null-terminated byte strings, but phase 10 only consumes them in char/unsigned-char array initializers
+- string literals are parsed as null-terminated byte strings and may lower to synthetic RAM-backed static array objects
 - omitted array size is inferred from supported brace or string initializers before storage layout is fixed
-- const objects are RAM-backed and read-only only at semantic level; const-qualified pointer forms are rejected
+- const objects are RAM-backed and read-only only at semantic level
 - designated initializers support `.field` and `[index]` forms; chained designators remain deferred
 - whole-struct assignment lowers to byte-wise copies and stays rejected inside interrupt handlers
-- explicit casts cover scalar conversions, one-level data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
+- explicit casts cover scalar conversions, data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
+- pointer comparisons use raw 16-bit RAM address ordering for compatible pointer types
+- pointer subtraction lowers through inline 16-bit subtraction and optional divide-by-two scaling for compatible 1-byte/2-byte element types
 - switch expressions must be integer-valued; case labels must be constant and representable in the switch type
 - switch lowering evaluates the controlling expression once, compares through a linear branch chain, allows fallthrough, and routes `break` to the innermost switch end
 - case/default labels nested under other control statements in the same switch are rejected in phase 9
@@ -379,7 +380,7 @@ Phase 10 improves the static-data model without changing the PIC16 backend archi
 
 Rules:
 
-- string literals use the lexer/parser/frontend model only; there is no standalone string pool in this phase
+- string literals use null-terminated byte payloads in RAM-backed static data
 - supported string escapes are `\n`, `\r`, `\t`, `\\`, `\"`, and `\0`
 - `char` and `unsigned char` arrays may initialize from string literals
 - explicit array sizes must fit the entire string including the trailing null byte
@@ -390,8 +391,8 @@ Rules:
 
 Current limitation:
 
-- pointer-valued use of string literals is rejected instead of introducing code-space or pooled string objects
-- const-qualified pointer forms are rejected because the current pointer model has only one data-space pointer kind
+- const data is still RAM-backed rather than modeled in separate program memory
+- duplicate string pooling is not attempted
 
 ## Phase 11 Aggregates
 
@@ -414,3 +415,23 @@ Current limitations:
 - anonymous nested fields without declarators remain unsupported
 - pointers to incomplete struct types remain unsupported
 - local aggregate initializers and whole-struct copies remain rejected inside interrupt handlers
+
+## Phase 12 Pointers
+
+Phase 12 extends the existing RAM-only pointer model without introducing code-space pointers or a new ABI.
+
+Rules:
+
+- pointer-to-pointer types are supported as ordinary 16-bit data-space pointer values
+- const-qualified pointer forms support pointer-to-const, const pointer, and const pointer-to-const
+- implicit `T *` to `const T *` conversion is accepted
+- nested-pointer qualifier conversions remain conservative; deeper qualifier changes require exact match unless the user adds an explicit cast
+- pointer relational comparisons use raw RAM address ordering for compatible data-space pointer types
+- pointer subtraction supports compatible pointer types whose element size is 1 or 2 bytes
+- string literals may initialize `char *` and `const char *` by creating anonymous RAM-backed static objects
+
+Current limitations:
+
+- no program-memory / code-space pointer model
+- pointer subtraction assumes the pointers refer into the same object, matching ordinary C same-object expectations
+- pointer subtraction rejects larger element sizes instead of introducing helper-based division

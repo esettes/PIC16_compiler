@@ -40,6 +40,7 @@ pub struct Symbol {
 pub enum SymbolKind {
     Function,
     Global,
+    StringLiteral,
     Local,
     Param,
     DeviceRegister,
@@ -50,6 +51,7 @@ pub enum SymbolKind {
 pub enum TypedGlobalInitializer {
     Scalar(TypedExpr),
     Bytes(Vec<u8>),
+    Address { symbol: SymbolId, offset: usize },
 }
 
 #[derive(Clone, Debug)]
@@ -192,6 +194,13 @@ struct SwitchContext {
     default_span: Option<Span>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PointerConversionError {
+    Incompatible,
+    QualifierDiscard,
+    NestedQualifierMismatch,
+}
+
 pub struct SemanticAnalyzer<'a> {
     target: &'a TargetDevice,
     symbols: Vec<Symbol>,
@@ -204,6 +213,7 @@ pub struct SemanticAnalyzer<'a> {
     loop_depth: usize,
     switch_stack: Vec<SwitchContext>,
     switch_label_modes: Vec<bool>,
+    string_literal_counter: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -227,6 +237,7 @@ impl<'a> SemanticAnalyzer<'a> {
             loop_depth: 0,
             switch_stack: Vec::new(),
             switch_label_modes: Vec::new(),
+            string_literal_counter: 0,
         };
         analyzer.seed_device_registers();
         analyzer
@@ -882,15 +893,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 span: expr.span,
                 value_category: ValueCategory::RValue,
             },
-            ExprKind::StringLiteral(_) => {
-                diagnostics.error(
-                    "semantic",
-                    Some(expr.span),
-                    "string literals are only supported as char or unsigned char array initializers in phase 10",
-                    Some("initialize a char array with the string literal, or index an existing array".to_string()),
-                );
-                return None;
-            }
+            ExprKind::StringLiteral(bytes) => self.analyze_string_literal_expr(bytes, expr.span),
             ExprKind::Name(name) => self.analyze_name(name, expr.span, diagnostics)?,
             ExprKind::Cast { ty, expr: value } => {
                 self.analyze_explicit_cast_expr(*ty, value, expr.span, diagnostics)?
@@ -975,6 +978,18 @@ impl<'a> SemanticAnalyzer<'a> {
             span,
             value_category: ValueCategory::LValue,
         })
+    }
+
+    /// Materializes one string literal as a synthetic static RAM array object.
+    fn analyze_string_literal_expr(&mut self, bytes: &[u8], span: Span) -> TypedExpr {
+        let symbol = self.intern_string_literal(bytes, span);
+        self.symbols[symbol].is_referenced = true;
+        TypedExpr {
+            kind: TypedExprKind::Symbol(symbol),
+            ty: self.symbols[symbol].ty,
+            span,
+            value_category: ValueCategory::LValue,
+        }
     }
 
     /// Analyzes one unary expression in the supported Phase 3 scalar model.
@@ -1143,16 +1158,6 @@ impl<'a> SemanticAnalyzer<'a> {
         }
 
         if value.ty.is_pointer() && target_ty.is_pointer() {
-            if value.ty.pointer_depth > 1 || target_ty.pointer_depth > 1 {
-                diagnostics.error(
-                    "semantic",
-                    Some(span),
-                    "pointer-to-pointer casts are not supported in phase 8",
-                    Some("use one-level data pointers only".to_string()),
-                );
-                return None;
-            }
-
             return Some(TypedExpr {
                 kind: TypedExprKind::Cast {
                     kind: CastKind::Bitcast,
@@ -1271,9 +1276,11 @@ impl<'a> SemanticAnalyzer<'a> {
             return None;
         };
 
-        let field_ty = field_def.ty.with_qualifiers(Qualifiers {
-            is_const: field_def.ty.qualifiers.is_const || struct_ty.qualifiers.is_const,
-            is_volatile: field_def.ty.qualifiers.is_volatile || struct_ty.qualifiers.is_volatile,
+        let field_object_qualifiers = field_def.ty.object_qualifiers();
+        let struct_object_qualifiers = struct_ty.object_qualifiers();
+        let field_ty = field_def.ty.with_object_qualifiers(Qualifiers {
+            is_const: field_object_qualifiers.is_const || struct_object_qualifiers.is_const,
+            is_volatile: field_object_qualifiers.is_volatile || struct_object_qualifiers.is_volatile,
         });
 
         Some(self.build_member_lvalue(base, through_pointer, field_def.offset, field_ty, span))
@@ -1397,13 +1404,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 let lhs = self.analyze_expr(lhs, diagnostics)?;
                 let rhs = self.analyze_expr(rhs, diagnostics)?;
                 if lhs.ty.is_pointer() || rhs.ty.is_pointer() {
-                    diagnostics.error(
-                        "semantic",
-                        Some(span),
-                        "relational comparisons on pointers are not supported in phase 3",
-                        Some("use `==` or `!=` for supported pointer comparisons".to_string()),
-                    );
-                    return None;
+                    return self.analyze_pointer_relational_expr(op, lhs, rhs, span, diagnostics);
                 }
                 let (lhs, rhs, _) =
                     self.balance_integer_operands(op, lhs, rhs, diagnostics, span);
@@ -1489,7 +1490,49 @@ impl<'a> SemanticAnalyzer<'a> {
         })
     }
 
-    /// Analyzes integer arithmetic plus constrained pointer-plus-or-minus-integer forms.
+    /// Analyzes relational comparisons across compatible data-space pointer values.
+    fn analyze_pointer_relational_expr(
+        &mut self,
+        op: BinaryOp,
+        lhs: TypedExpr,
+        rhs: TypedExpr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        if !lhs.ty.is_pointer() || !rhs.ty.is_pointer() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("`{op:?}` requires matching integer or pointer operands"),
+                None,
+            );
+            return None;
+        }
+        if !self.are_compatible_pointer_compare_types(lhs.ty, rhs.ty) {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!(
+                    "pointer relational comparison requires compatible pointer types, got `{}` and `{}`",
+                    lhs.ty, rhs.ty
+                ),
+                Some("cast explicitly if you really need an address-order comparison across types".to_string()),
+            );
+            return None;
+        }
+        Some(TypedExpr {
+            kind: TypedExprKind::Binary {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            },
+            ty: Type::new(ScalarType::U8),
+            span,
+            value_category: ValueCategory::RValue,
+        })
+    }
+
+    /// Analyzes integer arithmetic plus supported data-pointer arithmetic forms.
     fn analyze_add_sub_expr(
         &mut self,
         op: BinaryOp,
@@ -1512,14 +1555,17 @@ impl<'a> SemanticAnalyzer<'a> {
                     if lhs.ty.is_pointer() && rhs.ty.is_integer() {
                         return Some(self.build_pointer_offset_expr(op, lhs, rhs, span, diagnostics));
                     }
+                    if lhs.ty.is_pointer() && rhs.ty.is_pointer() {
+                        return self.build_pointer_difference_expr(lhs, rhs, span, diagnostics);
+                    }
                 }
                 _ => {}
             }
             diagnostics.error(
                 "semantic",
                 Some(span),
-                "unsupported pointer arithmetic form in phase 3",
-                Some("use pointer +/- integer only".to_string()),
+                "unsupported pointer arithmetic form in phase 12",
+                Some("use pointer +/- integer or compatible pointer subtraction only".to_string()),
             );
             return None;
         }
@@ -1605,11 +1651,11 @@ impl<'a> SemanticAnalyzer<'a> {
         diagnostics: &mut DiagnosticBag,
     ) -> Option<TypedExpr> {
         let target = self.analyze_expr_with_decay(target, diagnostics, false)?;
-        if target.ty.qualifiers.is_const {
+        if target.ty.object_is_const() {
             diagnostics.error(
                 "semantic",
                 Some(target.span),
-                "assignment to const object is not allowed in phase 10",
+                "assignment to const object is not allowed in phase 12",
                 Some("initialize the const object at declaration time instead".to_string()),
             );
             return None;
@@ -1799,6 +1845,21 @@ impl<'a> SemanticAnalyzer<'a> {
     ) -> Option<TypedGlobalInitializer> {
         match self.analyze_initializer_value(target_ty, initializer, "global initializer", diagnostics)? {
             AnalyzedInitializer::Scalar(expr) => {
+                if target_ty.is_pointer() {
+                    if self.is_null_pointer_constant(&expr) {
+                        return Some(TypedGlobalInitializer::Scalar(expr));
+                    }
+                    if let Some((symbol, offset)) = self.extract_constant_address(&expr) {
+                        return Some(TypedGlobalInitializer::Address { symbol, offset });
+                    }
+                    diagnostics.error(
+                        "semantic",
+                        Some(expr.span),
+                        "global pointer initializer must be a null pointer constant or one static data address",
+                        Some("use `0`, `&global`, a decayed static array, or a string literal".to_string()),
+                    );
+                    return None;
+                }
                 if !is_constant_expression(&expr) {
                     diagnostics.error(
                         "semantic",
@@ -2448,6 +2509,106 @@ impl<'a> SemanticAnalyzer<'a> {
         Some(assignments)
     }
 
+    /// Creates one anonymous static RAM object that backs a source-level string literal.
+    fn intern_string_literal(&mut self, bytes: &[u8], span: Span) -> SymbolId {
+        let symbol = self.insert_symbol(Symbol {
+            id: self.symbols.len(),
+            name: format!("__strlit{}", self.string_literal_counter),
+            ty: Type::new(ScalarType::I8).array_of(bytes.len()),
+            storage_class: StorageClass::Static,
+            is_interrupt: false,
+            kind: SymbolKind::StringLiteral,
+            span,
+            fixed_address: None,
+            is_defined: true,
+            is_referenced: false,
+            parameter_types: Vec::new(),
+            enum_const_value: None,
+        });
+        self.string_literal_counter += 1;
+        self.globals.push(TypedGlobal {
+            symbol,
+            initializer: Some(TypedGlobalInitializer::Bytes(bytes.to_vec())),
+        });
+        symbol
+    }
+
+    /// Returns true when an expression denotes a string literal pointer value.
+    fn is_string_literal_pointer_expr(&self, expr: &TypedExpr) -> bool {
+        match &expr.kind {
+            TypedExprKind::ArrayDecay(value) => {
+                matches!(value.kind, TypedExprKind::Symbol(symbol) if self.symbols[symbol].kind == SymbolKind::StringLiteral)
+            }
+            TypedExprKind::Cast { expr, .. } => self.is_string_literal_pointer_expr(expr),
+            _ => false,
+        }
+    }
+
+    /// Extracts one statically-known RAM symbol address plus byte offset from a pointer expression.
+    fn extract_constant_address(&self, expr: &TypedExpr) -> Option<(SymbolId, usize)> {
+        match &expr.kind {
+            TypedExprKind::ArrayDecay(value) | TypedExprKind::AddressOf(value) => {
+                self.extract_constant_lvalue_address(value)
+            }
+            TypedExprKind::Cast { expr, .. } if expr.ty.is_pointer() => {
+                self.extract_constant_address(expr)
+            }
+            TypedExprKind::Binary { op, lhs, rhs } if expr.ty.is_pointer() => {
+                let (symbol, base_offset) = self.extract_constant_address(lhs)?;
+                if !rhs.ty.is_integer() || !is_constant_expression(rhs) {
+                    return None;
+                }
+                let delta = signed_or_unsigned_constant_value(rhs)?;
+                let adjusted = match op {
+                    BinaryOp::Add => (base_offset as i64).checked_add(delta)?,
+                    BinaryOp::Sub => (base_offset as i64).checked_sub(delta)?,
+                    _ => return None,
+                };
+                usize::try_from(adjusted).ok().map(|offset| (symbol, offset))
+            }
+            _ => None,
+        }
+    }
+
+    /// Extracts one statically-known address from a typed lvalue.
+    fn extract_constant_lvalue_address(&self, expr: &TypedExpr) -> Option<(SymbolId, usize)> {
+        match &expr.kind {
+            TypedExprKind::Symbol(symbol) => Some((*symbol, 0)),
+            TypedExprKind::Deref(pointer) => self.extract_constant_address(pointer),
+            _ => None,
+        }
+    }
+
+    /// Returns true when one pointer conversion is implicitly allowed in the current subset.
+    fn classify_pointer_conversion(
+        &self,
+        src_ty: Type,
+        target_ty: Type,
+    ) -> Result<(), PointerConversionError> {
+        let src_ty = src_ty.without_object_qualifiers();
+        let target_ty = target_ty.without_object_qualifiers();
+        if src_ty == target_ty {
+            return Ok(());
+        }
+        if !src_ty.same_pointer_shape(target_ty) {
+            return Err(PointerConversionError::Incompatible);
+        }
+        if src_ty.pointer_depth == 1 && target_ty.pointer_depth == 1 {
+            let src_pointee = src_ty.element_type();
+            let target_pointee = target_ty.element_type();
+            if qualifiers_include(target_pointee.qualifiers, src_pointee.qualifiers) {
+                return Ok(());
+            }
+            return Err(PointerConversionError::QualifierDiscard);
+        }
+        Err(PointerConversionError::NestedQualifierMismatch)
+    }
+
+    /// Returns true when two pointers may be compared or subtracted as raw data addresses.
+    fn are_compatible_pointer_compare_types(&self, lhs_ty: Type, rhs_ty: Type) -> bool {
+        lhs_ty.same_pointer_shape(rhs_ty)
+    }
+
     /// Builds an lvalue that refers to one scalar slot inside a declared aggregate object.
     fn build_symbol_offset_lvalue(
         &self,
@@ -2810,14 +2971,14 @@ impl<'a> SemanticAnalyzer<'a> {
         span: Span,
     ) -> Option<(TypedExpr, TypedExpr)> {
         if lhs.ty.is_pointer() && rhs.ty.is_pointer() {
-            if lhs.ty.same_pointer_target(rhs.ty) {
+            if self.are_compatible_pointer_compare_types(lhs.ty, rhs.ty) {
                 return Some((lhs, rhs));
             }
             diagnostics.error(
                 "semantic",
                 Some(span),
                 format!(
-                    "pointer comparison requires matching pointee types, got `{}` and `{}`",
+                    "pointer comparison requires compatible pointer types, got `{}` and `{}`",
                     lhs.ty, rhs.ty
                 ),
                 None,
@@ -2863,6 +3024,112 @@ impl<'a> SemanticAnalyzer<'a> {
             span,
             value_category: ValueCategory::RValue,
         }
+    }
+
+    /// Builds one compatible pointer subtraction result using 16-bit inline arithmetic only.
+    fn build_pointer_difference_expr(
+        &mut self,
+        lhs: TypedExpr,
+        rhs: TypedExpr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        if !lhs.ty.is_pointer() || !rhs.ty.is_pointer() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "pointer subtraction requires pointer operands",
+                None,
+            );
+            return None;
+        }
+        if !self.are_compatible_pointer_compare_types(lhs.ty, rhs.ty) {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!(
+                    "pointer subtraction requires compatible pointer types, got `{}` and `{}`",
+                    lhs.ty, rhs.ty
+                ),
+                None,
+            );
+            return None;
+        }
+
+        let element_ty = lhs.ty.element_type();
+        let element_size = element_ty.byte_width();
+        if !matches!(element_size, 1 | 2) {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!(
+                    "pointer subtraction for element type `{}` is not supported in phase 12",
+                    element_ty
+                ),
+                Some("use element sizes of 1 or 2 bytes only for pointer subtraction".to_string()),
+            );
+            return None;
+        }
+
+        let raw_ty = Type::new(ScalarType::U16);
+        let signed_ty = Type::new(ScalarType::I16);
+        let lhs = TypedExpr {
+            kind: TypedExprKind::Cast {
+                kind: CastKind::Bitcast,
+                expr: Box::new(lhs),
+            },
+            ty: raw_ty,
+            span,
+            value_category: ValueCategory::RValue,
+        };
+        let rhs = TypedExpr {
+            kind: TypedExprKind::Cast {
+                kind: CastKind::Bitcast,
+                expr: Box::new(rhs),
+            },
+            ty: raw_ty,
+            span,
+            value_category: ValueCategory::RValue,
+        };
+
+        let mut diff = TypedExpr {
+            kind: TypedExprKind::Binary {
+                op: BinaryOp::Sub,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            },
+            ty: raw_ty,
+            span,
+            value_category: ValueCategory::RValue,
+        };
+
+        if element_size == 2 {
+            diff = TypedExpr {
+                kind: TypedExprKind::Binary {
+                    op: BinaryOp::ShiftRight,
+                    lhs: Box::new(diff),
+                    rhs: Box::new(TypedExpr {
+                        kind: TypedExprKind::IntLiteral(1),
+                        ty: raw_ty,
+                        span,
+                        value_category: ValueCategory::RValue,
+                    }),
+                },
+                ty: raw_ty,
+                span,
+                value_category: ValueCategory::RValue,
+            };
+        }
+
+        Some(TypedExpr {
+            kind: TypedExprKind::Cast {
+                kind: CastKind::Bitcast,
+                expr: Box::new(diff),
+            },
+            ty: signed_ty,
+            span,
+            value_category: ValueCategory::RValue,
+        })
     }
 
     /// Scales one integer index by the pointee size used by array and pointer indexing.
@@ -2916,17 +3183,86 @@ impl<'a> SemanticAnalyzer<'a> {
             return expr;
         }
         if target_ty.is_pointer() {
-            if expr.ty.is_pointer() && expr.ty.same_pointer_target(target_ty) {
+            if expr.ty.is_pointer() {
                 let span = expr.span;
-                return TypedExpr {
-                    kind: TypedExprKind::Cast {
-                        kind: CastKind::Bitcast,
-                        expr: Box::new(expr),
-                    },
-                    ty: target_ty,
-                    span,
-                    value_category: ValueCategory::RValue,
-                };
+                match self.classify_pointer_conversion(expr.ty, target_ty) {
+                    Ok(()) => {
+                        return TypedExpr {
+                            kind: TypedExprKind::Cast {
+                                kind: CastKind::Bitcast,
+                                expr: Box::new(expr),
+                            },
+                            ty: target_ty,
+                            span,
+                            value_category: ValueCategory::RValue,
+                        };
+                    }
+                    Err(PointerConversionError::QualifierDiscard) => {
+                        diagnostics.error(
+                            "semantic",
+                            Some(span),
+                            format!(
+                                "discarding qualifiers when converting `{}` to `{}` in {context} is not allowed",
+                                expr.ty, target_ty
+                            ),
+                            None,
+                        );
+                        return TypedExpr {
+                            kind: TypedExprKind::Cast {
+                                kind: CastKind::Bitcast,
+                                expr: Box::new(expr),
+                            },
+                            ty: target_ty,
+                            span,
+                            value_category: ValueCategory::RValue,
+                        };
+                    }
+                    Err(PointerConversionError::NestedQualifierMismatch) => {
+                        diagnostics.error(
+                            "semantic",
+                            Some(span),
+                            format!(
+                                "nested pointer qualifiers must match exactly when converting `{}` to `{}` in {context}",
+                                expr.ty, target_ty
+                            ),
+                            Some("add an explicit cast only if you intend a raw address reinterpretation".to_string()),
+                        );
+                        return TypedExpr {
+                            kind: TypedExprKind::Cast {
+                                kind: CastKind::Bitcast,
+                                expr: Box::new(expr),
+                            },
+                            ty: target_ty,
+                            span,
+                            value_category: ValueCategory::RValue,
+                        };
+                    }
+                    Err(PointerConversionError::Incompatible) => {
+                        if self.is_string_literal_pointer_expr(&expr) {
+                            diagnostics.error(
+                                "semantic",
+                                Some(span),
+                                format!(
+                                    "string literal is incompatible with pointer target type `{}` in {context}",
+                                    target_ty
+                                ),
+                                Some(
+                                    "initialize `char*` or `const char*` data pointers with string literals in phase 12"
+                                        .to_string(),
+                                ),
+                            );
+                            return TypedExpr {
+                                kind: TypedExprKind::Cast {
+                                    kind: CastKind::Bitcast,
+                                    expr: Box::new(expr),
+                                },
+                                ty: target_ty,
+                                span,
+                                value_category: ValueCategory::RValue,
+                            };
+                        }
+                    }
+                }
             }
             if self.is_null_pointer_constant(&expr) {
                 return TypedExpr {
@@ -2940,7 +3276,16 @@ impl<'a> SemanticAnalyzer<'a> {
                 "semantic",
                 Some(expr.span),
                 format!("cannot coerce `{}` to `{}` in {context}", expr.ty, target_ty),
-                Some("only matching pointer types and literal zero are supported".to_string()),
+                Some("use matching data-space pointer types or literal zero".to_string()),
+            );
+            return expr;
+        }
+        if expr.ty.is_pointer() && self.is_string_literal_pointer_expr(&expr) {
+            diagnostics.error(
+                "semantic",
+                Some(expr.span),
+                format!("string literal is incompatible with target type `{}` in {context}", target_ty),
+                Some("initialize a matching data-space pointer or a char array instead".to_string()),
             );
             return expr;
         }
@@ -3008,7 +3353,7 @@ impl<'a> SemanticAnalyzer<'a> {
     fn is_assignable_lvalue(&self, expr: &TypedExpr) -> bool {
         expr.value_category == ValueCategory::LValue
             && !expr.ty.is_array()
-            && !expr.ty.qualifiers.is_const
+            && !expr.ty.object_is_const()
             && matches!(expr.kind, TypedExprKind::Symbol(_) | TypedExprKind::Deref(_))
     }
 
@@ -3139,24 +3484,14 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
-    /// Rejects pointer-shaped const qualifier forms the current type model cannot represent safely.
+    /// Accepts Phase 12 const placement now that pointer/object qualifiers are represented directly.
     fn validate_const_placement(
         &self,
-        ty: Type,
-        span: Span,
-        context: &str,
-        diagnostics: &mut DiagnosticBag,
+        _ty: Type,
+        _span: Span,
+        _context: &str,
+        _diagnostics: &mut DiagnosticBag,
     ) {
-        if ty.qualifiers.is_const
-            && (ty.is_pointer() || (ty.is_array() && ty.element_type().is_pointer()))
-        {
-            diagnostics.error(
-                "semantic",
-                Some(span),
-                format!("{context} uses an unsupported const-qualified pointer form in phase 10"),
-                Some("use const scalar/array/struct objects, or unqualified data pointers".to_string()),
-            );
-        }
     }
 
     /// Checks struct fields for the same unsupported const-pointer forms rejected elsewhere.
@@ -4013,6 +4348,11 @@ fn integer_value_range(ty: Type) -> Option<(i64, i64)> {
         ScalarType::U16 => Some((0, i64::from(u16::MAX))),
         ScalarType::Void => None,
     }
+}
+
+/// Returns true when every qualifier present in `required` is also present in `provided`.
+fn qualifiers_include(provided: Qualifiers, required: Qualifiers) -> bool {
+    (!required.is_const || provided.is_const) && (!required.is_volatile || provided.is_volatile)
 }
 
 /// Returns the shift amount when a normalized integer constant is an exact power of two.

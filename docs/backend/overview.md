@@ -10,7 +10,7 @@ Shared backend responsibilities:
 - IR -> PIC16 asm lowering
 - 14-bit word encoding
 
-Current backend phase: **Phase 11 aggregate-complete lowering on top of Phase 10 static-data cleanup, Phase 9 control-flow coverage, Phase 8 aggregate/type-aware lowering, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**
+Current backend phase: **Phase 12 richer data-space pointer lowering on top of Phase 11 aggregate completeness, Phase 10 static-data cleanup, Phase 9 control-flow coverage, Phase 8 aggregate/type-aware lowering, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**
 
 Backend owns:
 
@@ -28,8 +28,11 @@ Backend owns:
 - startup writes for pre-flattened global/static aggregate initializer bytes
 - startup clears for zero-init globals/statics
 - startup comments and map labels that annotate const/static data
+- startup address writes for pointer-valued globals/statics
+- RAM-backed string-literal data symbols and a dedicated map section for them
 - byte-wise whole-struct copy lowering through existing indirect memory instructions
 - switch compare-chain blocks through the ordinary branch emitter
+- pointer compare/subtract reuse ordinary 16-bit compare/arithmetic lowering
 - no backend jump tables and no backend-side recovery of labels nested under unrelated control statements in phase 9
 - no backend-side recovery for chained designators or incomplete-struct pointers; those stay frontend diagnostics
 - bank/page reuse tracking
@@ -65,6 +68,7 @@ Current backend docs:
 - [phase4-stack-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-model.md:1)
 - [phase5-helper-calling.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase5-helper-calling.md:1)
 - [phase6-interrupts.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase6-interrupts.md:1)
+- [phase12-string-pointer-data.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase12-string-pointer-data.md:1)
 - [../runtime/phase5-arithmetic-helpers.md](/home/settes/cursus/PIC16_compiler/docs/runtime/phase5-arithmetic-helpers.md:1)
 - [../ir/phase5-arithmetic-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase5-arithmetic-lowering.md:1)
 - [../ir/phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)

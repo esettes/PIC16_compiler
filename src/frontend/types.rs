@@ -1,6 +1,7 @@
 use std::fmt::{Display, Formatter};
 
 pub type StructId = usize;
+pub const MAX_POINTER_DEPTH: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScalarType {
@@ -37,6 +38,7 @@ pub struct Type {
     pub scalar: ScalarType,
     pub qualifiers: Qualifiers,
     pub pointer_depth: u8,
+    pub pointer_qualifiers: [Qualifiers; MAX_POINTER_DEPTH],
     pub array_len: Option<usize>,
     pub struct_id: Option<StructId>,
     pub struct_size: usize,
@@ -52,6 +54,10 @@ impl Type {
                 is_volatile: false,
             },
             pointer_depth: 0,
+            pointer_qualifiers: [Qualifiers {
+                is_const: false,
+                is_volatile: false,
+            }; MAX_POINTER_DEPTH],
             array_len: None,
             struct_id: None,
             struct_size: 0,
@@ -67,6 +73,10 @@ impl Type {
                 is_volatile: false,
             },
             pointer_depth: 0,
+            pointer_qualifiers: [Qualifiers {
+                is_const: false,
+                is_volatile: false,
+            }; MAX_POINTER_DEPTH],
             array_len: None,
             struct_id: Some(struct_id),
             struct_size,
@@ -80,17 +90,32 @@ impl Type {
     }
 
     /// Returns one otherwise-identical type with `const`/`volatile` qualifiers stripped.
-    pub const fn unqualified(mut self) -> Self {
+    pub fn unqualified(mut self) -> Self {
         self.qualifiers = Qualifiers {
             is_const: false,
             is_volatile: false,
         };
+        for qualifiers in &mut self.pointer_qualifiers {
+            *qualifiers = Qualifiers::default();
+        }
         self
     }
 
     /// Returns a pointer type that targets the provided base object type.
     pub const fn pointer_to(mut self) -> Self {
-        self.pointer_depth += 1;
+        self = self.pointer_to_with_qualifiers(Qualifiers {
+            is_const: false,
+            is_volatile: false,
+        });
+        self
+    }
+
+    /// Returns a pointer type with qualifiers applied to the new outer pointer object.
+    pub const fn pointer_to_with_qualifiers(mut self, qualifiers: Qualifiers) -> Self {
+        if self.pointer_depth < MAX_POINTER_DEPTH as u8 {
+            self.pointer_qualifiers[self.pointer_depth as usize] = qualifiers;
+            self.pointer_depth += 1;
+        }
         self.array_len = None;
         self
     }
@@ -102,18 +127,20 @@ impl Type {
     }
 
     /// Returns the element or pointee type for arrays and pointers.
-    pub const fn element_type(self) -> Self {
+    pub const fn element_type(mut self) -> Self {
         if self.array_len.is_some() {
-            return Self {
-                array_len: None,
-                ..self
+            self.array_len = None;
+            return self;
+        }
+        if self.pointer_depth > 0 {
+            self.pointer_depth -= 1;
+            self.pointer_qualifiers[self.pointer_depth as usize] = Qualifiers {
+                is_const: false,
+                is_volatile: false,
             };
         }
-        Self {
-            pointer_depth: self.pointer_depth.saturating_sub(1),
-            array_len: None,
-            ..self
-        }
+        self.array_len = None;
+        self
     }
 
     /// Returns the array-decayed pointer form used in value contexts.
@@ -156,13 +183,13 @@ impl Type {
 
     /// Returns true when this type can currently be lowered by the backend.
     pub fn is_supported_codegen_scalar(self) -> bool {
+        if self.is_array() {
+            return false;
+        }
+        if self.is_pointer() {
+            return self.element_type().is_supported_pointer_target();
+        }
         if self.has_struct_base() {
-            return false;
-        }
-        if self.pointer_depth > 1 {
-            return false;
-        }
-        if self.is_array() && self.pointer_depth != 0 {
             return false;
         }
         matches!(
@@ -198,14 +225,13 @@ impl Type {
 
     /// Returns true when the type can be the target of a Phase 3 data pointer.
     pub fn is_supported_pointer_target(self) -> bool {
-        self.pointer_depth == 0 && self.array_len.is_none() && self.has_size()
+        self.array_len.is_none() && self.has_size()
     }
 
     /// Returns true when the type can live in a scalar value position in Phase 3.
     pub fn is_supported_value_type(self) -> bool {
         self.is_integer()
             || (self.is_pointer()
-                && self.pointer_depth == 1
                 && self.element_type().is_supported_pointer_target())
     }
 
@@ -255,6 +281,46 @@ impl Type {
             && !self.is_incomplete_array()
             && (self.struct_id.is_none() || self.struct_size > 0)
     }
+
+    /// Returns the qualifiers that apply to the current object itself.
+    pub fn object_qualifiers(self) -> Qualifiers {
+        if self.is_pointer() {
+            self.pointer_qualifiers[self.pointer_depth as usize - 1]
+        } else {
+            self.qualifiers
+        }
+    }
+
+    /// Returns true when the current object itself is const-qualified.
+    pub fn object_is_const(self) -> bool {
+        self.object_qualifiers().is_const
+    }
+
+    /// Returns a copy with the current object's qualifiers replaced.
+    pub fn with_object_qualifiers(mut self, qualifiers: Qualifiers) -> Self {
+        if self.is_pointer() {
+            let index = self.pointer_depth as usize - 1;
+            self.pointer_qualifiers[index] = qualifiers;
+        } else {
+            self.qualifiers = qualifiers;
+        }
+        self
+    }
+
+    /// Returns one otherwise-identical type with top-level object qualifiers stripped.
+    pub fn without_object_qualifiers(self) -> Self {
+        self.with_object_qualifiers(Qualifiers::default())
+    }
+
+    /// Returns the qualifiers attached to one specific pointer level.
+    pub const fn pointer_level_qualifiers(self, level: usize) -> Qualifiers {
+        self.pointer_qualifiers[level]
+    }
+
+    /// Returns true when both types have the same underlying pointer shape if qualifiers are ignored.
+    pub fn same_pointer_shape(self, other: Self) -> bool {
+        self.is_pointer() && other.is_pointer() && self.unqualified() == other.unqualified()
+    }
 }
 
 impl Default for Type {
@@ -285,8 +351,15 @@ impl Display for Type {
             }
         };
         formatter.write_str(&rendered_struct)?;
-        for _ in 0..self.pointer_depth {
+        for level in 0..self.pointer_depth {
             formatter.write_str("*")?;
+            let qualifiers = self.pointer_qualifiers[level as usize];
+            if qualifiers.is_const {
+                formatter.write_str(" const")?;
+            }
+            if qualifiers.is_volatile {
+                formatter.write_str(" volatile")?;
+            }
         }
         if let Some(len) = self.array_len {
             if len == 0 {
@@ -301,7 +374,7 @@ impl Display for Type {
 
 #[cfg(test)]
 mod tests {
-    use super::{ScalarType, Type};
+    use super::{Qualifiers, ScalarType, Type};
 
     #[test]
     /// Confirms the supported integer widths and masks match Phase 2 expectations.
@@ -334,5 +407,25 @@ mod tests {
         assert!(array.is_array());
         assert_eq!(array.byte_width(), 8);
         assert_eq!(array.decay(), Type::new(ScalarType::I16).pointer_to());
+    }
+
+    #[test]
+    /// Verifies pointer qualifiers distinguish top-level const pointers from pointers-to-const.
+    fn phase_twelve_pointer_qualifiers_track_object_vs_pointee_const() {
+        let ptr_to_const = Type::new(ScalarType::U8)
+            .with_qualifiers(Qualifiers {
+                is_const: true,
+                is_volatile: false,
+            })
+            .pointer_to();
+        let const_ptr = Type::new(ScalarType::U8).pointer_to_with_qualifiers(Qualifiers {
+            is_const: true,
+            is_volatile: false,
+        });
+
+        assert!(!ptr_to_const.object_is_const());
+        assert!(ptr_to_const.element_type().qualifiers.is_const);
+        assert!(const_ptr.object_is_const());
+        assert!(!const_ptr.element_type().qualifiers.is_const);
     }
 }

@@ -1400,40 +1400,34 @@ void main(void) {
 }
 
 #[test]
-/// Verifies pointer-to-pointer declarations are rejected instead of lowering partially.
-fn reports_unsupported_pointer_to_pointer() {
-    let error = execute(CliOptions {
-        command: CliCommand::Compile(CompileCommand {
-            target: "pic16f628a".to_string(),
-            input: {
-                let input = temp_file("ptrptr.c");
-                fs::write(
-                    &input,
-                    "\
+/// Verifies pointer-to-pointer globals, address initializers, and indirect stores compile.
+fn compiles_phase12_pointer_to_pointer_globals_and_argument_store() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase12-ptrptr.c",
+        "\
 #include <pic16/pic16f628a.h>
+unsigned char value;
+unsigned char *p = &value;
+unsigned char **pp = &p;
+void store_value(unsigned char **slot, unsigned char next) {
+    **slot = next;
+}
 void main(void) {
-    unsigned char **pp;
     TRISB = 0x00;
-    PORTB = 0x00;
+    store_value(pp, 3);
+    PORTB = value;
 }
 ",
-                )
-                .expect("fixture");
-                input
-            },
-            output: temp_file("ptrptr.hex"),
-            include_dirs: vec![repo("include")],
-            defines: BTreeMap::new(),
-            optimization: OptimizationLevel::O0,
-            artifacts: OutputArtifacts::default(),
-            verbose: false,
-            opt_report: false,
-            warning_profile: WarningProfile::default(),
-        }),
-    })
-    .expect_err("must fail");
+    );
 
-    assert!(format!("{error}").contains("unsupported type"));
+    let asm = read_artifact(&output, "asm");
+    let map = read_artifact(&output, "map");
+    assert_hex_is_programmable(&output);
+    assert!(asm.contains("address of value + 0"));
+    assert!(asm.contains("address of p + 0"));
+    assert!(map.contains("p"));
+    assert!(map.contains("pp"));
 }
 
 #[test]
@@ -1509,44 +1503,31 @@ void main(void) {
 }
 
 #[test]
-/// Verifies unsupported pointer arithmetic forms are rejected clearly.
-fn reports_unsupported_pointer_pointer_subtraction() {
-    let error = execute(CliOptions {
-        command: CliCommand::Compile(CompileCommand {
-            target: "pic16f628a".to_string(),
-            input: {
-                let input = temp_file("ptrsub.c");
-                fs::write(
-                    &input,
-                    "\
+/// Verifies compatible pointer subtraction compiles and scales 2-byte elements correctly.
+fn compiles_phase12_pointer_subtraction() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase12-ptrsub.c",
+        "\
 #include <pic16/pic16f628a.h>
-unsigned char bytes[2];
+unsigned int words[3];
 void main(void) {
-    unsigned char *lhs = bytes;
-    unsigned char *rhs = bytes;
+    unsigned int *lhs = &words[2];
+    unsigned int *rhs = &words[0];
+    int diff = lhs - rhs;
     TRISB = 0x00;
-    if ((lhs - rhs) != 0) {
-        PORTB = 0x01;
+    if (diff > 1) {
+        PORTB = 0x11;
+    } else {
+        PORTB = 0x22;
     }
 }
 ",
-                )
-                .expect("fixture");
-                input
-            },
-            output: temp_file("ptrsub.hex"),
-            include_dirs: vec![repo("include")],
-            defines: BTreeMap::new(),
-            optimization: OptimizationLevel::O0,
-            artifacts: OutputArtifacts::default(),
-            verbose: false,
-            opt_report: false,
-            warning_profile: WarningProfile::default(),
-        }),
-    })
-    .expect_err("must fail");
+    );
 
-    assert!(format!("{error}").contains("unsupported pointer arithmetic form"));
+    let ir = read_artifact(&output, "ir");
+    assert_hex_is_programmable(&output);
+    assert!(ir.contains("ShiftRight"));
 }
 
 #[test]
@@ -2762,7 +2743,7 @@ void main(void) {
 }
 
 #[test]
-/// Verifies string literals used outside supported array-initializer contexts are rejected.
+/// Verifies string literals still diagnose clearly when assigned to one scalar target.
 fn reports_phase10_string_literal_unsupported_context() {
     let error = compile_error(
         "pic16f628a",
@@ -2775,7 +2756,7 @@ void main(void) {
 ",
     );
 
-    assert!(error.contains("string literals are only supported"));
+    assert!(error.contains("string literal is incompatible"));
 }
 
 #[test]
@@ -2819,21 +2800,27 @@ void main(void) {
 }
 
 #[test]
-/// Verifies unsupported const-qualified pointer forms diagnose clearly.
-fn reports_phase10_unsupported_const_pointer_form() {
-    let error = compile_error(
+/// Verifies the documented Phase 12 const-qualified pointer forms compile cleanly.
+fn compiles_phase12_const_pointer_forms() {
+    let output = compile_source(
         "pic16f628a",
         "phase10-const-pointer.c",
         "\
 #include <pic16/pic16f628a.h>
-const unsigned char *ptr = 0;
+unsigned char x = 1;
+unsigned char y = 2;
+const unsigned char *ptr = &x;
 void main(void) {
     TRISB = 0x00;
+    unsigned char * const p2 = &x;
+    const unsigned char * const p3 = &y;
+    ptr = p2;
+    PORTB = *ptr + *p3;
 }
 ",
     );
 
-    assert!(error.contains("const-qualified pointer form"));
+    assert_hex_is_programmable(&output);
 }
 
 #[test]
@@ -3072,6 +3059,206 @@ fn phase11_examples_compile_via_picc() {
         ("pic16f877a", "examples/pic16f877a/designated_init.c"),
         ("pic16f877a", "examples/pic16f877a/struct_copy.c"),
         ("pic16f877a", "examples/pic16f877a/config_table.c"),
+    ];
+
+    for (target, example) in examples {
+        let output = compile_example_via_picc_cli(target, example);
+        assert_hex_is_programmable(&output);
+        assert!(output.with_extension("map").exists());
+        assert!(output.with_extension("lst").exists());
+    }
+}
+
+#[test]
+/// Verifies string literals may initialize RAM-backed data pointers and emit static symbols.
+fn compiles_phase12_string_literal_pointer_initializer() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase12-string-pointer.c",
+        "\
+#include <pic16/pic16f877a.h>
+char *msg = \"OK\";
+const char *banner = \"HI\";
+void main(void) {
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    PORTB = (unsigned char)msg[0] + (unsigned char)banner[1];
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    let map = read_artifact(&output, "map");
+    assert_hex_is_programmable(&output);
+    assert!(asm.contains("address of __strlit0"));
+    assert!(asm.contains("address of __strlit1"));
+    assert!(count_occurrences(&map, "__strlit") >= 2);
+    assert!(map.contains("string literal"));
+}
+
+#[test]
+/// Verifies pointer relational comparisons compile for compatible data-space pointer types.
+fn compiles_phase12_pointer_relational_compare() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase12-pointer-compare.c",
+        "\
+#include <pic16/pic16f628a.h>
+unsigned char bytes[4];
+void main(void) {
+    unsigned char *lhs = &bytes[1];
+    const unsigned char *rhs = &bytes[2];
+    TRISB = 0x00;
+    if (lhs < rhs) {
+        PORTB = 0x01;
+    } else {
+        PORTB = 0x02;
+    }
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies writes through pointer-to-const are rejected.
+fn reports_phase12_write_through_pointer_to_const() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase12-write-through-const-ptr.c",
+        "\
+#include <pic16/pic16f628a.h>
+unsigned char value = 1;
+void main(void) {
+    const unsigned char *ptr = &value;
+    *ptr = 2;
+}
+",
+    );
+
+    assert!(error.contains("assignment to const object"));
+}
+
+#[test]
+/// Verifies const pointer objects cannot be rebound after initialization.
+fn reports_phase12_const_pointer_reassignment() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase12-const-pointer-reassign.c",
+        "\
+#include <pic16/pic16f628a.h>
+unsigned char a = 1;
+unsigned char b = 2;
+void main(void) {
+    unsigned char * const ptr = &a;
+    ptr = &b;
+}
+",
+    );
+
+    assert!(error.contains("assignment to const object"));
+}
+
+#[test]
+/// Verifies implicit qualifier discard across pointers is rejected.
+fn reports_phase12_qualifier_discard() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase12-qualifier-discard.c",
+        "\
+#include <pic16/pic16f628a.h>
+unsigned char value = 1;
+void main(void) {
+    const unsigned char *src = &value;
+    unsigned char *dst = 0;
+    dst = src;
+}
+",
+    );
+
+    assert!(error.contains("discarding qualifiers"));
+}
+
+#[test]
+/// Verifies incompatible pointer assignments diagnose clearly.
+fn reports_phase12_incompatible_pointer_assignment() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase12-incompatible-pointer.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    unsigned char bytes[2];
+    unsigned char *bp = bytes;
+    unsigned int *wp = 0;
+    wp = bp;
+}
+",
+    );
+
+    assert!(error.contains("cannot coerce `char*`") || error.contains("cannot coerce `unsigned char*`"));
+}
+
+#[test]
+/// Verifies pointer relational comparisons reject incompatible pointer types.
+fn reports_phase12_invalid_pointer_relational_comparison() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase12-invalid-pointer-compare.c",
+        "\
+#include <pic16/pic16f628a.h>
+unsigned char bytes[2];
+unsigned int words[2];
+void main(void) {
+    unsigned char *bp = bytes;
+    unsigned int *wp = words;
+    if (bp < wp) {
+        PORTB = 1;
+    }
+}
+",
+    );
+
+    assert!(error.contains("pointer relational comparison requires compatible pointer types"));
+}
+
+#[test]
+/// Verifies pointer subtraction rejects unsupported element sizes clearly.
+fn reports_phase12_invalid_pointer_subtraction() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase12-invalid-pointer-subtraction.c",
+        "\
+#include <pic16/pic16f628a.h>
+struct Triple {
+    unsigned char a;
+    unsigned char b;
+    unsigned char c;
+};
+void main(void) {
+    struct Triple items[2];
+    struct Triple *lhs = &items[1];
+    struct Triple *rhs = &items[0];
+    if ((lhs - rhs) != 0) {
+        PORTB = 1;
+    }
+}
+",
+    );
+
+    assert!(error.contains("pointer subtraction for element type"));
+}
+
+#[test]
+/// Verifies checked-in Phase 12 examples compile cleanly through the `picc` CLI.
+fn phase12_examples_compile_via_picc() {
+    let examples = [
+        ("pic16f628a", "examples/pic16f628a/pointer_to_pointer.c"),
+        ("pic16f877a", "examples/pic16f877a/const_pointers.c"),
+        ("pic16f877a", "examples/pic16f877a/pointer_compare.c"),
+        ("pic16f877a", "examples/pic16f877a/pointer_subtract.c"),
+        ("pic16f877a", "examples/pic16f877a/string_pointer.c"),
     ];
 
     for (target, example) in examples {
