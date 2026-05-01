@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f877a.h>
 
 unsigned char led_mask = 0x01;
@@ -13,3 +15,4 @@ void main(void) {
     mask_ptr = direct_ptr;
     PORTB = *mask_ptr + *readonly_ptr;
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

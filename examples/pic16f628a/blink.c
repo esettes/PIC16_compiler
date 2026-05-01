@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f628a.h>
 
 /** Provides a small software delay for visible LED blinking on PORTB. */
@@ -19,3 +21,4 @@ void main(void) {
         delay_tick();
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

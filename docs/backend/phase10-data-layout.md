@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 10: Backend Static Data Layout
 
 Phase 10 keeps all supported static data in PIC16 RAM.
@@ -27,3 +29,4 @@ Why no ROM-style data placement yet:
 - the current pointer model is data-space only
 - code-space string pointers and const-address-space loads would require a new frontend/IR/backend contract
 - byte-store startup code is simpler to verify against generated `.asm`, `.lst`, `.map`, and `.hex` artifacts on PIC16
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

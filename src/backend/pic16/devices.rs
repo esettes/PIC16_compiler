@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug)]
@@ -197,3 +199,4 @@ fn pic16f877a() -> TargetDevice {
         ],
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::fmt::{Display, Formatter};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -155,3 +157,4 @@ impl Display for SourcePoint {
         write!(formatter, "{}:{}", self.line, self.column)
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

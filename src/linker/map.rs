@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::fmt::Write;
 
 #[derive(Clone, Debug, Default)]
@@ -92,3 +94,4 @@ where
         let _ = writeln!(output, "    {addr:04X}  {name}");
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

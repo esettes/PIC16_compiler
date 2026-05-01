@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 2 IR Lowering
 
 ## Goal
@@ -74,3 +76,4 @@ Constant folding can now:
 - resolve compare operands in branch conditions
 
 Dead code elimination now performs backward liveness over SSA-like temps so dead temp chains disappear instead of only the last unused temp.
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

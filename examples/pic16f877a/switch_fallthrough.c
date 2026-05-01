@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f877a.h>
 
 void main(void) {
@@ -23,3 +25,4 @@ void main(void) {
 
     PORTB = value;
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

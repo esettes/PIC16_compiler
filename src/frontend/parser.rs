@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use crate::common::source::{PreprocessedSource, Span};
 use crate::diagnostics::DiagnosticBag;
 
@@ -1891,3 +1893,4 @@ void main(void) {
         assert!(ast.contains("__rom_read8(table, 1)"));
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

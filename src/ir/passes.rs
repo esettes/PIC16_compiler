@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::common::integer::{eval_binary, eval_unary, normalize_value};
@@ -834,3 +836,4 @@ mod tests {
         }
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

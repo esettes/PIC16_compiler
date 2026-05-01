@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::fmt::{Display, Formatter};
 
 use crate::common::source::{SourcePoint, Span};
@@ -188,3 +190,4 @@ impl Severity {
 pub fn render_point(point: SourcePoint) -> String {
     format!("{}:{}", point.line, point.column)
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

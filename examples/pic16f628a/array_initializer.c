@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f628a.h>
 
 unsigned char global_values[4] = {1, 2};
@@ -14,3 +16,4 @@ void main(void) {
         + local_values[1]
         + local_values[2];
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

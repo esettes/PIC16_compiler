@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 Release Guide
 
 This project maintains release notes under `docs/releases/` and a top-level `docs/CHANGELOG.md`.
@@ -37,3 +39,4 @@ cargo build --release
 ```
 
 If you want, I can prepare the commit and tag for v0.1.0 (or another version) and produce a release draft locally; tell me which tag name you want and whether to include compiled artifacts.
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

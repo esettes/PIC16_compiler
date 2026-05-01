@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 3 IR Memory Lowering
 
 ## Goal
@@ -67,3 +69,4 @@ This design keeps the IR close to the target realities without leaking PIC16 opc
 - the backend handles `FSR/INDF`, `STATUS.IRP`, and bank/page details
 
 The result is still reusable for future PIC16 mid-range descriptors without duplicating frontend or device logic.
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

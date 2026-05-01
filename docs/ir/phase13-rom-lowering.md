@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 13 ROM Lowering
 
 Phase 13 keeps the existing RAM-pointer IR model and adds one explicit ROM-read path.
@@ -27,3 +29,4 @@ Current limits:
 - no ROM writes
 - no ROM reads in ISR
 - no wider-than-byte ROM element lowering
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

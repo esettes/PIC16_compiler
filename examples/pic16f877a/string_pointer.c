@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f877a.h>
 
 char *message = "OK";
@@ -9,3 +11,4 @@ void main(void) {
 
     PORTB = (unsigned char)message[0] + (unsigned char)banner[1];
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

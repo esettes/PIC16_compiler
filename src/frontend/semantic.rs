@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::backend::pic16::devices::TargetDevice;
@@ -4804,3 +4806,4 @@ mod tests {
         assert_eq!(eval_integer_constant_expr(&expr), Some(0xFFFF));
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

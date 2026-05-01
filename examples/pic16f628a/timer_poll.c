@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f628a.h>
 
 /** Polls TMR0 and toggles PORTB whenever the timer advances from zero. */
@@ -11,3 +13,4 @@ void main(void) {
         }
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

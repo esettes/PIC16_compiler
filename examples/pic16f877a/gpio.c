@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f877a.h>
 
 /** Toggles the lowest PORTB bit in a tight loop after disabling analog input. */
@@ -9,3 +11,4 @@ void main(void) {
         PORTB = PORTB ^ 0x01;
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

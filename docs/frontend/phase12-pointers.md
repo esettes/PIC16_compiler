@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 12 Pointers
 
 Phase 12 extends the existing PIC16 RAM-only pointer model without introducing code-space pointers.
@@ -36,3 +38,4 @@ ISR notes:
 - pointer reads, pointer compares, and pointer-to-pointer operations are allowed when they lower inline safely
 - pointer subtraction is allowed only for the inline 1-byte / 2-byte element-size cases
 - code-space pointer models remain unsupported
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

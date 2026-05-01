@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::collections::BTreeSet;
 use std::fmt::Write;
 
@@ -255,3 +257,4 @@ pub fn render_operand(operand: Operand) -> String {
         Operand::Temp(temp) => format!("t{temp}"),
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

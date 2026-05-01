@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 9: Frontend Switch Support
 
 Phase 9 adds source-level `switch`, `case`, and `default` statements for the existing integer subset.
@@ -43,3 +45,4 @@ Current limitations:
 - case/default labels must stay in the switch body flow or nested blocks
 - labels nested under unrelated control statements like `if`, `while`, or `for` are rejected in phase 9
 - no implicit-fallthrough warning is emitted in this phase
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

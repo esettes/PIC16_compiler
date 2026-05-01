@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 9: IR Switch Lowering
 
 Phase 9 keeps the IR model simple. There is no dedicated switch instruction or terminator.
@@ -38,3 +40,4 @@ Reasons no jump tables yet:
 Current limitation:
 
 - case/default labels nested under unrelated control statements are rejected before lowering, so the IR lowerer only handles linear switch-body label flow
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

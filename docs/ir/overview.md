@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # IR
 
 Custom CFG-based IR.
@@ -85,3 +87,4 @@ Historical detail:
 
 - [phase2-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase2-lowering.md:1)
 - [phase3-memory.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase3-memory.md:1)
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

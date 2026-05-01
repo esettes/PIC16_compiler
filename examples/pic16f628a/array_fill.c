@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f628a.h>
 
 unsigned char shadow[4];
@@ -23,3 +25,4 @@ void main(void) {
         PORTB = 0xFF;
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

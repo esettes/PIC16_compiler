@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f628a.h>
 
 unsigned int final_value = 0;
@@ -51,3 +53,4 @@ void main(void) {
         PORTB = 0xC3;
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

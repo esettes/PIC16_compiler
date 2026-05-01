@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # General Architecture
 
 `pic16cc` separates:
@@ -41,3 +43,4 @@ See:
 - [../../DESIGN.md](/home/settes/cursus/PIC16_compiler/DESIGN.md:1)
 - [../backend/overview.md](/home/settes/cursus/PIC16_compiler/docs/backend/overview.md:1)
 - [../ir/overview.md](/home/settes/cursus/PIC16_compiler/docs/ir/overview.md:1)
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

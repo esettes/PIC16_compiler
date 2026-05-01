@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use crate::frontend::ast::BinaryOp;
 use crate::frontend::types::{ScalarType, Type};
 
@@ -220,3 +222,4 @@ mod tests {
         );
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

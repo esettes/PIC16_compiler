@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # pic16cc
 
 `pic16cc` is an experimental Rust compiler for classic 14-bit PIC16 mid-range MCUs. The pipeline is native end to end:
@@ -775,6 +777,13 @@ picc --list-targets
 - [docs/runtime/phase5-arithmetic-helpers.md](/home/settes/cursus/PIC16_compiler/docs/runtime/phase5-arithmetic-helpers.md:1)
 - [docs/migration/phase3-to-phase4-abi.md](/home/settes/cursus/PIC16_compiler/docs/migration/phase3-to-phase4-abi.md:1)
 - [docs/developer-guide/adding-device.md](/home/settes/cursus/PIC16_compiler/docs/developer-guide/adding-device.md:1)
+
+## License
+
+- compiler source, tests, docs, examples, and scripts: `GPL-3.0-or-later`
+- public headers and runtime material intended for compiled firmware: `GPL-3.0-or-later WITH GCC-exception-3.1`
+- [COPYING](/home/settes/cursus/PIC16_compiler/COPYING:1) contains the full GNU GPLv3 text
+- [COPYING.RUNTIME](/home/settes/cursus/PIC16_compiler/COPYING.RUNTIME:1) contains the GCC Runtime Library Exception 3.1 text
 
 ## Current Limits
 

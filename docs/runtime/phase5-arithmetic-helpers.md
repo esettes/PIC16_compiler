@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 5 Arithmetic Helpers
 
 Phase status:
@@ -125,3 +127,4 @@ Shifts:
 - no runtime trap for dynamic zero divisor
 - no full ISO C promotion lattice yet
 - recursion still rejected globally because stack depth remains static
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

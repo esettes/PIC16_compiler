@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f877a.h>
 
 unsigned int words[3];
@@ -12,3 +14,4 @@ void main(void) {
 
     PORTB = (unsigned char)diff;
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f628a.h>
 
 typedef unsigned char u8;
@@ -31,3 +33,4 @@ void main(void) {
     TRISB = 0x00;
     PORTB = narrowed + samples[2] + origin.y + encode_mode(MODE_ERROR);
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

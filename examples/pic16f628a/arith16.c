@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f628a.h>
 
 unsigned int threshold = 300;
@@ -30,3 +32,4 @@ void main(void) {
         PORTB = 0xAA;
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

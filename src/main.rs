@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use pic16cc::{cli::CliOptions, execute};
 
 /// Runs the CLI compiler entrypoint and reports fatal parse or compile failures.
@@ -18,3 +20,4 @@ fn main() {
         }
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

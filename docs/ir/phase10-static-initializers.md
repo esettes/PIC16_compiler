@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 10: IR Static Initializers
 
 Phase 10 keeps string/static-data support out of the backend AST path and out of the general IR expression model.
@@ -23,3 +25,4 @@ Why keep it this way:
 - it preserves the existing frontend -> IR -> backend layering
 - PIC16 startup writes were already the mechanism for aggregate initialization
 - there is no need to introduce code-space string pointers or a second address-space model yet
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

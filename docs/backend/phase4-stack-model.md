@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 4 Stack Model
 
 This document describes software stack shape used by Phase 4 backend.
@@ -90,3 +92,4 @@ Direct banked file-register instructions remain in use for globals, SFRs, and he
 - oversized frames or call chains fail compilation
 - recursion remains unsupported
 - returning pointers that may refer to stack locals is rejected conservatively
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

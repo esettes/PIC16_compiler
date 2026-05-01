@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 13 ROM Data Layout
 
 Phase 13 uses a PIC16-friendly callable table representation for explicit ROM byte arrays.
@@ -35,3 +37,4 @@ Current limits:
 - no general ROM pointer/address model
 - no ROM structs
 - no ROM reads inside ISR
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

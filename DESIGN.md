@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # `pic16cc` Design
 
 CLI binary name for end users: `picc`.

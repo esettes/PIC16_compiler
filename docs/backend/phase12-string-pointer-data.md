@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 12 String and Pointer Data
 
 Phase 12 extends the Phase 10 RAM-backed static-data model to cover pointer-valued string literal initialization.
@@ -27,3 +29,4 @@ Limits:
 - no program-memory string/const placement
 - no duplicate literal pooling pass
 - no code-space pointer addressing model
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

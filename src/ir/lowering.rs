@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use crate::frontend::ast::{BinaryOp, UnaryOp};
 use crate::frontend::semantic::{
     SymbolId, TypedExpr, TypedExprKind, TypedFunction, TypedProgram, TypedStmt,
@@ -802,3 +804,4 @@ mod tests {
         }
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -394,3 +396,4 @@ fn expand_identifiers(line: &str, macros: &BTreeMap<String, MacroDef>) -> String
     }
     output
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

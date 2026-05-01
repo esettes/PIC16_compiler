@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use crate::common::source::{PreprocessedSource, SourceManager};
 
 use super::bag::DiagnosticBag;
@@ -52,3 +54,4 @@ impl<'a> DiagnosticEmitter<'a> {
         }
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

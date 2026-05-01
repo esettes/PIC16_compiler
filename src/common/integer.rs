@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use crate::frontend::ast::{BinaryOp, UnaryOp};
 use crate::frontend::types::{ScalarType, Type};
 
@@ -191,3 +193,4 @@ mod tests {
         assert_eq!(signed_value(eval_binary(BinaryOp::ShiftRight, -2, 1, i16_ty, i16_ty), i16_ty), -1);
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

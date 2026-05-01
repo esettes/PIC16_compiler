@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Devices
 
 Each descriptor defines:
@@ -11,3 +13,4 @@ Each descriptor defines:
 - config word
 - SFRs
 - capabilities
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

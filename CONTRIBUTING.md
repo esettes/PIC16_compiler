@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Contributing
 
 ## Local Workflow
@@ -5,6 +7,7 @@
 ```bash
 cargo check
 cargo test
+bash scripts/check-license-headers.sh
 ```
 
 ## Change Rules
@@ -14,6 +17,8 @@ cargo test
 - every new limitation must be documented in `README.md` and `DESIGN.md`
 - do not introduce XC8/SDCC wrappers
 - add tests for every bug fix and every new capability
+- new compiler/docs/example/build files must use `SPDX-License-Identifier: GPL-3.0-or-later`
+- new public `include/` or runtime-emitted files must use `SPDX-License-Identifier: GPL-3.0-or-later WITH GCC-exception-3.1`
 
 ## Expected Testing
 

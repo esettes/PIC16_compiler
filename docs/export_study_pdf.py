@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Render a Markdown study document into a readable PDF and optional EPUB.
 
 This renderer intentionally supports only the subset used by the project study docs:

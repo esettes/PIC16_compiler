@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Changelog
 
 ## v0.1.0 - 2026-04-28
@@ -17,3 +19,4 @@ Restrictions and design decisions:
 - No nested aggregates or designated initializers in this phase.
 - Structs are packed with no padding.
 - Phase 4 ABI and Phase 6 ISR model remain unchanged.
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

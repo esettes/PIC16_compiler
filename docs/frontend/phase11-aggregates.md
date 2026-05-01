@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 11 Aggregates
 
 Phase 11 extends the frontend aggregate model without changing the packed-layout or data-space pointer assumptions from earlier phases.
@@ -47,3 +49,4 @@ Phase 11 extends the frontend aggregate model without changing the packed-layout
 - no chained designators such as `.outer.inner = 1`
 - no anonymous nested struct/enum fields without declarators
 - no pointers to incomplete struct types
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

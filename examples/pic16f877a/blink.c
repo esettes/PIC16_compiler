@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f877a.h>
 
 /** Provides a small software delay for visible LED blinking on PORTC. */
@@ -20,3 +22,4 @@ void main(void) {
         delay_tick();
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

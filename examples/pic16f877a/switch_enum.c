@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f877a.h>
 
 enum Mode {
@@ -24,3 +26,4 @@ void main(void) {
             break;
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

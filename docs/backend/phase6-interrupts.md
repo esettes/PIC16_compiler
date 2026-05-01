@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 6 Interrupts
 
 Phase status:
@@ -63,3 +65,4 @@ Output expectations:
 - `.map` shows `__interrupt_vector` and `__isr_ctx.*`
 - `.lst` shows vector stub, ISR body, save/restore sequence, and `retfie`
 - `.hex` still includes config word at `0x2007`
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

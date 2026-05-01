@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 11 Aggregate Copy
 
 Phase 11 does not add a backend-only aggregate path.
@@ -31,3 +33,4 @@ No jump tables, helper calls, or backend AST inspection are introduced for this 
 - whole-struct copy is still rejected inside interrupt handlers
 - no backend support for incomplete-struct pointers
 - no backend support for multidimensional arrays or chained designators because those are rejected earlier
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

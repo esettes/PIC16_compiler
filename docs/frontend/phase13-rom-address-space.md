@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 13 ROM Address Space
 
 Phase 13 adds one explicit program-memory object syntax:
@@ -32,3 +34,4 @@ Diagnostics:
 - ROM/data-pointer mixing
 - direct ROM indexing
 - unsupported ROM pointer form
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

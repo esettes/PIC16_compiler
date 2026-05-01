@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 6 ISR Syntax
 
 Phase status:
@@ -47,3 +49,4 @@ Current disallowed ISR subset:
 - runtime-helper calls
 - helper-requiring `*`, `/`, `%`
 - helper-requiring dynamic `<<` / `>>`
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

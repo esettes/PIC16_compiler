@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f628a.h>
 
 struct Message {
@@ -17,3 +19,4 @@ void main(void) {
     cursor->text[3] = 0;
     PORTB = cursor->text[0] + cursor->length;
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

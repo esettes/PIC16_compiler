@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 11 Aggregate Initializers
 
 Phase 11 keeps aggregate support inside the existing typed-IR pipeline.
@@ -33,3 +35,4 @@ This keeps the IR/backed layering unchanged and reuses existing indirect-memory 
 - no multidimensional arrays
 - no chained designators
 - no whole-struct copy inside interrupt handlers
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

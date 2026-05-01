@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 4 Call Lowering
 
 This document describes how direct calls lower from typed tree to IR and then to PIC16 backend.
@@ -61,3 +63,4 @@ Phase 4 call lowering still does not support:
 - function pointers
 - recursion
 - runtime stack overflow checks
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

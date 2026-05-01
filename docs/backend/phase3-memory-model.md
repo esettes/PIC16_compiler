@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 3 PIC16 Memory Model
 
 ## Scope
@@ -92,3 +94,4 @@ Indexing lowers as:
 - no array initializers
 - no stack-based arrays
 - no pointer-compatible qualifier conversions beyond exact matching pointee types and literal zero as null
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 4 Stack-first ABI
 
 This document describes current call ABI used by the `picc` CLI compiler (`pic16cc` crate).
@@ -92,3 +94,4 @@ Given `arg_bytes = A`:
 - `main` still requires zero parameters
 - recursion is rejected because stack depth is computed statically and there is no runtime overflow check
 - backend map output exposes helper symbols such as `__abi.stack_ptr.lo` and stack bounds such as `__stack.base`
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

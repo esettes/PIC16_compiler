@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::collections::BTreeMap;
 
 use crate::diagnostics::DiagnosticBag;
@@ -186,3 +188,4 @@ mod tests {
         assert_eq!(encode_instr(&AsmInstr::Retlw(0x5A)), 0x345A);
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 12 Pointer Lowering
 
 Phase 12 keeps pointer work inside the existing typed IR instead of adding a new pointer-specific IR instruction set.
@@ -24,3 +26,4 @@ Non-goals in this phase:
 - no dedicated switch/table-like pointer opcode
 - no program-memory/code-space pointer lowering
 - no helper-based divide scaling for pointer subtraction on element sizes larger than 2 bytes
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

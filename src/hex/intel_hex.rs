@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::collections::BTreeMap;
 
 use crate::backend::pic16::devices::TargetDevice;
@@ -83,3 +85,4 @@ mod tests {
         assert!(hex.ends_with(":00000001FF\n"));
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

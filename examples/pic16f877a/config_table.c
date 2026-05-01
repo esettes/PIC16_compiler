@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f877a.h>
 
 struct PinConfig {
@@ -23,3 +25,4 @@ void main(void) {
     TRISB = 0x00;
     PORTB = configs[1].led.bit + configs[0].name[0];
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

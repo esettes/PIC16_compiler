@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 10: Frontend String Literals and Const Data
 
 Phase 10 adds frontend support for common firmware-style static data patterns without changing the one-address-space PIC16 data-pointer model.
@@ -48,3 +50,4 @@ ISR interaction:
 
 - reading global/static/const RAM objects from ISR is allowed when the resulting code remains inline-safe under the existing Phase 6 rules
 - string literals are not usable directly inside ISR expressions because standalone string literal expressions are unsupported
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

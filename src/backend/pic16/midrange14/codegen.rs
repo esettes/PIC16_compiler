@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::backend::pic16::devices::{MemoryRange, TargetDevice};
@@ -4003,3 +4005,4 @@ mod tests {
         }
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

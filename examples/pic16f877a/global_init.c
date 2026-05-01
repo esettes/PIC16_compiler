@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f877a.h>
 
 struct Pair {
@@ -15,3 +17,4 @@ void main(void) {
     TRISB = 0x00;
     PORTB = message[0] + pair.hi + flags[0] + (unsigned char)ticks;
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

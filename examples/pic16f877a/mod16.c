@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f877a.h>
 
 /** Computes 16-bit modulo through the Phase 5 runtime helper path. */
@@ -12,3 +14,4 @@ void main(void) {
     TRISB = 0x00;
     PORTB = remainder;
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

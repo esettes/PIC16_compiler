@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -3474,3 +3476,4 @@ fn phase13_examples_compile_via_picc() {
         assert!(output.with_extension("lst").exists());
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

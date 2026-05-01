@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #![forbid(unsafe_code)]
 
 pub mod assembler;
@@ -319,3 +321,4 @@ pub fn default_predefined_macros(device: &TargetDevice) -> BTreeMap<String, Stri
     );
     macros
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 7 Backend Optimization
 
 Phase 7 improves generated PIC16 quality without changing the language subset, ABI, ISR model, or runtime-helper contract.
@@ -106,3 +108,4 @@ Current counters:
 - no call reordering
 - no semantics changes for ISR restrictions
 - Stack-first ABI and ISR save/restore remain untouched
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

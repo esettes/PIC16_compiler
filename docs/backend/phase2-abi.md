@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 2 ABI and Compare Lowering
 
 ## Scope
@@ -162,3 +164,4 @@ No generic 8-bit CPU shortcutting is used here.
 - ISR calling convention
 - runtime helpers for multiply/divide/modulo
 - implicit equal-width mixed signedness compare lowering
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

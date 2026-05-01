@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f628a.h>
 
 struct Point {
@@ -20,3 +22,4 @@ void main(void) {
     TRISB = 0x00;
     PORTB = point_sum(&anchor) + local.y;
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

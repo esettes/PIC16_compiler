@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::fmt::Write;
 
 use crate::common::source::{PreprocessedSource, Span};
@@ -487,3 +489,4 @@ mod tests {
         assert!(format!("{diagnostics}").contains("unsupported escape sequence"));
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

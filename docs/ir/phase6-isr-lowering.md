@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 6 ISR Lowering
 
 Phase status:
@@ -29,3 +31,4 @@ Phase 6 semantic restrictions happen before backend lowering:
 - no runtime-helper-requiring arithmetic in ISR
 
 This keeps IR simple while still carrying the metadata the backend needs.
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

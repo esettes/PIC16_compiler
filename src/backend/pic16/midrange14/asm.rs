@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::fmt::Write;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -301,3 +303,4 @@ mod tests {
         assert_eq!(stats.overwritten_w_loads_removed, 1);
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

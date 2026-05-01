@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::fmt::Write;
 
 use crate::common::source::Span;
@@ -394,3 +396,4 @@ fn render_string_literal(bytes: &[u8]) -> String {
     rendered.push('"');
     rendered
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

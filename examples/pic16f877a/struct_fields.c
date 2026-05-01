@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f877a.h>
 
 struct Pair {
@@ -23,3 +25,4 @@ void main(void) {
     global_pair.lo = touch(cursor);
     PORTB = global_pair.lo;
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Frontend
 
 Responsibilities:
@@ -51,3 +53,4 @@ Current detail:
 - [phase11-aggregates.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase11-aggregates.md:1)
 - [phase12-pointers.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase12-pointers.md:1)
 - [phase13-rom-address-space.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase13-rom-address-space.md:1)
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

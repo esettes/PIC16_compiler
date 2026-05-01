@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f877a.h>
 
 /** Combines multiply, divide, and modulo in one expression tree. */
@@ -12,3 +14,4 @@ void main(void) {
     TRISB = 0x00;
     PORTB = value;
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

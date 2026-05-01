@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 8 Examples
 
 Example: struct and initializer
@@ -15,3 +17,4 @@ Example: enum
 enum Flags { A = 1, B, C = 8 };
 enum Flags f = B;
 ```
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

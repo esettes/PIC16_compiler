@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 5 Arithmetic Lowering
 
 Phase status:
@@ -100,3 +102,4 @@ Documented current runtime behavior:
 - dynamic shift counts clamp to bit width
 - signed right shift is arithmetic
 - arithmetic wraps/truncates to destination width
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

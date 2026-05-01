@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f877a.h>
 
 struct Pair {
@@ -18,3 +20,4 @@ void main(void) {
     copy_pair(&left, &right);
     PORTB = left.hi;
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

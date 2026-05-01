@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
@@ -218,3 +220,4 @@ impl Display for OptimizationLevel {
         formatter.write_str(text)
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

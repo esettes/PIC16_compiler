@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Adding a New PIC16
 
 ## Shared Parts Already Present
@@ -27,3 +29,4 @@
 3. add minimal examples
 4. add compile-pipeline tests
 5. verify banked SFRs, indirect `FSR/INDF` access, and the config word
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

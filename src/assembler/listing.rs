@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
@@ -16,3 +18,4 @@ pub fn render_listing(program: &AsmProgram, words: &BTreeMap<u16, u16>) -> Strin
     let _ = writeln!(output, "{}", program.render());
     output
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

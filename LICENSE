@@ -1,0 +1,11 @@
+Split licensing model for this repository:
+
+- compiler source, tests, docs, examples, and scripts are licensed under
+  GPL-3.0-or-later
+- public headers and runtime material intended for compiled firmware are
+  licensed under GPL-3.0-or-later WITH GCC-exception-3.1
+
+License texts:
+
+- COPYING contains the full GNU General Public License version 3 text
+- COPYING.RUNTIME contains the full GCC Runtime Library Exception version 3.1 text

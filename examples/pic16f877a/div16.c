@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f877a.h>
 
 /** Divides two signed 16-bit values through the Phase 5 runtime helper path. */
@@ -12,3 +14,4 @@ void main(void) {
     TRISB = 0x00;
     PORTB = quotient;
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

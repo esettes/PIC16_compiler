@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f877a.h>
 
 unsigned int latest = 0;
@@ -40,3 +42,4 @@ void main(void) {
         *port = 0xA5;
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

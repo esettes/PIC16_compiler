@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 9: Backend Switch Codegen
 
 The backend does not receive a special switch opcode in phase 9.
@@ -31,3 +33,4 @@ ISR interaction:
 
 - switch codegen in ISR is allowed only when the already-validated IR stays inline-safe
 - any helper-requiring expressions are still rejected earlier by the Phase 6 interrupt checks
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::fmt::{Display, Formatter};
 
 pub type StructId = usize;
@@ -472,3 +474,4 @@ mod tests {
         assert_eq!(format!("{rom}"), "const __rom unsigned char[4]");
     }
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

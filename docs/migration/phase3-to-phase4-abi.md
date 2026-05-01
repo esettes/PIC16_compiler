@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 3 to Phase 4 ABI Migration
 
 Phase 4 replaces Phase 3 call/storage model.
@@ -68,3 +70,4 @@ Use these as historical references only:
 
 - [../backend/phase2-abi.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase2-abi.md:1)
 - [../backend/phase3-memory-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase3-memory-model.md:1)
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

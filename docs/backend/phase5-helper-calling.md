@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 5 Helper Calling
 
 This document defines how backend-generated arithmetic helpers integrate with repaired Phase 4 stack ABI.
@@ -99,3 +101,4 @@ Backend emits labels named like:
 - `__rt_shr_i16`
 
 These labels are stable enough for golden asm/map/listing tests in current phase.
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

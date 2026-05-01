@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later WITH GCC-exception-3.1
+
 #ifndef PIC16F877A_H
 #define PIC16F877A_H
 
@@ -17,4 +19,3 @@ extern volatile unsigned char TRISE;
 extern volatile unsigned char ADCON1;
 
 #endif
-

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f877a.h>
 
 /** Mixes one inline constant shift with one runtime-count shift. */
@@ -12,3 +14,4 @@ void main(void) {
     TRISB = 0x00;
     PORTB = mixed;
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # `pic16cc` / `picc`
 
 ## Estudio Técnico Integral y Didáctico
@@ -7432,3 +7434,4 @@ y hacerlas visibles, comprobables y mantenibles.
 ```
 
 Ésa es, precisamente, una de las mejores lecciones que se pueden extraer de `pic16cc`.
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

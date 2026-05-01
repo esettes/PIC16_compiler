@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Phase 8: Frontend Type Features
 
 Phase 8 extends the frontend with a small, well-scoped set of C features:
@@ -25,3 +27,4 @@ Notes and restrictions:
 - whole-struct assignment (`a = b` where `a` and `b` are structs) is rejected
 - explicit casts support scalar conversions, one-level data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
 - pointer-to-pointer types remain unsupported in this phase
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

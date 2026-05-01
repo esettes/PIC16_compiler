@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f628a.h>
 
 void main(void) {
@@ -11,3 +13,4 @@ void main(void) {
     TRISB = 0x00;
     PORTB = narrowed + (unsigned char)addr;
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

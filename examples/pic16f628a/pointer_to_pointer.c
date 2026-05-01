@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f628a.h>
 
 unsigned char value;
@@ -14,3 +16,4 @@ void main(void) {
     write_value(ptrptr, 3);
     PORTB = value;
 }
+// SPDX-License-Identifier: GPL-3.0-or-later

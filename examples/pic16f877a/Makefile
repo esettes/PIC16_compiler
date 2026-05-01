@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 PIC ?= picc
 TARGET := pic16f877a
 ROOT := ../..
@@ -17,3 +19,4 @@ flash: $(OUT)
 	$(FLASH_CMD) $(OUT)
 
 .PHONY: clean flash
+# SPDX-License-Identifier: GPL-3.0-or-later

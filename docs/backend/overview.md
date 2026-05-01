@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # PIC16 `midrange14` Backend
 
 Shared backend responsibilities:
@@ -125,3 +127,4 @@ Historical docs:
 
 - [phase2-abi.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase2-abi.md:1)
 - [phase3-memory-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase3-memory-model.md:1)
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->

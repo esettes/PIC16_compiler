@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include <pic16/pic16f877a.h>
 
 struct Config {
@@ -12,3 +14,4 @@ void main(void) {
     TRISB = 0x00;
     PORTB = config.mode + (unsigned char)config.limit;
 }
+// SPDX-License-Identifier: GPL-3.0-or-later
