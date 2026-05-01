@@ -5,10 +5,14 @@ use crate::diagnostics::DiagnosticBag;
 
 use super::ast::{
     BinaryOp, Designator, EnumConstant, Expr, ExprKind, FunctionDecl, Initializer,
-    InitializerEntry, Item, Stmt, StructDef, StructField, TranslationUnit, UnaryOp, VarDecl,
+    InitializerEntry, Item, Stmt, StructDef, StructField, TranslationUnit, UnaryOp, UnionDef,
+    VarDecl,
 };
 use super::lexer::{Keyword, Symbol, Token, TokenKind};
-use super::types::{AddressSpace, MAX_POINTER_DEPTH, Qualifiers, ScalarType, StorageClass, StructId, Type};
+use super::types::{
+    AddressSpace, MAX_POINTER_DEPTH, Qualifiers, ScalarType, StorageClass, StructId, Type,
+    UnionId,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -20,6 +24,8 @@ pub struct Parser<'a> {
     typedefs: BTreeMap<String, Type>,
     struct_tags: BTreeMap<String, StructId>,
     struct_defs: Vec<StructDef>,
+    union_tags: BTreeMap<String, UnionId>,
+    union_defs: Vec<UnionDef>,
     enum_tags: BTreeSet<String>,
     enum_constants: Vec<EnumConstant>,
     enum_constant_by_name: BTreeMap<String, i64>,
@@ -33,6 +39,14 @@ struct DeclSpecifiers {
     is_interrupt: bool,
     is_typedef: bool,
     allows_omitted_declarator: bool,
+}
+
+#[derive(Clone, Copy)]
+struct BitfieldPackState {
+    offset: usize,
+    used_bits: usize,
+    unit_bits: usize,
+    scalar: ScalarType,
 }
 
 impl<'a> Parser<'a> {
@@ -50,6 +64,8 @@ impl<'a> Parser<'a> {
             typedefs: BTreeMap::new(),
             struct_tags: BTreeMap::new(),
             struct_defs: Vec::new(),
+            union_tags: BTreeMap::new(),
+            union_defs: Vec::new(),
             enum_tags: BTreeSet::new(),
             enum_constants: Vec::new(),
             enum_constant_by_name: BTreeMap::new(),
@@ -68,6 +84,7 @@ impl<'a> Parser<'a> {
         TranslationUnit {
             items,
             struct_defs: self.struct_defs.clone(),
+            union_defs: self.union_defs.clone(),
             enum_constants: self.enum_constants.clone(),
         }
     }
@@ -873,6 +890,19 @@ impl<'a> Parser<'a> {
                     explicit_type = Some(ty);
                     allows_omitted_declarator = omittable;
                 }
+                TokenKind::Keyword(Keyword::Union) => {
+                    if scalar.is_some() || explicit_type.is_some() {
+                        self.diagnostics.error(
+                            "parser",
+                            Some(self.current_span()),
+                            "duplicate type specifier",
+                            None,
+                        );
+                    }
+                    let (ty, omittable) = self.parse_union_specifier();
+                    explicit_type = Some(ty);
+                    allows_omitted_declarator = omittable;
+                }
                 TokenKind::Keyword(Keyword::Enum) => {
                     if scalar.is_some() || explicit_type.is_some() {
                         self.diagnostics.error(
@@ -950,7 +980,7 @@ impl<'a> Parser<'a> {
                     Some(self.current_span()),
                     "expected type specifier",
                     Some(
-                        "supported types: void, char, unsigned char, int, unsigned int, typedef names, enum, struct"
+                        "supported types: void, char, unsigned char, int, unsigned int, typedef names, enum, struct, union"
                             .to_string(),
                     ),
                 );
@@ -1030,53 +1060,8 @@ impl<'a> Parser<'a> {
             }
         });
 
-        let mut fields = Vec::new();
-        let mut seen_field_names = BTreeSet::new();
-        let mut offset = 0usize;
-
-        while !self.check_symbol(Symbol::RBrace) && !self.is_eof() {
-            let field_start = self.current_span().start;
-            let decl = self.parse_decl_specifiers();
-            if decl.is_interrupt || decl.is_typedef || decl.storage_class != StorageClass::Auto {
-                self.diagnostics.error(
-                    "parser",
-                    Some(Span::new(field_start, self.previous_span().end)),
-                    "struct fields do not support storage classes, typedef, or interrupt qualifiers",
-                    None,
-                );
-            }
-            if decl.allows_omitted_declarator && self.check_symbol(Symbol::Semicolon) {
-                self.diagnostics.error(
-                    "parser",
-                    Some(Span::new(field_start, self.current_span().end)),
-                    "anonymous nested struct/enum fields are not supported in phase 11",
-                    Some("name the field explicitly".to_string()),
-                );
-                self.advance();
-                continue;
-            }
-
-            let (name, _, ty) = self.parse_declarator(decl.ty);
-            self.expect_symbol(Symbol::Semicolon);
-
-            if !seen_field_names.insert(name.clone()) {
-                self.diagnostics.error(
-                    "parser",
-                    Some(Span::new(field_start, self.previous_span().end)),
-                    format!("duplicate struct field `{name}`"),
-                    None,
-                );
-                continue;
-            }
-
-            fields.push(StructField {
-                name,
-                ty,
-                offset,
-                span: Span::new(field_start, self.previous_span().end),
-            });
-            offset += ty.byte_width();
-        }
+        let struct_name = tag.as_deref().unwrap_or("__anonymous struct");
+        let (fields, size) = self.parse_aggregate_fields("struct", struct_name, false);
         self.expect_symbol(Symbol::RBrace);
 
         let end = self.previous_span().end;
@@ -1085,10 +1070,10 @@ impl<'a> Parser<'a> {
                 id,
                 name: self.struct_defs[id].name.clone(),
                 fields,
-                size: offset,
+                size,
                 span: Span::new(start, end),
             };
-            (Type::struct_type(id, offset), true)
+            (Type::struct_type(id, size), true)
         } else {
             let id = self.struct_defs.len();
             let struct_name = format!("__anon_struct_{id}");
@@ -1096,11 +1081,322 @@ impl<'a> Parser<'a> {
                 id,
                 name: struct_name,
                 fields,
-                size: offset,
+                size,
                 span: Span::new(start, end),
             });
-            (Type::struct_type(id, offset), true)
+            (Type::struct_type(id, size), true)
         }
+    }
+
+    /// Parses one `union` specifier and records field layout metadata.
+    fn parse_union_specifier(&mut self) -> (Type, bool) {
+        let start = self.current_span().start;
+        self.expect_keyword(Keyword::Union);
+
+        let tag = if let TokenKind::Identifier(name) = self.current().kind.clone() {
+            self.advance();
+            Some(name)
+        } else {
+            None
+        };
+
+        if !self.match_symbol(Symbol::LBrace) {
+            if let Some(tag) = tag {
+                if let Some(union_id) = self.union_tags.get(&tag).copied() {
+                    let size = self.union_defs[union_id].size;
+                    return (Type::union_type(union_id, size), false);
+                }
+                self.diagnostics.error(
+                    "parser",
+                    Some(Span::new(start, self.previous_span().end)),
+                    format!("unknown union tag `{tag}`"),
+                    Some("define the union before using it".to_string()),
+                );
+                return (Type::new(ScalarType::I16), false);
+            }
+            self.diagnostics.error(
+                "parser",
+                Some(Span::new(start, self.previous_span().end)),
+                "anonymous union type requires a field list",
+                None,
+            );
+            return (Type::new(ScalarType::I16), false);
+        }
+
+        let placeholder = tag.as_ref().map(|tag_name| {
+            if let Some(existing) = self.union_tags.get(tag_name).copied() {
+                self.diagnostics.error(
+                    "parser",
+                    Some(Span::new(start, self.current_span().start)),
+                    format!("redefinition of union `{tag_name}`"),
+                    None,
+                );
+                existing
+            } else {
+                let id = self.union_defs.len();
+                self.union_defs.push(UnionDef {
+                    id,
+                    name: tag_name.clone(),
+                    fields: Vec::new(),
+                    size: 0,
+                    span: Span::new(start, start),
+                });
+                self.union_tags.insert(tag_name.clone(), id);
+                id
+            }
+        });
+
+        let union_name = tag.as_deref().unwrap_or("__anonymous union");
+        let (fields, size) = self.parse_aggregate_fields("union", union_name, true);
+        self.expect_symbol(Symbol::RBrace);
+
+        let end = self.previous_span().end;
+        if let Some(id) = placeholder {
+            self.union_defs[id] = UnionDef {
+                id,
+                name: self.union_defs[id].name.clone(),
+                fields,
+                size,
+                span: Span::new(start, end),
+            };
+            (Type::union_type(id, size), true)
+        } else {
+            let id = self.union_defs.len();
+            let union_name = format!("__anon_union_{id}");
+            self.union_defs.push(UnionDef {
+                id,
+                name: union_name,
+                fields,
+                size,
+                span: Span::new(start, end),
+            });
+            (Type::union_type(id, size), true)
+        }
+    }
+
+    /// Parses the field list for one struct or union and computes packed offsets.
+    fn parse_aggregate_fields(
+        &mut self,
+        aggregate_kind: &str,
+        aggregate_name: &str,
+        is_union: bool,
+    ) -> (Vec<StructField>, usize) {
+        let mut fields = Vec::new();
+        let mut seen_field_names = BTreeSet::new();
+        let mut size = 0usize;
+        let mut offset = 0usize;
+        let mut bitfield_pack = None::<BitfieldPackState>;
+
+        while !self.check_symbol(Symbol::RBrace) && !self.is_eof() {
+            let Some(field) = self.parse_aggregate_field_declaration(
+                aggregate_kind,
+                aggregate_name,
+                is_union,
+                &mut offset,
+                &mut bitfield_pack,
+            ) else {
+                continue;
+            };
+
+            if !seen_field_names.insert(field.name.clone()) {
+                self.diagnostics.error(
+                    "parser",
+                    Some(field.span),
+                    format!("duplicate {aggregate_kind} field `{}`", field.name),
+                    None,
+                );
+                continue;
+            }
+
+            if is_union {
+                size = size.max(field.ty.byte_width());
+            } else {
+                size = offset;
+            }
+            fields.push(field);
+        }
+
+        (fields, size)
+    }
+
+    /// Parses one field declaration for a struct or union, including basic bitfield syntax.
+    fn parse_aggregate_field_declaration(
+        &mut self,
+        aggregate_kind: &str,
+        aggregate_name: &str,
+        is_union: bool,
+        offset: &mut usize,
+        bitfield_pack: &mut Option<BitfieldPackState>,
+    ) -> Option<StructField> {
+        let field_start = self.current_span().start;
+        let decl = self.parse_decl_specifiers();
+        if decl.is_interrupt || decl.is_typedef || decl.storage_class != StorageClass::Auto {
+            self.diagnostics.error(
+                "parser",
+                Some(Span::new(field_start, self.previous_span().end)),
+                format!(
+                    "{aggregate_kind} fields do not support storage classes, typedef, or interrupt qualifiers"
+                ),
+                None,
+            );
+        }
+        if decl.allows_omitted_declarator && self.check_symbol(Symbol::Semicolon) {
+            self.diagnostics.error(
+                "parser",
+                Some(Span::new(field_start, self.current_span().end)),
+                "anonymous nested struct/union/enum fields are not supported in phase 15",
+                Some("name the field explicitly".to_string()),
+            );
+            self.advance();
+            *bitfield_pack = None;
+            return None;
+        }
+        if self.match_symbol(Symbol::Colon) {
+            self.diagnostics.error(
+                "parser",
+                Some(Span::new(field_start, self.previous_span().end)),
+                "unnamed bitfields are not supported in phase 15",
+                Some("declare a named bitfield such as `flags:1`".to_string()),
+            );
+            let _ = self.parse_bitfield_width(aggregate_kind, aggregate_name, "<unnamed>", decl.ty);
+            self.expect_symbol(Symbol::Semicolon);
+            *bitfield_pack = None;
+            return None;
+        }
+
+        let (name, _, ty) = self.parse_declarator(decl.ty);
+        let (field_offset, bit_offset, bit_width) = if self.match_symbol(Symbol::Colon) {
+            let width = self.parse_bitfield_width(aggregate_kind, aggregate_name, &name, ty);
+            self.expect_symbol(Symbol::Semicolon);
+            let (field_offset, bit_offset) = if is_union {
+                (0usize, 0u8)
+            } else {
+                self.allocate_struct_bitfield(ty, width, offset, bitfield_pack)
+            };
+            (field_offset, bit_offset, Some(width))
+        } else {
+            self.expect_symbol(Symbol::Semicolon);
+            *bitfield_pack = None;
+            let field_offset = if is_union {
+                0
+            } else {
+                let field_offset = *offset;
+                *offset += ty.byte_width();
+                field_offset
+            };
+            (field_offset, 0u8, None)
+        };
+
+        Some(StructField {
+            name,
+            ty,
+            offset: field_offset,
+            bit_offset,
+            bit_width,
+            span: Span::new(field_start, self.previous_span().end),
+        })
+    }
+
+    /// Parses and validates one basic unsigned bitfield width.
+    fn parse_bitfield_width(
+        &mut self,
+        aggregate_kind: &str,
+        aggregate_name: &str,
+        field_name: &str,
+        ty: Type,
+    ) -> u8 {
+        let width_expr = self.parse_expression();
+        let width_span = width_expr.span;
+        let unit_bits = match ty.scalar {
+            ScalarType::U8 => 8usize,
+            ScalarType::U16 => 16usize,
+            _ => {
+                self.diagnostics.error(
+                    "parser",
+                    Some(width_span),
+                    format!(
+                        "{aggregate_kind} `{aggregate_name}` bitfield `{field_name}` must use `unsigned char` or `unsigned int` in phase 15"
+                    ),
+                    None,
+                );
+                8
+            }
+        };
+        if ty.pointer_depth != 0 || ty.array_len.is_some() || ty.struct_id.is_some() || ty.union_id.is_some() {
+            self.diagnostics.error(
+                "parser",
+                Some(width_span),
+                format!(
+                    "{aggregate_kind} `{aggregate_name}` bitfield `{field_name}` must use `unsigned char` or `unsigned int` in phase 15"
+                ),
+                None,
+            );
+        }
+
+        let Some(raw_width) = self.eval_enum_const_expr(&width_expr) else {
+            self.diagnostics.error(
+                "parser",
+                Some(width_span),
+                format!(
+                    "{aggregate_kind} `{aggregate_name}` bitfield `{field_name}` width must be an integer constant expression"
+                ),
+                None,
+            );
+            return 1;
+        };
+        if raw_width <= 0 {
+            self.diagnostics.error(
+                "parser",
+                Some(width_span),
+                format!(
+                    "{aggregate_kind} `{aggregate_name}` bitfield `{field_name}` width must be positive"
+                ),
+                None,
+            );
+            return 1;
+        }
+        if raw_width as usize > unit_bits {
+            self.diagnostics.error(
+                "parser",
+                Some(width_span),
+                format!(
+                    "{aggregate_kind} `{aggregate_name}` bitfield `{field_name}` width {raw_width} exceeds its {unit_bits}-bit storage unit"
+                ),
+                None,
+            );
+            return unit_bits as u8;
+        }
+        raw_width as u8
+    }
+
+    /// Allocates one struct bitfield inside the current packed storage-unit stream.
+    fn allocate_struct_bitfield(
+        &self,
+        ty: Type,
+        width: u8,
+        offset: &mut usize,
+        bitfield_pack: &mut Option<BitfieldPackState>,
+    ) -> (usize, u8) {
+        let unit_bytes = ty.byte_width().max(1);
+        let unit_bits = unit_bytes * 8;
+        if let Some(pack) = bitfield_pack.as_mut()
+            && pack.scalar == ty.scalar
+            && pack.used_bits + width as usize <= pack.unit_bits
+        {
+            let bit_offset = pack.used_bits as u8;
+            pack.used_bits += width as usize;
+            return (pack.offset, bit_offset);
+        }
+
+        let field_offset = *offset;
+        *offset += unit_bytes;
+        *bitfield_pack = Some(BitfieldPackState {
+            offset: field_offset,
+            used_bits: width as usize,
+            unit_bits,
+            scalar: ty.scalar,
+        });
+        (field_offset, 0)
     }
 
     /// Parses one `enum` specifier and captures global enumerator constants.
@@ -1384,7 +1680,9 @@ impl<'a> Parser<'a> {
                     saw_type = true;
                     cursor += 1;
                 }
-                TokenKind::Keyword(Keyword::Struct) | TokenKind::Keyword(Keyword::Enum) => {
+                TokenKind::Keyword(Keyword::Struct)
+                | TokenKind::Keyword(Keyword::Union)
+                | TokenKind::Keyword(Keyword::Enum) => {
                     saw_type = true;
                     cursor += 1;
                     if self
@@ -1539,6 +1837,7 @@ impl<'a> Parser<'a> {
                 | TokenKind::Keyword(Keyword::Int)
                 | TokenKind::Keyword(Keyword::Enum)
                 | TokenKind::Keyword(Keyword::Struct)
+                | TokenKind::Keyword(Keyword::Union)
                 | TokenKind::Keyword(Keyword::Interrupt)
         ) || matches!(&self.current().kind, TokenKind::Identifier(name) if self.typedefs.contains_key(name))
     }
@@ -1914,6 +2213,74 @@ void main(void) {
         assert!(ast.contains("table[i]"));
         assert!(ast.contains("table[2]"));
         assert!(ast.contains("__rom_read16(table16, i)"));
+    }
+
+    #[test]
+    /// Verifies named unions and both `.` / `->` access parse in the ordinary expression grammar.
+    fn parses_phase15_union_declaration_and_access() {
+        let (ast, diagnostics) = parse_source(
+            "\
+union Value {
+    unsigned char byte;
+    unsigned int word;
+};
+void main(void) {
+    union Value value;
+    union Value *ptr;
+    value.byte = 1;
+    PORTB = value.byte;
+    PORTA = ptr->word;
+}
+",
+        );
+
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert!(ast.contains("union Value"));
+        assert!(ast.contains("value.byte"));
+        assert!(ast.contains("ptr->word"));
+    }
+
+    #[test]
+    /// Verifies unsigned bitfield declarations parse and record packed layout metadata.
+    fn parses_phase15_bitfield_declaration() {
+        let (ast, diagnostics) = parse_source(
+            "\
+struct Flags {
+    unsigned char ready:1;
+    unsigned char error:1;
+    unsigned char mode:2;
+    unsigned char next;
+};
+void main(void) {
+    struct Flags flags;
+    flags.mode = 2;
+}
+",
+        );
+
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert!(ast.contains("ready:unsigned char@0.0:1"));
+        assert!(ast.contains("error:unsigned char@0.1:1"));
+        assert!(ast.contains("mode:unsigned char@0.2:2"));
+        assert!(ast.contains("next:unsigned char@1"));
+    }
+
+    #[test]
+    /// Verifies invalid bitfield widths are rejected during aggregate layout parsing.
+    fn reports_phase15_invalid_bitfield_width() {
+        let (_, diagnostics) = parse_source(
+            "\
+struct Flags {
+    unsigned char ready:0;
+    unsigned char mode:9;
+};
+",
+        );
+
+        let rendered = format!("{diagnostics}");
+        assert!(diagnostics.has_errors());
+        assert!(rendered.contains("width must be positive"));
+        assert!(rendered.contains("exceeds its 8-bit storage unit"));
     }
 }
 // SPDX-License-Identifier: GPL-3.0-or-later

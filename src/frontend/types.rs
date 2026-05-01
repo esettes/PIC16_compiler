@@ -3,6 +3,7 @@
 use std::fmt::{Display, Formatter};
 
 pub type StructId = usize;
+pub type UnionId = usize;
 pub const MAX_POINTER_DEPTH: usize = 8;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -52,6 +53,8 @@ pub struct Type {
     pub array_len: Option<usize>,
     pub struct_id: Option<StructId>,
     pub struct_size: usize,
+    pub union_id: Option<UnionId>,
+    pub union_size: usize,
 }
 
 impl Type {
@@ -72,6 +75,8 @@ impl Type {
             array_len: None,
             struct_id: None,
             struct_size: 0,
+            union_id: None,
+            union_size: 0,
         }
     }
 
@@ -92,6 +97,30 @@ impl Type {
             array_len: None,
             struct_id: Some(struct_id),
             struct_size,
+            union_id: None,
+            union_size: 0,
+        }
+    }
+
+    /// Creates an unqualified named union type with fixed packed byte size.
+    pub const fn union_type(union_id: UnionId, union_size: usize) -> Self {
+        Self {
+            scalar: ScalarType::Void,
+            address_space: AddressSpace::Data,
+            qualifiers: Qualifiers {
+                is_const: false,
+                is_volatile: false,
+            },
+            pointer_depth: 0,
+            pointer_qualifiers: [Qualifiers {
+                is_const: false,
+                is_volatile: false,
+            }; MAX_POINTER_DEPTH],
+            array_len: None,
+            struct_id: None,
+            struct_size: 0,
+            union_id: Some(union_id),
+            union_size,
         }
     }
 
@@ -170,18 +199,40 @@ impl Type {
     pub fn is_void(self) -> bool {
         self.scalar == ScalarType::Void
             && self.struct_id.is_none()
+            && self.union_id.is_none()
             && self.pointer_depth == 0
             && self.array_len.is_none()
     }
 
     /// Returns true when this type is a complete struct object type.
     pub fn is_struct(self) -> bool {
-        self.struct_id.is_some() && self.pointer_depth == 0 && self.array_len.is_none()
+        self.struct_id.is_some()
+            && self.union_id.is_none()
+            && self.pointer_depth == 0
+            && self.array_len.is_none()
     }
 
     /// Returns true when this type's base object is a struct.
     pub fn has_struct_base(self) -> bool {
         self.struct_id.is_some()
+    }
+
+    /// Returns true when this type is a complete union object type.
+    pub fn is_union(self) -> bool {
+        self.union_id.is_some()
+            && self.struct_id.is_none()
+            && self.pointer_depth == 0
+            && self.array_len.is_none()
+    }
+
+    /// Returns true when this type's base object is a union.
+    pub fn has_union_base(self) -> bool {
+        self.union_id.is_some()
+    }
+
+    /// Returns true when this type is one aggregate object type.
+    pub fn is_aggregate(self) -> bool {
+        self.is_struct() || self.is_union()
     }
 
     /// Returns true when this type is a constrained Phase 3 data pointer.
@@ -207,7 +258,7 @@ impl Type {
         if self.is_pointer() {
             return self.element_type().is_supported_pointer_target();
         }
-        if self.has_struct_base() {
+        if self.has_struct_base() || self.has_union_base() {
             return false;
         }
         if self.address_space != AddressSpace::Data {
@@ -221,7 +272,11 @@ impl Type {
 
     /// Returns true when this type is an integer scalar value.
     pub fn is_integer(self) -> bool {
-        !self.is_void() && !self.is_pointer() && !self.is_array() && !self.has_struct_base()
+        !self.is_void()
+            && !self.is_pointer()
+            && !self.is_array()
+            && !self.has_struct_base()
+            && !self.has_union_base()
     }
 
     /// Returns true when this type is a scalar value that fits in registers or temps.
@@ -260,6 +315,7 @@ impl Type {
     pub fn is_supported_object_type(self) -> bool {
         self.is_supported_value_type()
             || self.is_struct()
+            || self.is_union()
             || (self.is_array() && self.element_type().is_supported_pointer_target())
     }
 
@@ -278,6 +334,9 @@ impl Type {
         }
         if self.struct_id.is_some() {
             return self.struct_size;
+        }
+        if self.union_id.is_some() {
+            return self.union_size;
         }
         match self.scalar {
             ScalarType::Void => 0,
@@ -301,6 +360,7 @@ impl Type {
         !self.is_void()
             && !self.is_incomplete_array()
             && (self.struct_id.is_none() || self.struct_size > 0)
+            && (self.union_id.is_none() || self.union_size > 0)
     }
 
     /// Returns the qualifiers that apply to the current object itself.
@@ -370,6 +430,8 @@ impl Display for Type {
         }
         let rendered_struct = if let Some(struct_id) = self.struct_id {
             format!("struct#{struct_id}")
+        } else if let Some(union_id) = self.union_id {
+            format!("union#{union_id}")
         } else {
             match self.scalar {
                 ScalarType::Void => "void".to_string(),

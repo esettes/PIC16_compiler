@@ -30,9 +30,18 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 14: richer program-memory data usability on top of Phase 13 explicit ROM objects, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 string/static-data cleanup, Phase 9 `switch` control flow, Phase 8 type-system work, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
+Current implementation is **Phase 15: named `union` support and basic unsigned bitfields on top of Phase 14 richer program-memory data usability, Phase 13 explicit ROM objects, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 string/static-data cleanup, Phase 9 `switch` control flow, Phase 8 type-system work, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
 
-Phase 14 scope:
+Phase 15 scope:
+
+- named `union` declarations for globals, locals, pointers, and nested struct fields
+- union first-field and designated union initializers with whole-storage zero-fill
+- whole-union assignment through the same byte-wise aggregate-copy path used for structs
+- basic unsigned bitfields on `unsigned char` and `unsigned int`
+- packed LSB-first bitfield layout within one storage unit, with real read-modify-write lowering
+- explicit diagnostics for anonymous union fields, invalid bitfield widths/base types, and bitfield address-taking
+
+Phase 14 scope remains:
 
 - direct `rom_table[index]` reads for supported `const __rom` arrays
 - `const __rom char[]`, `const __rom unsigned char[]`, `const __rom int[]`, and `const __rom unsigned int[]`
@@ -105,9 +114,12 @@ What changed from Phase 3:
 - Phase 10 adds string literal parsing, RAM-backed const/static initialization cleanup, and clearer startup data artifacts
 - Phase 11 adds nested aggregate layout/init support, designated initializers, and byte-wise whole-struct copy
 - Phase 12 adds nested data pointers, const-qualified pointer forms, pointer compare/subtract, and RAM-backed string-literal pointer initialization
-- Phase 13 adds explicit `__rom` byte arrays, RETLW-backed ROM tables, `__rom_read8()`, and separate ROM map/listing output
+- Phase 13 introduces explicit `__rom` ROM arrays, RETLW-backed ROM tables, `__rom_read8()`, and separate ROM map/listing output
 - Phase 14 adds direct ROM indexing, 16-bit ROM tables, `__rom_read16()`, constant-index inline ROM reads, and constant-only ISR ROM access
+- Phase 15 adds named unions, union initializers/copy, and basic unsigned bitfield layout/read/write lowering
 - active docs now describe stack-first behavior; old Phase 2/3 docs remain historical
+
+Historical milestone snapshots below describe what each phase introduced at the time. The current supported subset is summarized later under `Supported Subset`, `Current constraints`, and `Current Limits`.
 
 ## Phase 4 ABI Summary
 
@@ -131,30 +143,30 @@ Frame layout with `FP` at callee argument base:
 
 More detail:
 
-- [DESIGN.md](/home/settes/cursus/PIC16_compiler/DESIGN.md:1)
-- [docs/backend/overview.md](/home/settes/cursus/PIC16_compiler/docs/backend/overview.md:1)
-- [docs/backend/phase4-stack-first-abi.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-first-abi.md:1)
-- [docs/backend/phase4-stack-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-model.md:1)
-- [docs/backend/phase5-helper-calling.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase5-helper-calling.md:1)
-- [docs/backend/phase6-interrupts.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase6-interrupts.md:1)
-- [docs/ir/phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
-- [docs/ir/phase5-arithmetic-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase5-arithmetic-lowering.md:1)
-- [docs/ir/phase6-isr-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase6-isr-lowering.md:1)
-- [docs/ir/phase8-aggregate-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase8-aggregate-lowering.md:1)
-- [docs/ir/phase9-switch-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase9-switch-lowering.md:1)
-- [docs/ir/phase10-static-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase10-static-initializers.md:1)
-- [docs/ir/phase11-aggregate-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase11-aggregate-initializers.md:1)
-- [docs/frontend/phase6-isr-syntax.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase6-isr-syntax.md:1)
-- [docs/frontend/phase8-types.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase8-types.md:1)
-- [docs/frontend/phase9-switch.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase9-switch.md:1)
-- [docs/frontend/phase10-string-literals.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase10-string-literals.md:1)
-- [docs/frontend/phase11-aggregates.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase11-aggregates.md:1)
-- [docs/backend/phase8-struct-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase8-struct-layout.md:1)
-- [docs/backend/phase9-switch-codegen.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase9-switch-codegen.md:1)
-- [docs/backend/phase10-data-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase10-data-layout.md:1)
-- [docs/backend/phase11-aggregate-copy.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase11-aggregate-copy.md:1)
-- [docs/runtime/phase5-arithmetic-helpers.md](/home/settes/cursus/PIC16_compiler/docs/runtime/phase5-arithmetic-helpers.md:1)
-- [docs/migration/phase3-to-phase4-abi.md](/home/settes/cursus/PIC16_compiler/docs/migration/phase3-to-phase4-abi.md:1)
+- [DESIGN.md](DESIGN.md)
+- [docs/backend/overview.md](docs/backend/overview.md)
+- [docs/backend/phase4-stack-first-abi.md](docs/backend/phase4-stack-first-abi.md)
+- [docs/backend/phase4-stack-model.md](docs/backend/phase4-stack-model.md)
+- [docs/backend/phase5-helper-calling.md](docs/backend/phase5-helper-calling.md)
+- [docs/backend/phase6-interrupts.md](docs/backend/phase6-interrupts.md)
+- [docs/ir/phase4-call-lowering.md](docs/ir/phase4-call-lowering.md)
+- [docs/ir/phase5-arithmetic-lowering.md](docs/ir/phase5-arithmetic-lowering.md)
+- [docs/ir/phase6-isr-lowering.md](docs/ir/phase6-isr-lowering.md)
+- [docs/ir/phase8-aggregate-lowering.md](docs/ir/phase8-aggregate-lowering.md)
+- [docs/ir/phase9-switch-lowering.md](docs/ir/phase9-switch-lowering.md)
+- [docs/ir/phase10-static-initializers.md](docs/ir/phase10-static-initializers.md)
+- [docs/ir/phase11-aggregate-initializers.md](docs/ir/phase11-aggregate-initializers.md)
+- [docs/frontend/phase6-isr-syntax.md](docs/frontend/phase6-isr-syntax.md)
+- [docs/frontend/phase8-types.md](docs/frontend/phase8-types.md)
+- [docs/frontend/phase9-switch.md](docs/frontend/phase9-switch.md)
+- [docs/frontend/phase10-string-literals.md](docs/frontend/phase10-string-literals.md)
+- [docs/frontend/phase11-aggregates.md](docs/frontend/phase11-aggregates.md)
+- [docs/backend/phase8-struct-layout.md](docs/backend/phase8-struct-layout.md)
+- [docs/backend/phase9-switch-codegen.md](docs/backend/phase9-switch-codegen.md)
+- [docs/backend/phase10-data-layout.md](docs/backend/phase10-data-layout.md)
+- [docs/backend/phase11-aggregate-copy.md](docs/backend/phase11-aggregate-copy.md)
+- [docs/runtime/phase5-arithmetic-helpers.md](docs/runtime/phase5-arithmetic-helpers.md)
+- [docs/migration/phase3-to-phase4-abi.md](docs/migration/phase3-to-phase4-abi.md)
 
 ## Phase 5 Arithmetic Summary
 
@@ -391,7 +403,7 @@ Diagnostics:
 - unsupported pointer subtraction element sizes
 - incompatible string-literal pointer targets
 
-## Phase 14 ROM Summary
+## Historical Phase 14 ROM Summary
 
 Supported:
 
@@ -432,7 +444,8 @@ Supported:
 - static locals
 - file-scope `typedef` aliases for supported object/value types
 - `enum` declarations and enumerator constants
-- named packed `struct` declarations with nested struct and one-dimensional array fields
+- named packed `struct` declarations with nested struct, named union, one-dimensional array, and basic unsigned bitfield fields
+- named packed `union` declarations with supported scalar, pointer, array, struct, or union members
 - file-scope `const __rom char[]`, `const __rom unsigned char[]`, `const __rom int[]`, and `const __rom unsigned int[]`
 - `if` / `else`
 - `while`
@@ -443,16 +456,18 @@ Supported:
 - `return`
 - direct calls
 - `char`, `unsigned char`, `int`, `unsigned int`, `void`
-- fixed-size one-dimensional arrays of supported scalar types and complete named struct types
+- fixed-size one-dimensional arrays of supported scalar types and complete named struct/union types
 - omitted array size when inferred from a brace initializer list or string literal
-- complete named struct objects with scalar, one-dimensional array, nested struct, or supported pointer fields
-- `const` scalar, one-dimensional array, and complete named struct objects
-- nested data-space pointers to supported scalar, pointer, or complete named struct types in PIC16 RAM
+- complete named struct objects with scalar, one-dimensional array, nested struct, named union, bitfield, or supported pointer fields
+- complete named union objects with supported scalar, pointer, array, struct, or union fields
+- `const` scalar, one-dimensional array, and complete named struct/union objects
+- nested data-space pointers to supported scalar, pointer, or complete named struct/union types in PIC16 RAM
 - `&obj`
 - `*ptr`
 - `a[i]`
 - `p[i]`
 - `.` and `->`
+- basic unsigned bitfield member access and assignment
 - unary `!`, `~`, unary `-`
 - `+`, `-`, `*`, `/`, `%`, `<<`, `>>`, `&`, `|`, `^`
 - `==`, `!=`, `<`, `<=`, `>`, `>=`
@@ -460,11 +475,11 @@ Supported:
 - direct `rom_table[index]` reads for supported ROM arrays
 - `__rom_read8(table, index)` for program-memory byte arrays
 - `__rom_read16(table, index)` for program-memory 16-bit arrays
-- positional and designated array/struct initializer lists with zero-fill
+- positional and designated array/struct/union initializer lists with zero-fill
 - nested aggregate initializer lists
 - string literal initialization for char/unsigned-char array fields and char/unsigned-char array fields inside structs
 - RAM-backed string literal initialization of `char *` and `const char *`
-- whole-struct assignment between compatible complete struct types
+- whole-struct and whole-union assignment between compatible complete types
 - explicit casts for supported scalar and data-pointer forms
 - indirect data access through `FSR/INDF`
 - 3+ argument stack calls
@@ -479,7 +494,9 @@ Partially supported / constrained:
 - `typedef` names are file-scope only and cannot conflict with object/function names
 - enums use fixed 16-bit `int` representation in this phase
 - structs use packed declaration-order layout with no implicit padding
-- struct copy lowers byte-by-byte through ordinary indirect memory operations
+- unions use packed max-field-size layout with every field at byte offset `0`
+- struct/union copy lowers byte-by-byte through ordinary indirect memory operations
+- bitfields are limited to `unsigned char` and `unsigned int`, pack LSB-first within one storage unit, and reject address-taking
 - designated initializers support only single-step `.field` and `[index]` forms; chained designators are still deferred
 - global aggregate initializer elements must be constant expressions
 - explicit casts are limited to scalar conversions, data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
@@ -490,19 +507,19 @@ Partially supported / constrained:
 - nested pointer qualifier conversions are intentionally conservative: exact nested qualifiers are required beyond one-level `T *` to `const T *`
 - pointer subtraction assumes the compared pointers refer into the same object, matching ordinary C same-object expectations
 - pointer subtraction supports only element sizes of 1 or 2 bytes in this phase
-- local aggregate initializers and whole-struct copies remain rejected inside interrupt handlers
+- local aggregate initializers and whole-aggregate copies remain rejected inside interrupt handlers
 - ROM objects are limited to file-scope 8-bit/16-bit integer arrays whose byte payload fits one 255-byte RETLW table page
 - switch lowering uses linear compare chains; no jump tables are emitted in this phase
 - case/default labels must stay in the switch body flow or nested blocks; labels under unrelated control statements like `if`, `while`, or `for` are rejected in phase 9
 
 Unsupported:
 
-- `union`
 - source-level function pointers
 - multidimensional arrays
-- anonymous nested struct/enum fields without declarators
+- anonymous nested struct/union/enum fields without declarators
+- signed bitfields
 - chained designators such as `.outer.inner = 1`
-- pointers to incomplete struct types
+- pointers to incomplete struct/union types
 - program-memory / code-space pointers
 - `float`
 - recursion
@@ -513,7 +530,7 @@ Current constraints:
 - returning a pointer to stack-local storage is rejected, including direct forms and obvious local alias chains
 - explicit casts stay limited to scalar conversions, data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
 - aggregate initializers inside interrupt handlers remain rejected
-- whole-struct copy inside interrupt handlers remains rejected
+- whole-aggregate copy inside interrupt handlers remains rejected
 - global aggregate initializer elements must be constant expressions
 - string literal array initializers are accepted only for `char` / `unsigned char` arrays, and explicit array sizes must fit the trailing null byte too
 - string literals that initialize pointers become anonymous RAM-backed static objects; map output groups them under string literals
@@ -523,6 +540,9 @@ Current constraints:
 - implicit nested-pointer qualifier changes beyond `T *` to `const T *` are rejected conservatively
 - pointer subtraction is limited to compatible pointer types whose element size is 1 or 2 bytes
 - ROM reads use direct indexing plus `__rom_read8()` / `__rom_read16()` only; general ROM address values and ROM pointers are still unsupported
+- unions are named only; anonymous union fields remain deferred
+- bitfields support only unsigned base types, pack LSB-first within one storage unit, and reject `&field`
+- ROM unions and ROM bitfield objects are still unsupported
 - switch expressions must stay in the supported integer subset; case labels must be constant and representable
 - switch inside ISR is allowed only when the controlling expression and body remain inline-safe under existing Phase 6 helper restrictions
 - reads from global/static/const RAM objects are allowed inside ISR when the resulting expressions stay inline-safe
@@ -531,7 +551,7 @@ Current constraints:
 - ISR code cannot call normal functions or Phase 5 runtime helpers
 - no emulator or hardware execution runs in CI; validation is compile/listing/map/HEX shape based
 
-## Known Limitations (Phase 14)
+## Known Limitations (Historical Phase 14 Snapshot)
 
 - recursion is unsupported
 - no runtime software-stack overflow detection is implemented
@@ -542,7 +562,7 @@ Current constraints:
 - only explicit `const __rom` arrays use program memory; there is still no general ROM pointer or code-space string-pointer model
 - implicit nested-pointer qualifier conversions stay conservative beyond one-level `T *` to `const T *`
 - enums stay fixed to 16-bit `int`; structs stay packed with no padding
-- `union` and `float` are unsupported
+- `union` and `float` were still unsupported in that Phase 14 snapshot
 - source-level function pointers are unsupported
 - dynamic division/modulo by zero returns `0` (constant zero divisors are diagnostics)
 - pointers are data-space only; code pointers are unsupported
@@ -713,93 +733,101 @@ picc --list-targets
 
 ## Examples
 
-- [examples/pic16f628a/blink.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/blink.c:1)
-- [examples/pic16f628a/arith16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/arith16.c:1)
-- [examples/pic16f628a/array_fill.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/array_fill.c:1)
-- [examples/pic16f628a/array_initializer.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/array_initializer.c:1)
-- [examples/pic16f628a/casts.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/casts.c:1)
-- [examples/pic16f628a/pointer_to_pointer.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/pointer_to_pointer.c:1)
-- [examples/pic16f628a/rom_index.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/rom_index.c:1)
-- [examples/pic16f628a/rom_table.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/rom_table.c:1)
-- [examples/pic16f628a/stack_abi.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/stack_abi.c:1)
-- [examples/pic16f628a/string_array.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/string_array.c:1)
-- [examples/pic16f628a/struct_array_field.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/struct_array_field.c:1)
-- [examples/pic16f628a/struct_initializer.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/struct_initializer.c:1)
-- [examples/pic16f628a/struct_point.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/struct_point.c:1)
-- [examples/pic16f628a/switch_state.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/switch_state.c:1)
-- [examples/pic16f628a/typedef_enum.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/typedef_enum.c:1)
-- [examples/pic16f877a/blink.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/blink.c:1)
-- [examples/pic16f877a/call_chain.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/call_chain.c:1)
-- [examples/pic16f877a/compare16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/compare16.c:1)
-- [examples/pic16f877a/const_pointers.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/const_pointers.c:1)
-- [examples/pic16f877a/config_table.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/config_table.c:1)
-- [examples/pic16f877a/div16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/div16.c:1)
-- [examples/pic16f877a/designated_init.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/designated_init.c:1)
-- [examples/pic16f877a/expression_test.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/expression_test.c:1)
-- [examples/pic16f877a/const_config.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/const_config.c:1)
-- [examples/pic16f877a/global_init.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/global_init.c:1)
-- [examples/pic16f877a/mod16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/mod16.c:1)
-- [examples/pic16f877a/mul16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/mul16.c:1)
-- [examples/pic16f877a/nested_struct.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/nested_struct.c:1)
-- [examples/pic16f877a/pointer16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/pointer16.c:1)
-- [examples/pic16f877a/pointer_compare.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/pointer_compare.c:1)
-- [examples/pic16f877a/pointer_subtract.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/pointer_subtract.c:1)
-- [examples/pic16f877a/rom_lookup_direct.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/rom_lookup_direct.c:1)
-- [examples/pic16f877a/rom_lookup.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/rom_lookup.c:1)
-- [examples/pic16f877a/rom_string.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/rom_string.c:1)
-- [examples/pic16f877a/rom_string_index.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/rom_string_index.c:1)
-- [examples/pic16f877a/rom_table16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/rom_table16.c:1)
-- [examples/pic16f877a/shift_mix.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/shift_mix.c:1)
-- [examples/pic16f877a/static_table.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/static_table.c:1)
-- [examples/pic16f877a/struct_copy.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/struct_copy.c:1)
-- [examples/pic16f877a/string_pointer.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/string_pointer.c:1)
-- [examples/pic16f877a/switch_enum.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/switch_enum.c:1)
-- [examples/pic16f877a/switch_fallthrough.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/switch_fallthrough.c:1)
-- [examples/pic16f628a/timer_interrupt.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/timer_interrupt.c:1)
-- [examples/pic16f877a/timer_interrupt.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/timer_interrupt.c:1)
-- [examples/pic16f877a/gpio_interrupt.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/gpio_interrupt.c:1)
+- [examples/pic16f628a/blink.c](examples/pic16f628a/blink.c)
+- [examples/pic16f628a/arith16.c](examples/pic16f628a/arith16.c)
+- [examples/pic16f628a/array_fill.c](examples/pic16f628a/array_fill.c)
+- [examples/pic16f628a/array_initializer.c](examples/pic16f628a/array_initializer.c)
+- [examples/pic16f628a/casts.c](examples/pic16f628a/casts.c)
+- [examples/pic16f628a/pointer_to_pointer.c](examples/pic16f628a/pointer_to_pointer.c)
+- [examples/pic16f628a/rom_index.c](examples/pic16f628a/rom_index.c)
+- [examples/pic16f628a/rom_table.c](examples/pic16f628a/rom_table.c)
+- [examples/pic16f628a/stack_abi.c](examples/pic16f628a/stack_abi.c)
+- [examples/pic16f628a/string_array.c](examples/pic16f628a/string_array.c)
+- [examples/pic16f628a/struct_array_field.c](examples/pic16f628a/struct_array_field.c)
+- [examples/pic16f628a/struct_initializer.c](examples/pic16f628a/struct_initializer.c)
+- [examples/pic16f628a/struct_point.c](examples/pic16f628a/struct_point.c)
+- [examples/pic16f628a/switch_state.c](examples/pic16f628a/switch_state.c)
+- [examples/pic16f628a/typedef_enum.c](examples/pic16f628a/typedef_enum.c)
+- [examples/pic16f628a/union_basic.c](examples/pic16f628a/union_basic.c)
+- [examples/pic16f877a/blink.c](examples/pic16f877a/blink.c)
+- [examples/pic16f877a/call_chain.c](examples/pic16f877a/call_chain.c)
+- [examples/pic16f877a/compare16.c](examples/pic16f877a/compare16.c)
+- [examples/pic16f877a/const_pointers.c](examples/pic16f877a/const_pointers.c)
+- [examples/pic16f877a/config_table.c](examples/pic16f877a/config_table.c)
+- [examples/pic16f877a/div16.c](examples/pic16f877a/div16.c)
+- [examples/pic16f877a/designated_init.c](examples/pic16f877a/designated_init.c)
+- [examples/pic16f877a/expression_test.c](examples/pic16f877a/expression_test.c)
+- [examples/pic16f877a/bitfield_flags.c](examples/pic16f877a/bitfield_flags.c)
+- [examples/pic16f877a/bitfield_register_like.c](examples/pic16f877a/bitfield_register_like.c)
+- [examples/pic16f877a/const_config.c](examples/pic16f877a/const_config.c)
+- [examples/pic16f877a/global_init.c](examples/pic16f877a/global_init.c)
+- [examples/pic16f877a/mod16.c](examples/pic16f877a/mod16.c)
+- [examples/pic16f877a/mul16.c](examples/pic16f877a/mul16.c)
+- [examples/pic16f877a/nested_struct.c](examples/pic16f877a/nested_struct.c)
+- [examples/pic16f877a/pointer16.c](examples/pic16f877a/pointer16.c)
+- [examples/pic16f877a/pointer_compare.c](examples/pic16f877a/pointer_compare.c)
+- [examples/pic16f877a/pointer_subtract.c](examples/pic16f877a/pointer_subtract.c)
+- [examples/pic16f877a/rom_lookup_direct.c](examples/pic16f877a/rom_lookup_direct.c)
+- [examples/pic16f877a/rom_lookup.c](examples/pic16f877a/rom_lookup.c)
+- [examples/pic16f877a/rom_string.c](examples/pic16f877a/rom_string.c)
+- [examples/pic16f877a/rom_string_index.c](examples/pic16f877a/rom_string_index.c)
+- [examples/pic16f877a/rom_table16.c](examples/pic16f877a/rom_table16.c)
+- [examples/pic16f877a/shift_mix.c](examples/pic16f877a/shift_mix.c)
+- [examples/pic16f877a/static_table.c](examples/pic16f877a/static_table.c)
+- [examples/pic16f877a/struct_copy.c](examples/pic16f877a/struct_copy.c)
+- [examples/pic16f877a/string_pointer.c](examples/pic16f877a/string_pointer.c)
+- [examples/pic16f877a/switch_enum.c](examples/pic16f877a/switch_enum.c)
+- [examples/pic16f877a/switch_fallthrough.c](examples/pic16f877a/switch_fallthrough.c)
+- [examples/pic16f877a/union_initializer.c](examples/pic16f877a/union_initializer.c)
+- [examples/pic16f877a/union_struct_nested.c](examples/pic16f877a/union_struct_nested.c)
+- [examples/pic16f628a/timer_interrupt.c](examples/pic16f628a/timer_interrupt.c)
+- [examples/pic16f877a/timer_interrupt.c](examples/pic16f877a/timer_interrupt.c)
+- [examples/pic16f877a/gpio_interrupt.c](examples/pic16f877a/gpio_interrupt.c)
 
 ## Documentation
 
-- [DESIGN.md](/home/settes/cursus/PIC16_compiler/DESIGN.md:1)
-- [CONTRIBUTING.md](/home/settes/cursus/PIC16_compiler/CONTRIBUTING.md:1)
-- [docs/architecture/overview.md](/home/settes/cursus/PIC16_compiler/docs/architecture/overview.md:1)
-- [docs/backend/overview.md](/home/settes/cursus/PIC16_compiler/docs/backend/overview.md:1)
-- [docs/backend/optimization.md](/home/settes/cursus/PIC16_compiler/docs/backend/optimization.md:1)
-- [docs/backend/phase4-stack-first-abi.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-first-abi.md:1)
-- [docs/backend/phase4-stack-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-model.md:1)
-- [docs/backend/phase10-data-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase10-data-layout.md:1)
-- [docs/backend/phase11-aggregate-copy.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase11-aggregate-copy.md:1)
-- [docs/backend/phase12-string-pointer-data.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase12-string-pointer-data.md:1)
-- [docs/backend/phase13-rom-data-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase13-rom-data-layout.md:1)
-- [docs/backend/phase14-retlw-tables.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase14-retlw-tables.md:1)
-- [docs/backend/phase9-switch-codegen.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase9-switch-codegen.md:1)
-- [docs/ir/phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
-- [docs/backend/phase5-helper-calling.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase5-helper-calling.md:1)
-- [docs/ir/phase5-arithmetic-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase5-arithmetic-lowering.md:1)
-- [docs/ir/phase10-static-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase10-static-initializers.md:1)
-- [docs/ir/phase11-aggregate-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase11-aggregate-initializers.md:1)
-- [docs/ir/phase12-pointer-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase12-pointer-lowering.md:1)
-- [docs/ir/phase13-rom-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase13-rom-lowering.md:1)
-- [docs/ir/phase14-rom-read-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase14-rom-read-lowering.md:1)
-- [docs/ir/phase9-switch-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase9-switch-lowering.md:1)
-- [docs/frontend/phase10-string-literals.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase10-string-literals.md:1)
-- [docs/frontend/phase11-aggregates.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase11-aggregates.md:1)
-- [docs/frontend/phase12-pointers.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase12-pointers.md:1)
-- [docs/frontend/phase13-rom-address-space.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase13-rom-address-space.md:1)
-- [docs/frontend/phase14-rom-indexing.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase14-rom-indexing.md:1)
-- [docs/frontend/phase9-switch.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase9-switch.md:1)
-- [docs/runtime/phase5-arithmetic-helpers.md](/home/settes/cursus/PIC16_compiler/docs/runtime/phase5-arithmetic-helpers.md:1)
-- [docs/migration/phase3-to-phase4-abi.md](/home/settes/cursus/PIC16_compiler/docs/migration/phase3-to-phase4-abi.md:1)
-- [docs/developer-guide/adding-device.md](/home/settes/cursus/PIC16_compiler/docs/developer-guide/adding-device.md:1)
+- [DESIGN.md](DESIGN.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [docs/architecture/overview.md](docs/architecture/overview.md)
+- [docs/backend/overview.md](docs/backend/overview.md)
+- [docs/backend/optimization.md](docs/backend/optimization.md)
+- [docs/backend/phase4-stack-first-abi.md](docs/backend/phase4-stack-first-abi.md)
+- [docs/backend/phase4-stack-model.md](docs/backend/phase4-stack-model.md)
+- [docs/backend/phase10-data-layout.md](docs/backend/phase10-data-layout.md)
+- [docs/backend/phase11-aggregate-copy.md](docs/backend/phase11-aggregate-copy.md)
+- [docs/backend/phase12-string-pointer-data.md](docs/backend/phase12-string-pointer-data.md)
+- [docs/backend/phase13-rom-data-layout.md](docs/backend/phase13-rom-data-layout.md)
+- [docs/backend/phase14-retlw-tables.md](docs/backend/phase14-retlw-tables.md)
+- [docs/backend/phase15-bitfield-codegen.md](docs/backend/phase15-bitfield-codegen.md)
+- [docs/backend/phase9-switch-codegen.md](docs/backend/phase9-switch-codegen.md)
+- [docs/ir/phase4-call-lowering.md](docs/ir/phase4-call-lowering.md)
+- [docs/backend/phase5-helper-calling.md](docs/backend/phase5-helper-calling.md)
+- [docs/ir/phase5-arithmetic-lowering.md](docs/ir/phase5-arithmetic-lowering.md)
+- [docs/ir/phase10-static-initializers.md](docs/ir/phase10-static-initializers.md)
+- [docs/ir/phase11-aggregate-initializers.md](docs/ir/phase11-aggregate-initializers.md)
+- [docs/ir/phase12-pointer-lowering.md](docs/ir/phase12-pointer-lowering.md)
+- [docs/ir/phase13-rom-lowering.md](docs/ir/phase13-rom-lowering.md)
+- [docs/ir/phase14-rom-read-lowering.md](docs/ir/phase14-rom-read-lowering.md)
+- [docs/ir/phase15-aggregate-lowering.md](docs/ir/phase15-aggregate-lowering.md)
+- [docs/ir/phase9-switch-lowering.md](docs/ir/phase9-switch-lowering.md)
+- [docs/frontend/phase10-string-literals.md](docs/frontend/phase10-string-literals.md)
+- [docs/frontend/phase11-aggregates.md](docs/frontend/phase11-aggregates.md)
+- [docs/frontend/phase12-pointers.md](docs/frontend/phase12-pointers.md)
+- [docs/frontend/phase13-rom-address-space.md](docs/frontend/phase13-rom-address-space.md)
+- [docs/frontend/phase14-rom-indexing.md](docs/frontend/phase14-rom-indexing.md)
+- [docs/frontend/phase15-union-bitfields.md](docs/frontend/phase15-union-bitfields.md)
+- [docs/frontend/phase9-switch.md](docs/frontend/phase9-switch.md)
+- [docs/runtime/phase5-arithmetic-helpers.md](docs/runtime/phase5-arithmetic-helpers.md)
+- [docs/migration/phase3-to-phase4-abi.md](docs/migration/phase3-to-phase4-abi.md)
+- [docs/developer-guide/adding-device.md](docs/developer-guide/adding-device.md)
 
 ## License
 
 - compiler source, tests, docs, examples, and scripts: `GPL-3.0-or-later`
 - public headers and runtime material intended for compiled firmware: `GPL-3.0-or-later WITH GCC-exception-3.1`
-- [COPYING](/home/settes/cursus/PIC16_compiler/COPYING:1) contains the full GNU GPLv3 text
-- [COPYING.RUNTIME](/home/settes/cursus/PIC16_compiler/COPYING.RUNTIME:1) contains the GCC Runtime Library Exception 3.1 text
+- [COPYING](COPYING) contains the full GNU GPLv3 text
+- [COPYING.RUNTIME](COPYING.RUNTIME) contains the GCC Runtime Library Exception 3.1 text
 
 ## Current Limits
 
-Phase 14 adds direct ROM indexing, 16-bit ROM tables, `__rom_read16()`, inline constant-index ROM reads, and stronger ROM map/listing output. Current hard limits remain: no general ROM pointer model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no `union`, no multidimensional arrays, no anonymous nested aggregate fields, no chained designators, no incomplete-struct pointers, no function pointers, no `float`, and no recursion.
+Phase 15 adds named unions, union initialization/copy, and basic unsigned bitfield lowering. Current hard limits remain: no general ROM pointer model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional arrays, no chained designators, no incomplete-struct/union pointers, no function pointers, no `float`, and no recursion.

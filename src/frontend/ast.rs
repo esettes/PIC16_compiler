@@ -4,12 +4,13 @@ use std::fmt::Write;
 
 use crate::common::source::Span;
 
-use super::types::{StorageClass, StructId, Type};
+use super::types::{StorageClass, StructId, Type, UnionId};
 
 #[derive(Clone, Debug)]
 pub struct TranslationUnit {
     pub items: Vec<Item>,
     pub struct_defs: Vec<StructDef>,
+    pub union_defs: Vec<UnionDef>,
     pub enum_constants: Vec<EnumConstant>,
 }
 
@@ -27,6 +28,17 @@ pub struct StructField {
     pub name: String,
     pub ty: Type,
     pub offset: usize,
+    pub bit_offset: u8,
+    pub bit_width: Option<u8>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct UnionDef {
+    pub id: UnionId,
+    pub name: String,
+    pub fields: Vec<StructField>,
+    pub size: usize,
     pub span: Span,
 }
 
@@ -220,7 +232,20 @@ impl TranslationUnit {
                 def.size,
                 def.fields
                     .iter()
-                    .map(|field| format!("{}:{}@{}", field.name, field.ty, field.offset))
+                    .map(render_field)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        for def in &self.union_defs {
+            let _ = writeln!(
+                output,
+                "union {} size={} fields={}",
+                def.name,
+                def.size,
+                def.fields
+                    .iter()
+                    .map(render_field)
                     .collect::<Vec<_>>()
                     .join(", ")
             );
@@ -254,6 +279,17 @@ impl TranslationUnit {
             }
         }
         output
+    }
+}
+
+fn render_field(field: &StructField) -> String {
+    if let Some(width) = field.bit_width {
+        format!(
+            "{}:{}@{}.{}:{}",
+            field.name, field.ty, field.offset, field.bit_offset, width
+        )
+    } else {
+        format!("{}:{}@{}", field.name, field.ty, field.offset)
     }
 }
 

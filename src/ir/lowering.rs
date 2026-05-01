@@ -421,6 +421,11 @@ impl FunctionBuilder {
                 self.emit(IrInstr::LoadIndirect { dst, ptr });
                 Operand::Temp(dst)
             }
+            TypedExprKind::BitField {
+                storage,
+                bit_offset,
+                bit_width,
+            } => self.lower_bitfield_read(storage, *bit_offset, *bit_width, expr.ty),
             TypedExprKind::Binary { op, lhs, rhs } => {
                 if is_boolean_like(*op) {
                     return self.lower_boolean_to_value(expr);
@@ -450,6 +455,19 @@ impl FunctionBuilder {
                             value: value_operand,
                             ty: target.ty,
                         });
+                    }
+                    TypedExprKind::BitField {
+                        storage,
+                        bit_offset,
+                        bit_width,
+                    } => {
+                        return self.lower_bitfield_assign(
+                            storage,
+                            *bit_offset,
+                            *bit_width,
+                            target.ty,
+                            value_operand,
+                        );
                     }
                     _ => unreachable!("semantic only lowers assignable places here"),
                 }
@@ -539,6 +557,118 @@ impl FunctionBuilder {
             }
             _ => unreachable!("semantic only forms addressable lvalues here"),
         }
+    }
+
+    /// Lowers one bitfield read into load/mask/shift operations over the storage unit.
+    fn lower_bitfield_read(
+        &mut self,
+        storage: &TypedExpr,
+        bit_offset: u8,
+        bit_width: u8,
+        result_ty: Type,
+    ) -> Operand {
+        let ptr = self.lower_lvalue_address(storage);
+        let loaded = self.new_temp(storage.ty);
+        self.emit(IrInstr::LoadIndirect { dst: loaded, ptr });
+        let mut value = Operand::Temp(loaded);
+
+        if bit_offset != 0 {
+            let shifted = self.new_temp(result_ty);
+            self.emit(IrInstr::Binary {
+                dst: shifted,
+                op: BinaryOp::ShiftRight,
+                lhs: value,
+                rhs: Operand::Constant(i64::from(bit_offset)),
+            });
+            value = Operand::Temp(shifted);
+        }
+
+        let raw_mask = bitfield_raw_mask(bit_width, result_ty);
+        if raw_mask != result_ty.mask() {
+            let masked = self.new_temp(result_ty);
+            self.emit(IrInstr::Binary {
+                dst: masked,
+                op: BinaryOp::BitAnd,
+                lhs: value,
+                rhs: Operand::Constant(raw_mask),
+            });
+            value = Operand::Temp(masked);
+        }
+
+        value
+    }
+
+    /// Lowers one bitfield assignment into a read-modify-write sequence on the storage unit.
+    fn lower_bitfield_assign(
+        &mut self,
+        storage: &TypedExpr,
+        bit_offset: u8,
+        bit_width: u8,
+        storage_ty: Type,
+        value_operand: Operand,
+    ) -> Operand {
+        let ptr = self.lower_lvalue_address(storage);
+        let old = self.new_temp(storage_ty);
+        self.emit(IrInstr::LoadIndirect { dst: old, ptr });
+
+        let raw_mask = bitfield_raw_mask(bit_width, storage_ty);
+        let shifted_mask = normalize_constant(raw_mask << bit_offset, storage_ty);
+
+        let masked_value = if raw_mask == storage_ty.mask() {
+            value_operand
+        } else {
+            let masked = self.new_temp(storage_ty);
+            self.emit(IrInstr::Binary {
+                dst: masked,
+                op: BinaryOp::BitAnd,
+                lhs: value_operand,
+                rhs: Operand::Constant(raw_mask),
+            });
+            Operand::Temp(masked)
+        };
+
+        let result_value = masked_value;
+        let shifted_value = if bit_offset == 0 {
+            result_value
+        } else {
+            let shifted = self.new_temp(storage_ty);
+            self.emit(IrInstr::Binary {
+                dst: shifted,
+                op: BinaryOp::ShiftLeft,
+                lhs: result_value,
+                rhs: Operand::Constant(i64::from(bit_offset)),
+            });
+            Operand::Temp(shifted)
+        };
+
+        let new_value = if shifted_mask == storage_ty.mask() {
+            shifted_value
+        } else {
+            let cleared = self.new_temp(storage_ty);
+            self.emit(IrInstr::Binary {
+                dst: cleared,
+                op: BinaryOp::BitAnd,
+                lhs: Operand::Temp(old),
+                rhs: Operand::Constant(normalize_constant(!shifted_mask, storage_ty)),
+            });
+            let merged = self.new_temp(storage_ty);
+            self.emit(IrInstr::Binary {
+                dst: merged,
+                op: BinaryOp::BitOr,
+                lhs: Operand::Temp(cleared),
+                rhs: shifted_value,
+            });
+            Operand::Temp(merged)
+        };
+
+        let store_ptr = self.lower_lvalue_address(storage);
+        self.emit(IrInstr::StoreIndirect {
+            ptr: store_ptr,
+            value: new_value,
+            ty: storage_ty,
+        });
+
+        result_value
     }
 
     /// Emits raw byte-pointer arithmetic used for aggregate copies.
@@ -697,6 +827,18 @@ fn is_comparison(op: BinaryOp) -> bool {
             | BinaryOp::Greater
             | BinaryOp::GreaterEqual
     )
+}
+
+fn normalize_constant(value: i64, ty: Type) -> i64 {
+    value & ty.mask()
+}
+
+fn bitfield_raw_mask(bit_width: u8, ty: Type) -> i64 {
+    if bit_width as usize >= ty.bit_width() {
+        ty.mask()
+    } else {
+        ((1_i64 << bit_width) - 1) & ty.mask()
+    }
 }
 
 #[cfg(test)]

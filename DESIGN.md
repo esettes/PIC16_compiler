@@ -178,41 +178,44 @@ Supported:
 - `void`, `char`, `unsigned char`, `int`, `unsigned int`
 - functions
 - globals, locals, static locals
-- `const` scalar, one-dimensional array, and complete named struct objects
-- file-scope `const __rom char[]` and `const __rom unsigned char[]`
+- `const` scalar, one-dimensional array, and complete named struct/union objects
+- file-scope `const __rom char[]`, `const __rom unsigned char[]`, `const __rom int[]`, and `const __rom unsigned int[]`
 - file-scope `typedef` aliases for supported object/value types
 - `enum` declarations and enumerator constants
-- named packed `struct` declarations with nested struct and one-dimensional array fields
-- fixed-size one-dimensional arrays of supported scalar types and complete named struct types
+- named packed `struct` declarations with nested struct, named union, one-dimensional array, and basic unsigned bitfield fields
+- named packed `union` declarations with supported scalar, pointer, array, struct, or union fields
+- fixed-size one-dimensional arrays of supported scalar types and complete named struct/union types
 - omitted array size when inferred from a brace initializer list or string literal
-- complete named struct objects with scalar, one-dimensional array, nested struct, or supported pointer fields
-- nested data-space pointers to supported scalar, pointer, or complete named struct types
+- complete named struct objects with scalar, one-dimensional array, nested struct, named union, bitfield, or supported pointer fields
+- complete named union objects with supported scalar, pointer, array, struct, or union fields
+- nested data-space pointers to supported scalar, pointer, or complete named struct/union types
 - `if/else`, `while`, `for`, `do while`, `switch/case/default`, `break`, `continue`, `return`
 - direct calls
 - `&obj`, `*ptr`, `a[i]`, `p[i]`
 - `.` and `->`
+- basic unsigned bitfield member access and assignment
 - `==`, `!=`, `<`, `<=`, `>`, `>=`
 - `+`, `-`, `*`, `/`, `%`, `<<`, `>>`, `&`, `|`, `^`, `!`, `~`
 - compile-time `sizeof`
-- positional and designated array/struct initializer lists with zero-fill
+- positional and designated array/struct/union initializer lists with zero-fill
 - nested aggregate initializer lists
 - string literal initialization for char/unsigned-char array fields inside structs
-- whole-struct assignment between compatible complete struct types
+- whole-struct and whole-union assignment between compatible complete types
 - string literals for char/unsigned-char array initialization
 - RAM-backed string literal initialization of `char *` and `const char *`
-- `__rom_read8(table, index)` for explicit program-memory byte arrays
+- `__rom_read8(table, index)` and `__rom_read16(table, index)` for explicit program-memory arrays
 - explicit casts for supported scalar and data-pointer forms
 
 Deferred:
 - chained designators
-- incomplete-struct pointers
+- incomplete-struct/union pointers
 
 Not implemented:
 
-- `union`
 - source-level function pointers
 - multidimensional arrays
-- anonymous nested struct/enum fields without declarators
+- anonymous nested struct/union/enum fields without declarators
+- signed bitfields
 - floats
 - recursion
 - program-memory / code-space pointer models
@@ -241,18 +244,20 @@ Not implemented:
 - array decay is explicit in typed tree
 - typedef aliases are accepted at file scope only
 - enum constants are global compile-time 16-bit `int` values
-- structs are packed in declaration order and may nest complete struct fields and one-dimensional array fields
+- structs are packed in declaration order and may nest complete struct/union fields, one-dimensional array fields, and basic unsigned bitfields
+- unions place every field at offset `0` and use the maximum field size as storage size
 - local aggregate initializers lower to per-slot stores; global and static initializers require constant elements and pre-materialize into byte arrays
 - string literals are parsed as null-terminated byte strings and may lower to synthetic RAM-backed static array objects
 - omitted array size is inferred from supported brace or string initializers before storage layout is fixed
 - const objects are RAM-backed and read-only only at semantic level
-- explicit `__rom` objects are file-scope-only byte arrays that bypass RAM startup data and emit as RETLW-backed program-memory tables
+- explicit `__rom` objects are file-scope-only 8-bit/16-bit integer arrays that bypass RAM startup data and emit as RETLW-backed program-memory tables
 - designated initializers support `.field` and `[index]` forms; chained designators remain deferred
-- whole-struct assignment lowers to byte-wise copies and stays rejected inside interrupt handlers
+- whole-struct and whole-union assignment lower to byte-wise copies and stay rejected inside interrupt handlers
+- bitfield reads lower to load + shift + mask; writes lower to read-modify-write over the containing storage unit
 - explicit casts cover scalar conversions, data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
 - pointer comparisons use raw 16-bit RAM address ordering for compatible pointer types
 - pointer subtraction lowers through inline 16-bit subtraction and optional divide-by-two scaling for compatible 1-byte/2-byte element types
-- `__rom_read8()` is the only supported Phase 13 ROM read surface; ROM arrays do not decay to data pointers and ROM pointers are still unsupported
+- `__rom_read8()` / `__rom_read16()` plus direct `rom_table[index]` reads are the supported ROM read surfaces; ROM arrays do not decay to data pointers and ROM pointers are still unsupported
 - switch expressions must be integer-valued; case labels must be constant and representable in the switch type
 - switch lowering evaluates the controlling expression once, compares through a linear branch chain, allows fallthrough, and routes `break` to the innermost switch end
 - case/default labels nested under other control statements in the same switch are rejected in phase 9
@@ -293,10 +298,10 @@ Phase 10 keeps IR free of dedicated string/static-data opcodes. Instead it uses:
 - ordinary startup stores/clears for initialized or zero-filled RAM-backed static data
 - ordinary per-slot local stores for automatic aggregate initialization
 
-Phase 13 adds one dedicated ROM-read IR instruction plus backend-only ROM-table emission:
+Phase 13/14 add one dedicated ROM-read IR instruction plus backend-only ROM-table emission:
 
-- explicit `const __rom` byte arrays become program-memory RETLW tables
-- `__rom_read8(table, index)` lowers to one typed IR ROM-read instruction
+- explicit `const __rom` byte arrays and 16-bit integer arrays become program-memory RETLW tables
+- `__rom_read8(table, index)`, `__rom_read16(table, index)`, and direct ROM indexing lower to typed IR ROM-read instructions
 - no general ROM pointer values or ROM address arithmetic are introduced
 
 Phase 11 keeps aggregate support within the same IR model. It adds:
@@ -305,6 +310,12 @@ Phase 11 keeps aggregate support within the same IR model. It adds:
 - designated initializer overlay before IR generation
 - byte-wise whole-struct copy lowering through existing indirect load/store instructions
 - no dedicated aggregate-copy or switch-table backend shortcut
+
+Phase 15 keeps unions and bitfields inside the same aggregate model. It adds:
+
+- packed union metadata with field offset `0` and max-field-size storage
+- explicit typed bitfield lvalues that lower to ordinary shift/mask/read-modify-write IR
+- byte-wise whole-union copy through the same indirect load/store path already used for structs
 
 Interrupt functions stay structurally ordinary IR functions, but carry interrupt metadata so the backend can:
 
@@ -448,18 +459,18 @@ Current limitations:
 - pointer subtraction assumes the pointers refer into the same object, matching ordinary C same-object expectations
 - pointer subtraction rejects larger element sizes instead of introducing helper-based division
 
-## Phase 13 ROM Objects
+## Phase 13/14 ROM Objects
 
-Phase 13 introduces one explicit program-memory object model without changing the RAM-pointer ABI.
+Phases 13 and 14 introduce one explicit program-memory object model without changing the RAM-pointer ABI.
 
 Rules:
 
-- syntax is `const __rom unsigned char table[] = {...};` or `const __rom char msg[] = "OK";`
-- supported ROM objects are file-scope byte arrays only
+- syntax is `const __rom unsigned char table[] = {...};`, `const __rom char msg[] = "OK";`, `const __rom unsigned int table16[] = {...};`, or `const __rom int signed16[] = {...};`
+- supported ROM objects are file-scope 8-bit or 16-bit integer arrays only
 - plain `const` still means RAM-backed const unless `__rom` is spelled explicitly
 - ROM arrays do not decay to data-space pointers
-- direct `rom_array[index]` syntax is rejected in this phase
-- ROM reads use `__rom_read8(table, index)` only
+- direct `rom_array[index]` reads are supported for those arrays
+- ROM reads use `__rom_read8(table, index)` / `__rom_read16(table, index)` or direct indexing
 - backend emits each ROM object as one callable RETLW table: entry `addwf PCL,f`, then one `retlw k` per byte
 - map/listing output shows ROM symbols separately from RAM data and ordinary code
 
@@ -468,5 +479,5 @@ Current limitations:
 - no ROM pointer types
 - no local ROM objects
 - no non-const ROM objects
-- no ROM structs or wider-than-byte ROM element types
-- no ROM reads inside interrupt handlers
+- no ROM structs, unions, or bitfield objects
+- dynamic ROM reads inside interrupt handlers remain rejected

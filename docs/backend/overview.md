@@ -12,7 +12,7 @@ Shared backend responsibilities:
 - IR -> PIC16 asm lowering
 - 14-bit word encoding
 
-Current backend phase: **Phase 13 explicit program-memory const/string/table lowering on top of Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 static-data cleanup, Phase 9 control-flow coverage, Phase 8 aggregate/type-aware lowering, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**
+Current backend phase: **Phase 15 named union support and basic unsigned bitfields on top of Phase 14 richer program-memory usability, Phase 13 explicit program-memory const/string/table lowering, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 static-data cleanup, Phase 9 control-flow coverage, Phase 8 aggregate/type-aware lowering, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**
 
 Backend owns:
 
@@ -35,11 +35,13 @@ Backend owns:
 - RETLW-backed ROM table emission in program memory for explicit `const __rom` byte arrays
 - inline ROM-read lowering through generated ROM table calls
 - separate ROM symbol map section
-- byte-wise whole-struct copy lowering through existing indirect memory instructions
+- byte-wise whole-struct and whole-union copy lowering through existing indirect memory instructions
+- union field accesses through shared aggregate base-address lowering
+- bitfield read-modify-write lowering through ordinary mask/shift/indirect-store machinery
 - switch compare-chain blocks through the ordinary branch emitter
 - pointer compare/subtract reuse ordinary 16-bit compare/arithmetic lowering
 - no backend jump tables and no backend-side recovery of labels nested under unrelated control statements in phase 9
-- no backend-side recovery for chained designators or incomplete-struct pointers; those stay frontend diagnostics
+- no backend-side recovery for chained designators or incomplete-struct/union pointers; those stay frontend diagnostics
 - bank/page reuse tracking
 
 Current call contract:
@@ -69,14 +71,14 @@ Phase 5 helper contract:
 
 Current backend docs:
 
-- [phase4-stack-first-abi.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-first-abi.md:1)
-- [phase4-stack-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase4-stack-model.md:1)
-- [phase5-helper-calling.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase5-helper-calling.md:1)
-- [phase6-interrupts.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase6-interrupts.md:1)
-- [phase12-string-pointer-data.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase12-string-pointer-data.md:1)
-- [../runtime/phase5-arithmetic-helpers.md](/home/settes/cursus/PIC16_compiler/docs/runtime/phase5-arithmetic-helpers.md:1)
-- [../ir/phase5-arithmetic-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase5-arithmetic-lowering.md:1)
-- [../ir/phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
+- [phase4-stack-first-abi.md](phase4-stack-first-abi.md)
+- [phase4-stack-model.md](phase4-stack-model.md)
+- [phase5-helper-calling.md](phase5-helper-calling.md)
+- [phase6-interrupts.md](phase6-interrupts.md)
+- [phase12-string-pointer-data.md](phase12-string-pointer-data.md)
+- [../runtime/phase5-arithmetic-helpers.md](../runtime/phase5-arithmetic-helpers.md)
+- [../ir/phase5-arithmetic-lowering.md](../ir/phase5-arithmetic-lowering.md)
+- [../ir/phase4-call-lowering.md](../ir/phase4-call-lowering.md)
 
 Phase 6 interrupt contract:
 
@@ -104,27 +106,28 @@ Phase 7 optimization responsibilities:
 
 Phase 7 backend docs:
 
-- [optimization.md](/home/settes/cursus/PIC16_compiler/docs/backend/optimization.md:1)
+- [optimization.md](optimization.md)
 
 Phase 8 backend docs:
 
-- [phase8-struct-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase8-struct-layout.md:1)
+- [phase8-struct-layout.md](phase8-struct-layout.md)
 
 Phase 9 backend docs:
 
-- [phase9-switch-codegen.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase9-switch-codegen.md:1)
+- [phase9-switch-codegen.md](phase9-switch-codegen.md)
 
 Phase 10 backend docs:
 
-- [phase10-data-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase10-data-layout.md:1)
+- [phase10-data-layout.md](phase10-data-layout.md)
 
-Phase 11 backend docs:
+Phase 11-15 backend docs:
 
-- [phase11-aggregate-copy.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase11-aggregate-copy.md:1)
-- [phase13-rom-data-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase13-rom-data-layout.md:1)
+- [phase11-aggregate-copy.md](phase11-aggregate-copy.md)
+- [phase13-rom-data-layout.md](phase13-rom-data-layout.md)
+- [phase14-retlw-tables.md](phase14-retlw-tables.md)
+- [phase15-bitfield-codegen.md](phase15-bitfield-codegen.md)
 
 Historical docs:
 
-- [phase2-abi.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase2-abi.md:1)
-- [phase3-memory-model.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase3-memory-model.md:1)
-<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+- [phase2-abi.md](phase2-abi.md)
+- [phase3-memory-model.md](phase3-memory-model.md)

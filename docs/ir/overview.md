@@ -31,13 +31,13 @@ Phase 7 optimization passes:
 - dead code elimination
 - temp-slot compaction
 
-Phase 8-13 lowering notes:
+Phase 8-15 lowering notes:
 
 - local array/struct initializers are flattened before or during IR lowering into per-slot stores
 - global array/struct initializers arrive as byte payloads for backend startup writes
 - nested array/struct initializers are recursively flattened into scalar leaves before IR generation
 - designated initializers overlay those scalar leaves before IR generation
-- whole-struct assignment lowers to byte-wise indirect load/store sequences instead of a dedicated IR opcode
+- whole-struct and whole-union assignment lower to byte-wise indirect load/store sequences instead of dedicated IR opcodes
 
 Phase 9 lowering notes:
 
@@ -60,31 +60,43 @@ Phase 10-12 static and pointer lowering notes:
 - pointer subtraction lowers to ordinary 16-bit subtraction plus optional shift-right scaling for 2-byte elements
 - explicit `__rom` byte arrays do not become RAM startup payloads; they lower to callable RETLW tables in program memory
 - `__rom_read8(table, index)` lowers to one dedicated IR ROM-read instruction instead of a general ROM pointer model
+- direct ROM indexing and `__rom_read16(table, index)` reuse the same typed ROM-read path
 
-Current Phase 13 limits:
+Phase 15 aggregate lowering notes:
+
+- union field access lowers through ordinary base address plus constant zero offset
+- union initializers zero-fill the whole storage byte range, then overlay the selected field bytes
+- bitfield reads lower to ordinary load + shift-right + mask operations
+- bitfield writes lower to ordinary read-modify-write sequences on the containing byte/word storage unit
+- no dedicated union-copy or bitfield IR instruction is introduced; existing indirect copy/arithmetic ops stay sufficient
+
+Current Phase 15 limits:
 
 - no multidimensional arrays
 - no chained designators such as `.outer.inner = 1`
-- no incomplete-struct pointers
-- no whole-struct copy inside interrupt handlers
+- no incomplete-struct/union pointers
+- no whole-aggregate copy inside interrupt handlers
 - no program-memory / code-space pointer model
-- no direct ROM pointer arithmetic or ROM array indexing syntax
+- no direct ROM pointer arithmetic
 - no pointer subtraction for element sizes larger than 2 bytes
+- no anonymous nested aggregate fields
+- no signed bitfields
 
 Current detail:
 
-- [phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
-- [phase5-arithmetic-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase5-arithmetic-lowering.md:1)
-- [phase6-isr-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase6-isr-lowering.md:1)
-- [phase8-aggregate-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase8-aggregate-lowering.md:1)
-- [phase9-switch-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase9-switch-lowering.md:1)
-- [phase10-static-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase10-static-initializers.md:1)
-- [phase11-aggregate-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase11-aggregate-initializers.md:1)
-- [phase12-pointer-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase12-pointer-lowering.md:1)
-- [phase13-rom-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase13-rom-lowering.md:1)
+- [phase4-call-lowering.md](phase4-call-lowering.md)
+- [phase5-arithmetic-lowering.md](phase5-arithmetic-lowering.md)
+- [phase6-isr-lowering.md](phase6-isr-lowering.md)
+- [phase8-aggregate-lowering.md](phase8-aggregate-lowering.md)
+- [phase9-switch-lowering.md](phase9-switch-lowering.md)
+- [phase10-static-initializers.md](phase10-static-initializers.md)
+- [phase11-aggregate-initializers.md](phase11-aggregate-initializers.md)
+- [phase12-pointer-lowering.md](phase12-pointer-lowering.md)
+- [phase13-rom-lowering.md](phase13-rom-lowering.md)
+- [phase14-rom-read-lowering.md](phase14-rom-read-lowering.md)
+- [phase15-aggregate-lowering.md](phase15-aggregate-lowering.md)
 
 Historical detail:
 
-- [phase2-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase2-lowering.md:1)
-- [phase3-memory.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase3-memory.md:1)
-<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+- [phase2-lowering.md](phase2-lowering.md)
+- [phase3-memory.md](phase3-memory.md)

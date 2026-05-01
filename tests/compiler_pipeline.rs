@@ -3082,7 +3082,7 @@ void main(void) {
 ",
     );
 
-    assert!(error.contains("whole-struct assignment is not supported inside interrupt handlers"));
+    assert!(error.contains("whole-aggregate assignment is not supported inside interrupt handlers"));
 }
 
 #[test]
@@ -3700,6 +3700,314 @@ fn phase14_examples_compile_via_picc() {
         ("pic16f877a", "examples/pic16f877a/rom_table16.c"),
         ("pic16f877a", "examples/pic16f877a/rom_string_index.c"),
         ("pic16f877a", "examples/pic16f877a/rom_lookup_direct.c"),
+    ];
+
+    for (target, example) in examples {
+        let output = compile_example_via_picc_cli(target, example);
+        assert_hex_is_programmable(&output);
+        assert!(output.with_extension("map").exists());
+        assert!(output.with_extension("lst").exists());
+    }
+}
+
+#[test]
+/// Verifies union size/offsets and basic bitfield packing appear in the parsed AST artifact.
+fn phase15_ast_reports_union_and_bitfield_layout() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase15-layout.c",
+        "\
+#include <pic16/pic16f877a.h>
+union Value {
+    unsigned char byte;
+    unsigned int word;
+};
+struct Flags {
+    unsigned char ready:1;
+    unsigned char error:1;
+    unsigned char mode:2;
+    unsigned char next;
+};
+struct Packet {
+    unsigned char id;
+    union Value value;
+};
+void main(void) {
+    PORTB = 0;
+}
+",
+    );
+
+    let ast = read_artifact(&output, "ast");
+    assert!(ast.contains("union Value size=2 fields=byte:unsigned char@0, word:unsigned int@0"));
+    assert!(ast.contains("struct Flags size=2 fields=ready:unsigned char@0.0:1"));
+    assert!(ast.contains("error:unsigned char@0.1:1"));
+    assert!(ast.contains("mode:unsigned char@0.2:2"));
+    assert!(ast.contains("next:unsigned char@1"));
+    assert!(ast.contains("struct Packet size=3 fields=id:unsigned char@0, value:union#0@1"));
+}
+
+#[test]
+/// Verifies named union fields, pointer access, and whole-union copy compile through byte-wise lowering.
+fn compiles_phase15_union_basic_access_and_copy() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase15-union-basic.c",
+        "\
+#include <pic16/pic16f628a.h>
+union Value {
+    unsigned char byte;
+    unsigned int word;
+};
+void main(void) {
+    union Value a;
+    union Value b;
+    union Value *ptr;
+    TRISB = 0x00;
+    a.byte = 3;
+    b.word = 1000;
+    a = b;
+    ptr = &a;
+    PORTB = ptr->byte;
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    assert_hex_is_programmable(&output);
+    assert!(asm.contains("movwf"));
+}
+
+#[test]
+/// Verifies nested named unions inside structs remain addressable with composed offsets.
+fn compiles_phase15_nested_union_in_struct_access() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase15-union-struct.c",
+        "\
+#include <pic16/pic16f877a.h>
+union Payload {
+    unsigned char byte;
+    unsigned int word;
+};
+struct Packet {
+    unsigned char id;
+    union Payload payload;
+};
+void main(void) {
+    struct Packet packet;
+    struct Packet *ptr;
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    ptr = &packet;
+    ptr->payload.word = 0x0034;
+    PORTB = ptr->payload.byte + ptr->id;
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies first-field and designated union initializers lower through zero-fill plus selected-field overlay.
+fn compiles_phase15_union_initializer_variants() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase15-union-init.c",
+        "\
+#include <pic16/pic16f877a.h>
+union Value {
+    unsigned char byte;
+    unsigned int word;
+};
+union Value first = {3};
+union Value selected = {.word = 1000};
+void main(void) {
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    PORTB = first.byte + (unsigned char)selected.word;
+}
+",
+    );
+
+    let listing = read_artifact(&output, "lst");
+    assert_hex_is_programmable(&output);
+    assert!(listing.contains("0x03"));
+    assert!(listing.contains("0xE8"));
+}
+
+#[test]
+/// Verifies basic unsigned bitfield reads and writes lower to real mask/shift operations.
+fn compiles_phase15_bitfield_flags() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase15-bitfield-flags.c",
+        "\
+#include <pic16/pic16f877a.h>
+struct Flags {
+    unsigned char ready:1;
+    unsigned char error:1;
+    unsigned char mode:2;
+    unsigned char spare:4;
+};
+void main(void) {
+    struct Flags flags;
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    flags.ready = 1;
+    flags.error = 0;
+    flags.mode = 2;
+    if (flags.ready) {
+        PORTB = flags.mode;
+    }
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    assert_hex_is_programmable(&output);
+    assert!(
+        asm.contains("andwf") || asm.contains("iorwf") || asm.contains("bsf") || asm.contains("bcf")
+    );
+}
+
+#[test]
+/// Verifies incompatible union assignment is rejected explicitly.
+fn reports_phase15_incompatible_union_assignment() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase15-union-assign-error.c",
+        "\
+#include <pic16/pic16f628a.h>
+union A { unsigned char byte; };
+union B { unsigned char byte; };
+void main(void) {
+    union A a;
+    union B b;
+    a = b;
+}
+",
+    );
+
+    assert!(error.contains("cannot assign incompatible union type"));
+}
+
+#[test]
+/// Verifies duplicate union field names are rejected during aggregate parsing.
+fn reports_phase15_duplicate_union_field() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase15-dup-union-field.c",
+        "\
+#include <pic16/pic16f628a.h>
+union Value {
+    unsigned char byte;
+    unsigned int byte;
+};
+void main(void) {
+}
+",
+    );
+
+    assert!(error.contains("duplicate union field `byte`"));
+}
+
+#[test]
+/// Verifies assignment to a const union object stays rejected through the ordinary const-object rule.
+fn reports_phase15_const_union_assignment() {
+    let error = compile_error(
+        "pic16f877a",
+        "phase15-const-union-assign.c",
+        "\
+#include <pic16/pic16f877a.h>
+union Value {
+    unsigned char byte;
+    unsigned int word;
+};
+void main(void) {
+    const union Value value = {.word = 1};
+    value.word = 2;
+}
+",
+    );
+
+    assert!(error.contains("assignment to const object"));
+}
+
+#[test]
+/// Verifies taking the address of a bitfield stays rejected because bitfields are not addressable objects.
+fn reports_phase15_bitfield_address_rejected() {
+    let error = compile_error(
+        "pic16f877a",
+        "phase15-bitfield-address.c",
+        "\
+#include <pic16/pic16f877a.h>
+struct Flags {
+    unsigned char ready:1;
+    unsigned char mode:2;
+};
+unsigned char *ptr;
+void main(void) {
+    struct Flags flags;
+    ptr = &flags.ready;
+}
+",
+    );
+
+    assert!(error.contains("taking the address of a bitfield"));
+}
+
+#[test]
+/// Verifies invalid bitfield base types are diagnosed clearly.
+fn reports_phase15_invalid_bitfield_base_type() {
+    let error = compile_error(
+        "pic16f877a",
+        "phase15-bitfield-base.c",
+        "\
+#include <pic16/pic16f877a.h>
+struct Flags {
+    unsigned char *ptr:1;
+};
+void main(void) {
+}
+",
+    );
+
+    assert!(error.contains("bitfield `ptr` must use `unsigned char` or `unsigned int`"));
+}
+
+#[test]
+/// Verifies anonymous union fields remain deferred and are rejected clearly.
+fn reports_phase15_anonymous_union_field() {
+    let error = compile_error(
+        "pic16f877a",
+        "phase15-anon-union-field.c",
+        "\
+#include <pic16/pic16f877a.h>
+struct Packet {
+    union {
+        unsigned char byte;
+        unsigned int word;
+    };
+};
+void main(void) {
+}
+",
+    );
+
+    assert!(error.contains("anonymous nested struct/union/enum fields are not supported in phase 15"));
+}
+
+#[test]
+/// Verifies checked-in Phase 15 examples compile cleanly through the `picc` CLI.
+fn phase15_examples_compile_via_picc() {
+    let examples = [
+        ("pic16f628a", "examples/pic16f628a/union_basic.c"),
+        ("pic16f877a", "examples/pic16f877a/union_struct_nested.c"),
+        ("pic16f877a", "examples/pic16f877a/bitfield_flags.c"),
+        ("pic16f877a", "examples/pic16f877a/bitfield_register_like.c"),
+        ("pic16f877a", "examples/pic16f877a/union_initializer.c"),
     ];
 
     for (target, example) in examples {
