@@ -80,6 +80,11 @@ pub enum IrInstr {
         value: Operand,
         ty: Type,
     },
+    RomRead8 {
+        dst: TempId,
+        symbol: SymbolId,
+        index: Operand,
+    },
     Call {
         dst: Option<TempId>,
         function: SymbolId,
@@ -185,6 +190,9 @@ fn render_instr(instr: &IrInstr) -> String {
         }
         IrInstr::StoreIndirect { ptr, value, .. } => {
             format!("*{} = {}", render_operand(*ptr), render_operand(*value))
+        }
+        IrInstr::RomRead8 { dst, symbol, index } => {
+            format!("t{dst} = rom8 s{symbol}[{}]", render_operand(*index))
         }
         IrInstr::Call {
             dst,

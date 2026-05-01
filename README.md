@@ -28,9 +28,18 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 12: richer data-space pointer support on top of Phase 11 aggregate completeness, Phase 10 string/static-data cleanup, Phase 9 `switch` control flow, Phase 8 type-system work, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
+Current implementation is **Phase 13: explicit program-memory const/string/table support on top of Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 string/static-data cleanup, Phase 9 `switch` control flow, Phase 8 type-system work, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
 
-Phase 12 scope:
+Phase 13 scope:
+
+- explicit `__rom` program-memory byte-array objects at file scope
+- `const __rom unsigned char[]` and `const __rom char[]` tables/strings
+- `__rom_read8(table, index)` for ROM byte reads
+- separate map/listing section for ROM symbols
+- explicit rejection of ROM/data-space pointer mixing
+- no general ROM pointer model yet
+
+Phase 12 scope remains:
 
 - pointer-to-pointer types in the current data-space pointer model
 - const-qualified pointer forms: pointer-to-const, const pointer, const pointer-to-const
@@ -94,6 +103,7 @@ What changed from Phase 3:
 - Phase 10 adds string literal parsing, RAM-backed const/static initialization cleanup, and clearer startup data artifacts
 - Phase 11 adds nested aggregate layout/init support, designated initializers, and byte-wise whole-struct copy
 - Phase 12 adds nested data pointers, const-qualified pointer forms, pointer compare/subtract, and RAM-backed string-literal pointer initialization
+- Phase 13 adds explicit `__rom` byte arrays, RETLW-backed ROM tables, `__rom_read8()`, and separate ROM map/listing output
 - active docs now describe stack-first behavior; old Phase 2/3 docs remain historical
 
 ## Phase 4 ABI Summary
@@ -378,6 +388,28 @@ Diagnostics:
 - unsupported pointer subtraction element sizes
 - incompatible string-literal pointer targets
 
+## Phase 13 ROM Summary
+
+Supported:
+
+- file-scope `const __rom unsigned char[]` and `const __rom char[]`
+- brace-list ROM table initializers
+- string-literal ROM string initializers
+- `__rom_read8(table, index)` over named ROM byte-array objects
+- `.hex`, `.map`, and `.lst` output that shows ROM tables separately
+- RETLW-backed ROM table lowering with one entry instruction plus one program word per byte
+
+Diagnostics:
+
+- non-const ROM objects
+- local ROM objects
+- direct ROM array indexing
+- ROM/data-pointer mixing
+- ROM pointer types
+- ROM reads inside interrupt handlers
+- unsupported ROM object types
+- oversize ROM tables that do not fit one Phase 13 RETLW page
+
 ## Supported Subset
 
 Supported:
@@ -392,6 +424,7 @@ Supported:
 - file-scope `typedef` aliases for supported object/value types
 - `enum` declarations and enumerator constants
 - named packed `struct` declarations with nested struct and one-dimensional array fields
+- file-scope `const __rom char[]` and `const __rom unsigned char[]`
 - `if` / `else`
 - `while`
 - `for`
@@ -415,6 +448,7 @@ Supported:
 - `+`, `-`, `*`, `/`, `%`, `<<`, `>>`, `&`, `|`, `^`
 - `==`, `!=`, `<`, `<=`, `>`, `>=`
 - compile-time `sizeof` for supported scalars, pointers, and fixed arrays
+- `__rom_read8(table, index)` for program-memory byte arrays
 - positional and designated array/struct initializer lists with zero-fill
 - nested aggregate initializer lists
 - string literal initialization for char/unsigned-char array fields and char/unsigned-char array fields inside structs
@@ -439,12 +473,14 @@ Partially supported / constrained:
 - global aggregate initializer elements must be constant expressions
 - explicit casts are limited to scalar conversions, data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
 - string literals become RAM-backed static data objects when used in pointer-initializer contexts; duplicate pooling is not attempted
-- startup code writes initialized global/static bytes and clears zero-init storage; direct ROM-style data sections are not modeled yet
-- const objects are RAM-backed in this phase and rely on semantic immutability rather than a separate program-memory address space
+- startup code writes initialized global/static bytes and clears zero-init storage; explicit `__rom` objects bypass startup and emit into program memory as RETLW tables
+- plain `const` objects remain RAM-backed in this phase unless explicitly declared `__rom`
+- `__rom_read8()` reads a named ROM byte-array object through a generated RETLW table call rather than a general code-space pointer model
 - nested pointer qualifier conversions are intentionally conservative: exact nested qualifiers are required beyond one-level `T *` to `const T *`
 - pointer subtraction assumes the compared pointers refer into the same object, matching ordinary C same-object expectations
 - pointer subtraction supports only element sizes of 1 or 2 bytes in this phase
 - local aggregate initializers and whole-struct copies remain rejected inside interrupt handlers
+- ROM objects are limited to file-scope `char` / `unsigned char` arrays of at most 255 elements
 - switch lowering uses linear compare chains; no jump tables are emitted in this phase
 - case/default labels must stay in the switch body flow or nested blocks; labels under unrelated control statements like `if`, `while`, or `for` are rejected in phase 9
 
@@ -457,6 +493,7 @@ Unsupported:
 - chained designators such as `.outer.inner = 1`
 - pointers to incomplete struct types
 - program-memory / code-space pointers
+- direct `rom_array[index]` syntax
 - `float`
 - recursion
 
@@ -471,10 +508,11 @@ Current constraints:
 - string literal array initializers are accepted only for `char` / `unsigned char` arrays, and explicit array sizes must fit the trailing null byte too
 - string literals that initialize pointers become anonymous RAM-backed static objects; map output groups them under string literals
 - globals, file-scope statics, and static locals are initialized by startup code in RAM, not by a separate read-only data segment
-- const data remains in RAM in this phase; writes are rejected semantically
+- plain const RAM data remains in startup-initialized RAM; explicit `__rom` data uses separate RETLW-backed program-memory tables
 - nested data-space pointer comparisons are raw address-order comparisons in RAM
 - implicit nested-pointer qualifier changes beyond `T *` to `const T *` are rejected conservatively
 - pointer subtraction is limited to compatible pointer types whose element size is 1 or 2 bytes
+- ROM reads use `__rom_read8()` only; general ROM address values and ROM pointers are still unsupported
 - switch expressions must stay in the supported integer subset; case labels must be constant and representable
 - switch inside ISR is allowed only when the controlling expression and body remain inline-safe under existing Phase 6 helper restrictions
 - reads from global/static/const RAM objects are allowed inside ISR when the resulting expressions stay inline-safe
@@ -483,15 +521,15 @@ Current constraints:
 - ISR code cannot call normal functions or Phase 5 runtime helpers
 - no emulator or hardware execution runs in CI; validation is compile/listing/map/HEX shape based
 
-## Known Limitations (Phase 12 Freeze)
+## Known Limitations (Phase 13)
 
 - recursion is unsupported
 - no runtime software-stack overflow detection is implemented
 - ISR restrictions remain conservative: one ISR, no normal calls, no runtime-helper-requiring expressions
 - aggregate support is still intentionally constrained: no multidimensional arrays, no anonymous nested fields, no chained designators, and no incomplete-struct pointers
 - switch lowering stays intentionally simple: compare chains only, no jump tables, and labels nested under other control statements are rejected
-- string literals are RAM-backed static data objects; there is still no program-memory/code-space string model or pooling pass
-- const storage remains RAM-backed; there is still no separate program-memory const model or code-space string pointers
+- automatic string literals used as pointers are still RAM-backed static data objects; there is no automatic ROM string pooling pass
+- only explicit `const __rom` byte arrays use program memory; there is still no general ROM pointer or code-space string-pointer model
 - implicit nested-pointer qualifier conversions stay conservative beyond one-level `T *` to `const T *`
 - enums stay fixed to 16-bit `int`; structs stay packed with no padding
 - `union` and `float` are unsupported
@@ -671,6 +709,7 @@ picc --list-targets
 - [examples/pic16f628a/array_initializer.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/array_initializer.c:1)
 - [examples/pic16f628a/casts.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/casts.c:1)
 - [examples/pic16f628a/pointer_to_pointer.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/pointer_to_pointer.c:1)
+- [examples/pic16f628a/rom_table.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/rom_table.c:1)
 - [examples/pic16f628a/stack_abi.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/stack_abi.c:1)
 - [examples/pic16f628a/string_array.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/string_array.c:1)
 - [examples/pic16f628a/struct_array_field.c](/home/settes/cursus/PIC16_compiler/examples/pic16f628a/struct_array_field.c:1)
@@ -694,6 +733,8 @@ picc --list-targets
 - [examples/pic16f877a/pointer16.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/pointer16.c:1)
 - [examples/pic16f877a/pointer_compare.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/pointer_compare.c:1)
 - [examples/pic16f877a/pointer_subtract.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/pointer_subtract.c:1)
+- [examples/pic16f877a/rom_lookup.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/rom_lookup.c:1)
+- [examples/pic16f877a/rom_string.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/rom_string.c:1)
 - [examples/pic16f877a/shift_mix.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/shift_mix.c:1)
 - [examples/pic16f877a/static_table.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/static_table.c:1)
 - [examples/pic16f877a/struct_copy.c](/home/settes/cursus/PIC16_compiler/examples/pic16f877a/struct_copy.c:1)
@@ -716,6 +757,7 @@ picc --list-targets
 - [docs/backend/phase10-data-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase10-data-layout.md:1)
 - [docs/backend/phase11-aggregate-copy.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase11-aggregate-copy.md:1)
 - [docs/backend/phase12-string-pointer-data.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase12-string-pointer-data.md:1)
+- [docs/backend/phase13-rom-data-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase13-rom-data-layout.md:1)
 - [docs/backend/phase9-switch-codegen.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase9-switch-codegen.md:1)
 - [docs/ir/phase4-call-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase4-call-lowering.md:1)
 - [docs/backend/phase5-helper-calling.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase5-helper-calling.md:1)
@@ -723,10 +765,12 @@ picc --list-targets
 - [docs/ir/phase10-static-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase10-static-initializers.md:1)
 - [docs/ir/phase11-aggregate-initializers.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase11-aggregate-initializers.md:1)
 - [docs/ir/phase12-pointer-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase12-pointer-lowering.md:1)
+- [docs/ir/phase13-rom-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase13-rom-lowering.md:1)
 - [docs/ir/phase9-switch-lowering.md](/home/settes/cursus/PIC16_compiler/docs/ir/phase9-switch-lowering.md:1)
 - [docs/frontend/phase10-string-literals.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase10-string-literals.md:1)
 - [docs/frontend/phase11-aggregates.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase11-aggregates.md:1)
 - [docs/frontend/phase12-pointers.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase12-pointers.md:1)
+- [docs/frontend/phase13-rom-address-space.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase13-rom-address-space.md:1)
 - [docs/frontend/phase9-switch.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase9-switch.md:1)
 - [docs/runtime/phase5-arithmetic-helpers.md](/home/settes/cursus/PIC16_compiler/docs/runtime/phase5-arithmetic-helpers.md:1)
 - [docs/migration/phase3-to-phase4-abi.md](/home/settes/cursus/PIC16_compiler/docs/migration/phase3-to-phase4-abi.md:1)
@@ -734,4 +778,4 @@ picc --list-targets
 
 ## Current Limits
 
-Phase 12 adds nested data-space pointers, const-qualified pointer forms, pointer relational comparisons, pointer subtraction for compatible 1-byte/2-byte element types, and RAM-backed string-literal pointer initialization. Current hard limits remain: no program-memory const model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no `union`, no multidimensional arrays, no anonymous nested aggregate fields, no chained designators, no incomplete-struct pointers, no function pointers, no `float`, and no recursion.
+Phase 13 adds explicit `const __rom` byte arrays, RETLW-backed program-memory tables, `__rom_read8()` ROM reads, and separate ROM map/listing output. Current hard limits remain: no general ROM pointer model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no `union`, no multidimensional arrays, no anonymous nested aggregate fields, no chained designators, no incomplete-struct pointers, no function pointers, no `float`, and no recursion.

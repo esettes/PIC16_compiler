@@ -143,6 +143,7 @@ fn encode_instr(instr: &AsmInstr) -> u16 {
         AsmInstr::Bsf { f, b } => 0x1400 | (u16::from(*b & 0x07) << 7) | u16::from(*f & 0x7F),
         AsmInstr::Btfsc { f, b } => 0x1800 | (u16::from(*b & 0x07) << 7) | u16::from(*f & 0x7F),
         AsmInstr::Btfss { f, b } => 0x1C00 | (u16::from(*b & 0x07) << 7) | u16::from(*f & 0x7F),
+        AsmInstr::Retlw(value) => 0x3400 | u16::from(*value),
         AsmInstr::Return => 0x0008,
         AsmInstr::Retfie => 0x0009,
         AsmInstr::Goto(_) | AsmInstr::Call(_) | AsmInstr::SetPage(_) => unreachable!("resolved elsewhere"),
@@ -177,5 +178,11 @@ mod tests {
     /// Verifies `swapf` uses the expected file-register opcode family.
     fn encodes_swapf() {
         assert_eq!(encode_instr(&AsmInstr::Swapf { f: 0x70, d: Dest::W }), 0x0E70);
+    }
+
+    #[test]
+    /// Verifies `retlw` keeps the literal in the low byte of the 14-bit word.
+    fn encodes_retlw() {
+        assert_eq!(encode_instr(&AsmInstr::Retlw(0x5A)), 0x345A);
     }
 }

@@ -10,7 +10,7 @@
 
 Target backend is classic 14-bit PIC16 mid-range family, not a generic 8-bit CPU model.
 
-Current Phase 12 keeps that split intact while extending:
+Current Phase 13 keeps that split intact while extending:
 
 - stack-first caller-pushed ABI
 - per-call frame storage for locals and IR temps
@@ -32,6 +32,8 @@ Current Phase 12 keeps that split intact while extending:
 - Phase 12 nested data-space pointer typing and const-qualified pointer forms
 - Phase 12 pointer relational compare/subtract lowering through ordinary typed 16-bit operations
 - Phase 12 RAM-backed string-literal objects for pointer initialization
+- Phase 13 explicit ROM address-space tagging for objects without changing data-space pointers
+- Phase 13 RETLW-backed program-memory table emission plus `__rom_read8()` lowering
 - PIC16 banking/paging without backend duplication per device
 
 See:

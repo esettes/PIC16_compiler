@@ -6,7 +6,7 @@ use super::ast::{
     InitializerEntry, Item, Stmt, StructDef, StructField, TranslationUnit, UnaryOp, VarDecl,
 };
 use super::lexer::{Keyword, Symbol, Token, TokenKind};
-use super::types::{MAX_POINTER_DEPTH, Qualifiers, ScalarType, StorageClass, StructId, Type};
+use super::types::{AddressSpace, MAX_POINTER_DEPTH, Qualifiers, ScalarType, StorageClass, StructId, Type};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -816,6 +816,7 @@ impl<'a> Parser<'a> {
         let mut storage = StorageClass::Auto;
         let mut qualifiers = Qualifiers::default();
         let mut saw_unsigned = false;
+        let mut saw_rom = false;
         let mut is_interrupt = false;
         let mut is_typedef = false;
         let mut scalar = None::<ScalarType>;
@@ -839,6 +840,10 @@ impl<'a> Parser<'a> {
                 }
                 TokenKind::Keyword(Keyword::Const) => {
                     qualifiers.is_const = true;
+                    self.advance();
+                }
+                TokenKind::Keyword(Keyword::Rom) => {
+                    saw_rom = true;
                     self.advance();
                 }
                 TokenKind::Keyword(Keyword::Volatile) => {
@@ -952,6 +957,9 @@ impl<'a> Parser<'a> {
             Type::new(scalar)
         };
         ty = ty.with_qualifiers(qualifiers);
+        if saw_rom {
+            ty = ty.with_address_space(AddressSpace::Rom);
+        }
 
         DeclSpecifiers {
             storage_class: storage,
@@ -1363,6 +1371,7 @@ impl<'a> Parser<'a> {
             };
             match &token.kind {
                 TokenKind::Keyword(Keyword::Const)
+                | TokenKind::Keyword(Keyword::Rom)
                 | TokenKind::Keyword(Keyword::Volatile)
                 | TokenKind::Keyword(Keyword::Unsigned) => {
                     cursor += 1;
@@ -1520,6 +1529,7 @@ impl<'a> Parser<'a> {
                 | TokenKind::Keyword(Keyword::Extern)
                 | TokenKind::Keyword(Keyword::Typedef)
                 | TokenKind::Keyword(Keyword::Const)
+                | TokenKind::Keyword(Keyword::Rom)
                 | TokenKind::Keyword(Keyword::Volatile)
                 | TokenKind::Keyword(Keyword::Unsigned)
                 | TokenKind::Keyword(Keyword::Void)
@@ -1862,5 +1872,22 @@ void main(void) {
         assert!(ast.contains("const unsigned char* p"));
         assert!(ast.contains("unsigned char* const p2"));
         assert!(ast.contains("const unsigned char* const p3"));
+    }
+
+    #[test]
+    /// Verifies explicit `__rom` byte-array declarations and ROM read intrinsics parse cleanly.
+    fn parses_phase13_rom_byte_array_and_read() {
+        let (ast, diagnostics) = parse_source(
+            "\
+const __rom unsigned char table[] = {1, 2, 3};
+void main(void) {
+    PORTB = __rom_read8(table, 1);
+}
+",
+        );
+
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert!(ast.contains("global const __rom unsigned char[] table"));
+        assert!(ast.contains("__rom_read8(table, 1)"));
     }
 }

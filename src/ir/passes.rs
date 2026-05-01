@@ -133,6 +133,18 @@ pub fn constant_fold(program: &mut IrProgram) -> ConstantFoldStats {
                             ty,
                         };
                     }
+                    IrInstr::RomRead8 { dst, symbol, index } => {
+                        let resolved = resolve_operand(index, &constants);
+                        if resolved != index {
+                            stats.operands_propagated += 1;
+                        }
+                        *instr = IrInstr::RomRead8 {
+                            dst,
+                            symbol,
+                            index: resolved,
+                        };
+                        constants.remove(&dst);
+                    }
                     IrInstr::Call {
                         dst,
                         function,
@@ -282,6 +294,12 @@ pub fn dead_code_elimination(program: &mut IrProgram) -> DeadCodeStats {
                         collect_operand(*value, &mut live_temps);
                         retained.push(instr.clone());
                     }
+                    IrInstr::RomRead8 { dst, index, .. } => {
+                        if live_temps.remove(dst) {
+                            collect_operand(*index, &mut live_temps);
+                            retained.push(instr.clone());
+                        }
+                    }
                     IrInstr::Call { dst, args, .. } => {
                         if let Some(dst) = dst {
                             live_temps.remove(dst);
@@ -378,6 +396,10 @@ fn collect_instr_temps(instr: &IrInstr, temps: &mut BTreeSet<usize>) {
             collect_operand(*ptr, temps);
             collect_operand(*value, temps);
         }
+        IrInstr::RomRead8 { dst, index, .. } => {
+            temps.insert(*dst);
+            collect_operand(*index, temps);
+        }
         IrInstr::Call { dst, args, .. } => {
             if let Some(dst) = dst {
                 temps.insert(*dst);
@@ -430,6 +452,10 @@ fn remap_block(block: &mut super::model::IrBlock, remap: &BTreeMap<usize, usize>
             IrInstr::StoreIndirect { ptr, value, .. } => {
                 *ptr = remap_operand(*ptr, remap);
                 *value = remap_operand(*value, remap);
+            }
+            IrInstr::RomRead8 { dst, index, .. } => {
+                *dst = remap[dst];
+                *index = remap_operand(*index, remap);
             }
             IrInstr::Call { dst, args, .. } => {
                 if let Some(dst) = dst {

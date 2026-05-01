@@ -12,7 +12,7 @@ Output:
 
 - a typed program ready for IR lowering
 
-Current Phase 12 frontend surface:
+Current Phase 13 frontend surface:
 
 - parses `typedef`, `enum`, and named packed `struct` declarations
 - records enum constants and struct layout metadata in the typed frontend model
@@ -32,6 +32,10 @@ Current Phase 12 frontend surface:
 - validates explicit casts for supported scalar/data-pointer combinations
 - validates pointer relational comparisons for compatible data-space pointer types
 - validates pointer subtraction for compatible data-space pointer types with 1-byte or 2-byte elements
+- parses explicit `__rom` declarations for file-scope byte arrays
+- accepts `const __rom char[]` and `const __rom unsigned char[]` initializers from brace lists or string literals
+- rejects ROM/data-pointer mixing and rejects ROM pointer forms
+- lowers `__rom_read8(table, index)` as the only supported ROM read surface
 - parses `switch`, `case`, and `default`
 - validates case-label constants, duplicate cases, default count, and switch expression types
 - preserves C-style fallthrough and innermost-construct `break` behavior for supported switch forms
@@ -46,3 +50,4 @@ Current detail:
 - [phase10-string-literals.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase10-string-literals.md:1)
 - [phase11-aggregates.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase11-aggregates.md:1)
 - [phase12-pointers.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase12-pointers.md:1)
+- [phase13-rom-address-space.md](/home/settes/cursus/PIC16_compiler/docs/frontend/phase13-rom-address-space.md:1)

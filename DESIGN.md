@@ -177,6 +177,7 @@ Supported:
 - functions
 - globals, locals, static locals
 - `const` scalar, one-dimensional array, and complete named struct objects
+- file-scope `const __rom char[]` and `const __rom unsigned char[]`
 - file-scope `typedef` aliases for supported object/value types
 - `enum` declarations and enumerator constants
 - named packed `struct` declarations with nested struct and one-dimensional array fields
@@ -197,6 +198,7 @@ Supported:
 - whole-struct assignment between compatible complete struct types
 - string literals for char/unsigned-char array initialization
 - RAM-backed string literal initialization of `char *` and `const char *`
+- `__rom_read8(table, index)` for explicit program-memory byte arrays
 - explicit casts for supported scalar and data-pointer forms
 
 Deferred:
@@ -242,11 +244,13 @@ Not implemented:
 - string literals are parsed as null-terminated byte strings and may lower to synthetic RAM-backed static array objects
 - omitted array size is inferred from supported brace or string initializers before storage layout is fixed
 - const objects are RAM-backed and read-only only at semantic level
+- explicit `__rom` objects are file-scope-only byte arrays that bypass RAM startup data and emit as RETLW-backed program-memory tables
 - designated initializers support `.field` and `[index]` forms; chained designators remain deferred
 - whole-struct assignment lowers to byte-wise copies and stays rejected inside interrupt handlers
 - explicit casts cover scalar conversions, data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
 - pointer comparisons use raw 16-bit RAM address ordering for compatible pointer types
 - pointer subtraction lowers through inline 16-bit subtraction and optional divide-by-two scaling for compatible 1-byte/2-byte element types
+- `__rom_read8()` is the only supported Phase 13 ROM read surface; ROM arrays do not decay to data pointers and ROM pointers are still unsupported
 - switch expressions must be integer-valued; case labels must be constant and representable in the switch type
 - switch lowering evaluates the controlling expression once, compares through a linear branch chain, allows fallthrough, and routes `break` to the innermost switch end
 - case/default labels nested under other control statements in the same switch are rejected in phase 9
@@ -286,6 +290,12 @@ Phase 10 keeps IR free of dedicated string/static-data opcodes. Instead it uses:
 - scalar constant expressions for scalar global/static initializers
 - ordinary startup stores/clears for initialized or zero-filled RAM-backed static data
 - ordinary per-slot local stores for automatic aggregate initialization
+
+Phase 13 adds one dedicated ROM-read IR instruction plus backend-only ROM-table emission:
+
+- explicit `const __rom` byte arrays become program-memory RETLW tables
+- `__rom_read8(table, index)` lowers to one typed IR ROM-read instruction
+- no general ROM pointer values or ROM address arithmetic are introduced
 
 Phase 11 keeps aggregate support within the same IR model. It adds:
 
@@ -435,3 +445,26 @@ Current limitations:
 - no program-memory / code-space pointer model
 - pointer subtraction assumes the pointers refer into the same object, matching ordinary C same-object expectations
 - pointer subtraction rejects larger element sizes instead of introducing helper-based division
+
+## Phase 13 ROM Objects
+
+Phase 13 introduces one explicit program-memory object model without changing the RAM-pointer ABI.
+
+Rules:
+
+- syntax is `const __rom unsigned char table[] = {...};` or `const __rom char msg[] = "OK";`
+- supported ROM objects are file-scope byte arrays only
+- plain `const` still means RAM-backed const unless `__rom` is spelled explicitly
+- ROM arrays do not decay to data-space pointers
+- direct `rom_array[index]` syntax is rejected in this phase
+- ROM reads use `__rom_read8(table, index)` only
+- backend emits each ROM object as one callable RETLW table: entry `addwf PCL,f`, then one `retlw k` per byte
+- map/listing output shows ROM symbols separately from RAM data and ordinary code
+
+Current limitations:
+
+- no ROM pointer types
+- no local ROM objects
+- no non-const ROM objects
+- no ROM structs or wider-than-byte ROM element types
+- no ROM reads inside interrupt handlers

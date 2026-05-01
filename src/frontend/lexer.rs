@@ -17,6 +17,7 @@ pub enum TokenKind {
 pub enum Keyword {
     Char,
     Const,
+    Rom,
     Continue,
     Case,
     Default,
@@ -394,6 +395,7 @@ fn keyword_or_ident(text: &str) -> TokenKind {
     let keyword = match text {
         "char" => Some(Keyword::Char),
         "const" => Some(Keyword::Const),
+        "__rom" => Some(Keyword::Rom),
         "continue" => Some(Keyword::Continue),
         "case" => Some(Keyword::Case),
         "default" => Some(Keyword::Default),

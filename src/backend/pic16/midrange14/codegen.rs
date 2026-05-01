@@ -102,6 +102,12 @@ struct FrameLayout {
     frame_bytes: u16,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct RomTablePlacement {
+    symbol: SymbolId,
+    start: u16,
+}
+
 /// Lowers typed IR into assembly, encoded words, and a final linker map.
 pub fn compile_program(
     target: &TargetDevice,
@@ -119,6 +125,10 @@ pub fn compile_program(
     }
 
     let optimization = codegen.optimize_program();
+    codegen.emit_rom_objects(diagnostics);
+    if diagnostics.has_errors() {
+        return None;
+    }
 
     let encoded = encode_program(&codegen.program, diagnostics)?;
     let map = build_map(typed_program, &layout, &encoded.labels);
@@ -258,6 +268,9 @@ impl<'a> StorageAllocator<'a> {
                 || symbol.kind == SymbolKind::StringLiteral
                 || (symbol.kind == SymbolKind::Local && symbol.storage_class == crate::frontend::types::StorageClass::Static)
             {
+                if symbol.ty.is_rom() {
+                    continue;
+                }
                 let Some(base) = allocator.next_span(symbol.ty.byte_width()) else {
                     diagnostics.error(
                         "backend",
@@ -766,6 +779,9 @@ impl<'a> CodegenContext<'a> {
             IrInstr::StoreIndirect { ptr, value, ty } => {
                 self.emit_indirect_store(function.symbol, *ptr, *value, *ty);
             }
+            IrInstr::RomRead8 { dst, symbol, index } => {
+                self.emit_rom_read8(function, *symbol, *index, *dst, diagnostics);
+            }
             IrInstr::Call {
                 dst,
                 function: callee,
@@ -868,6 +884,61 @@ impl<'a> CodegenContext<'a> {
                 self.store_w_to_temp_byte(function.symbol, dst, 1);
             }
         }
+    }
+
+    /// Lowers one Phase 13 ROM-byte intrinsic read with a bounds check and RETLW table call.
+    fn emit_rom_read8(
+        &mut self,
+        function: &IrFunction,
+        symbol: SymbolId,
+        index: Operand,
+        dst: usize,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        let index_ty = self.operand_type(function, index);
+        let len = self.symbol_type(symbol).array_len.unwrap_or(0);
+        if len == 0 || len > 255 {
+            diagnostics.error(
+                "backend",
+                None,
+                format!(
+                    "ROM object `{}` has unsupported Phase 13 table length {}",
+                    self.symbol_name(symbol),
+                    len
+                ),
+                None,
+            );
+            self.clear_temp(function.symbol, dst, function.temp_types[dst]);
+            return;
+        }
+
+        let read_label = self.unique_label("rom_read");
+        let miss_label = self.unique_label("rom_miss");
+        let done_label = self.unique_label("rom_done");
+        self.emit_unsigned_relation_branch(
+            function.symbol,
+            index,
+            Operand::Constant(len as i64),
+            index_ty,
+            BinaryOp::Less,
+            BranchTargets {
+                then_label: &read_label,
+                else_label: &miss_label,
+            },
+        );
+
+        self.program.push(AsmLine::Label(read_label.clone()));
+        self.load_operand_byte_to_w(function.symbol, index, index_ty, 0);
+        let label = rom_object_label(symbol);
+        self.program.push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
+        self.program.push(AsmLine::Instr(AsmInstr::Call(label)));
+        self.store_w_to_temp_byte(function.symbol, dst, 0);
+        self.branch_to_label(&done_label);
+
+        self.program.push(AsmLine::Label(miss_label));
+        self.emit_const_to_w(0);
+        self.store_w_to_temp_byte(function.symbol, dst, 0);
+        self.program.push(AsmLine::Label(done_label));
     }
 
     /// Places a return operand into the Phase 4 return convention locations.
@@ -2388,6 +2459,169 @@ impl<'a> CodegenContext<'a> {
         }
     }
 
+    /// Emits every Phase 13 ROM object as one callable RETLW table in program memory.
+    fn emit_rom_objects(&mut self, diagnostics: &mut DiagnosticBag) {
+        let placements = self.allocate_rom_tables(diagnostics);
+        if diagnostics.has_errors() || placements.is_empty() {
+            return;
+        }
+
+        self.program.push(AsmLine::Comment(
+            "program-memory ROM tables (Phase 13)".to_string(),
+        ));
+        for placement in placements {
+            let Some(global) = self
+                .typed_program
+                .globals
+                .iter()
+                .find(|global| global.symbol == placement.symbol)
+            else {
+                diagnostics.error("backend", None, "missing ROM global metadata during emission", None);
+                continue;
+            };
+            let symbol = &self.typed_program.symbols[placement.symbol];
+            let TypedGlobalInitializer::Bytes(bytes) = global.initializer.as_ref().cloned().unwrap_or(TypedGlobalInitializer::Bytes(Vec::new())) else {
+                diagnostics.error(
+                    "backend",
+                    None,
+                    format!(
+                        "ROM object `{}` needs a byte-array initializer in phase 13",
+                        symbol.name
+                    ),
+                    None,
+                );
+                continue;
+            };
+            self.program.push(AsmLine::Org(placement.start));
+            self.program.push(AsmLine::Comment(format!(
+                "ROM {} @0x{:04X} ({} bytes as RETLW table)",
+                format_rom_symbol_name(symbol),
+                placement.start,
+                bytes.len()
+            )));
+            self.program.push(AsmLine::Label(rom_object_label(symbol.id)));
+            self.program.push(AsmLine::Instr(AsmInstr::Addwf {
+                f: low7(self.target.sfr_address("PCL").unwrap_or(0x02)),
+                d: Dest::F,
+            }));
+            for byte in bytes {
+                self.program.push(AsmLine::Instr(AsmInstr::Retlw(byte)));
+            }
+        }
+    }
+
+    /// Allocates top-level ROM tables from high program memory without crossing a 256-word page.
+    fn allocate_rom_tables(&self, diagnostics: &mut DiagnosticBag) -> Vec<RomTablePlacement> {
+        let rom_globals = self
+            .typed_program
+            .globals
+            .iter()
+            .filter(|global| self.symbol_type(global.symbol).is_rom())
+            .collect::<Vec<_>>();
+        if rom_globals.is_empty() {
+            return Vec::new();
+        }
+
+        let code_high = self.program_high_water_mark();
+        let mut cursor = self.target.program_words;
+        let mut placements = Vec::with_capacity(rom_globals.len());
+
+        for global in rom_globals.into_iter().rev() {
+            let symbol = &self.typed_program.symbols[global.symbol];
+            let bytes = match &global.initializer {
+                Some(TypedGlobalInitializer::Bytes(bytes)) => bytes,
+                Some(TypedGlobalInitializer::Scalar(_))
+                | Some(TypedGlobalInitializer::Address { .. })
+                | None => {
+                    diagnostics.error(
+                        "backend",
+                        None,
+                        format!(
+                            "ROM object `{}` needs a byte-array initializer in phase 13",
+                            symbol.name
+                        ),
+                        None,
+                    );
+                    continue;
+                }
+            };
+
+            let block_words = 1u16 + bytes.len() as u16;
+            if block_words > 256 {
+                diagnostics.error(
+                    "backend",
+                    None,
+                    format!(
+                        "ROM object `{}` is too large for one Phase 13 RETLW page ({} bytes)",
+                        symbol.name,
+                        bytes.len()
+                    ),
+                    None,
+                );
+                continue;
+            }
+
+            loop {
+                if cursor == 0 {
+                    diagnostics.error(
+                        "backend",
+                        None,
+                        format!("not enough program memory for ROM object `{}`", symbol.name),
+                        Some("reduce code size or ROM table size for this target".to_string()),
+                    );
+                    break;
+                }
+                let page_base = ((cursor - 1) / 256) * 256;
+                let room = cursor - page_base;
+                if room < block_words {
+                    cursor = page_base;
+                    continue;
+                }
+                let start = cursor - block_words;
+                if start <= code_high {
+                    diagnostics.error(
+                        "backend",
+                        None,
+                        format!(
+                            "ROM object `{}` would overlap generated code at 0x{:04X}",
+                            symbol.name,
+                            start
+                        ),
+                        Some("reduce code size or shrink ROM data for this target".to_string()),
+                    );
+                    break;
+                }
+                placements.push(RomTablePlacement {
+                    symbol: global.symbol,
+                    start,
+                });
+                cursor = start;
+                break;
+            }
+        }
+
+        placements.sort_by_key(|placement| placement.start);
+        placements
+    }
+
+    /// Returns the highest encoded word address currently occupied by emitted code.
+    fn program_high_water_mark(&self) -> u16 {
+        let mut pc = 0u16;
+        let mut high = 0u16;
+        for line in &self.program.lines {
+            match line {
+                AsmLine::Org(addr) => pc = *addr,
+                AsmLine::Instr(instr) => {
+                    let end = pc + instr.word_len().saturating_sub(1);
+                    high = high.max(end);
+                    pc += instr.word_len();
+                }
+                AsmLine::Label(_) | AsmLine::Comment(_) => {}
+            }
+        }
+        high
+    }
+
     /// Emits one runtime helper body that obeys the repaired Phase 4 stack-first ABI.
     fn emit_runtime_helper(&mut self, helper: RuntimeHelper) {
         let info = helper.info();
@@ -2732,6 +2966,15 @@ impl<'a> CodegenContext<'a> {
         self.layout.symbol_storage[&symbol]
     }
 
+    /// Returns the lowered type carried by one operand in the current function.
+    fn operand_type(&self, function: &IrFunction, operand: Operand) -> Type {
+        match operand {
+            Operand::Constant(_) => Type::new(ScalarType::U16),
+            Operand::Symbol(symbol) => self.symbol_type(symbol),
+            Operand::Temp(temp) => function.temp_types[temp],
+        }
+    }
+
     /// Returns the frame layout metadata associated with one function symbol.
     fn frame_layout(&self, function_symbol: SymbolId) -> &FrameLayout {
         &self.layout.frames[&function_symbol]
@@ -2863,8 +3106,15 @@ fn build_map(
     layout: &StorageLayout,
     labels: &BTreeMap<String, u16>,
 ) -> MapFile {
+    let rom_label_names = typed_program
+        .symbols
+        .iter()
+        .filter(|symbol| symbol.ty.is_rom())
+        .map(|symbol| rom_object_label(symbol.id))
+        .collect::<BTreeSet<_>>();
     let mut code_symbols = labels
         .iter()
+        .filter(|(name, _)| !rom_label_names.contains(*name))
         .map(|(name, addr)| (name.clone(), *addr))
         .collect::<Vec<_>>();
     code_symbols.sort_by_key(|(_, addr)| *addr);
@@ -2908,9 +3158,23 @@ fn build_map(
     }
     data_symbols.sort_by_key(|(_, addr)| *addr);
 
+    let mut rom_symbols = typed_program
+        .symbols
+        .iter()
+        .filter(|symbol| symbol.ty.is_rom())
+        .filter_map(|symbol| {
+            labels
+                .get(&rom_object_label(symbol.id))
+                .copied()
+                .map(|addr| (format_rom_symbol_name(symbol), addr))
+        })
+        .collect::<Vec<_>>();
+    rom_symbols.sort_by_key(|(_, addr)| *addr);
+
     MapFile {
         code_symbols,
         data_symbols,
+        rom_symbols,
     }
 }
 
@@ -2931,6 +3195,20 @@ fn format_data_symbol_name(symbol: &Symbol) -> String {
     } else {
         format!("{} [{}]", symbol.name, tags.join(", "))
     }
+}
+
+/// Formats one ROM symbol with tags that explain the callable RETLW-table representation.
+fn format_rom_symbol_name(symbol: &Symbol) -> String {
+    let mut tags = vec!["rom", "const"];
+    if symbol.storage_class == StorageClass::Static {
+        tags.push("static");
+    }
+    format!("{} [{}]", symbol.name, tags.join(", "))
+}
+
+/// Builds the assembly label used for one program-memory ROM table object.
+fn rom_object_label(symbol: SymbolId) -> String {
+    format!("__romobj{symbol}")
 }
 
 /// Evaluates a constant typed expression for startup initialization purposes.
@@ -2956,6 +3234,7 @@ fn eval_const_expr(expr: &TypedExpr) -> i64 {
         }
         TypedExprKind::Assign { .. }
         | TypedExprKind::StructAssign { .. }
+        | TypedExprKind::RomRead8 { .. }
         | TypedExprKind::Call { .. }
         | TypedExprKind::ArrayDecay(_)
         | TypedExprKind::AddressOf(_)

@@ -249,6 +249,39 @@ fn read_artifact(output: &Path, extension: &str) -> String {
     fs::read_to_string(output.with_extension(extension)).expect("artifact")
 }
 
+/// Parses the emitted Intel HEX file into a byte-addressed map for spot checks.
+fn read_hex_bytes(output: &Path) -> BTreeMap<u16, u8> {
+    let mut bytes = BTreeMap::new();
+    for line in fs::read_to_string(output).expect("hex").lines() {
+        if !line.starts_with(':') || line.len() < 11 {
+            continue;
+        }
+        let len = u8::from_str_radix(&line[1..3], 16).expect("len") as usize;
+        let addr = u16::from_str_radix(&line[3..7], 16).expect("addr");
+        let kind = u8::from_str_radix(&line[7..9], 16).expect("kind");
+        if kind != 0 {
+            continue;
+        }
+        for index in 0..len {
+            let start = 9 + index * 2;
+            let byte = u8::from_str_radix(&line[start..start + 2], 16).expect("byte");
+            bytes.insert(addr + index as u16, byte);
+        }
+    }
+    bytes
+}
+
+/// Finds one symbol address in a rendered map file by matching a readable symbol name fragment.
+fn map_symbol_address(map: &str, needle: &str) -> Option<u16> {
+    map.lines().find_map(|line| {
+        if !line.contains(needle) {
+            return None;
+        }
+        let addr = line.split_whitespace().next()?;
+        u16::from_str_radix(addr, 16).ok()
+    })
+}
+
 /// Counts non-overlapping substring matches in one artifact string.
 fn count_occurrences(haystack: &str, needle: &str) -> usize {
     haystack.match_indices(needle).count()
@@ -3259,6 +3292,179 @@ fn phase12_examples_compile_via_picc() {
         ("pic16f877a", "examples/pic16f877a/pointer_compare.c"),
         ("pic16f877a", "examples/pic16f877a/pointer_subtract.c"),
         ("pic16f877a", "examples/pic16f877a/string_pointer.c"),
+    ];
+
+    for (target, example) in examples {
+        let output = compile_example_via_picc_cli(target, example);
+        assert_hex_is_programmable(&output);
+        assert!(output.with_extension("map").exists());
+        assert!(output.with_extension("lst").exists());
+    }
+}
+
+#[test]
+/// Verifies ROM byte tables emit as RETLW program-memory objects and remain readable via `__rom_read8`.
+fn compiles_phase13_rom_table_and_read() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase13-rom-table.c",
+        "\
+#include <pic16/pic16f628a.h>
+const __rom unsigned char table[] = {1, 2, 3, 4};
+void main(void) {
+    TRISB = 0x00;
+    PORTB = __rom_read8(table, 2);
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    let map = read_artifact(&output, "map");
+    let listing = read_artifact(&output, "lst");
+    let hex = read_hex_bytes(&output);
+    let rom_addr = map_symbol_address(&map, "table [rom, const]").expect("rom symbol");
+
+    assert_hex_is_programmable(&output);
+    assert!(map.contains("ROM Symbols"));
+    assert!(asm.contains("program-memory ROM tables"));
+    assert!(asm.contains("retlw 0x01"));
+    assert!(asm.contains("retlw 0x04"));
+    assert!(listing.contains("retlw 0x03"));
+    assert!(rom_addr > 0x0004);
+    assert_eq!(hex.get(&(rom_addr * 2 + 2)).copied(), Some(0x01));
+    assert_eq!(hex.get(&(rom_addr * 2 + 3)).copied(), Some(0x34));
+    assert_eq!(hex.get(&(rom_addr * 2 + 8)).copied(), Some(0x04));
+    assert_eq!(hex.get(&(rom_addr * 2 + 9)).copied(), Some(0x34));
+}
+
+#[test]
+/// Verifies explicit ROM strings compile as ROM byte arrays and stay visible in the map.
+fn compiles_phase13_rom_string_array() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase13-rom-string.c",
+        "\
+#include <pic16/pic16f877a.h>
+const __rom char msg[] = \"OK\";
+void main(void) {
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    PORTB = __rom_read8(msg, 1);
+}
+",
+    );
+
+    let map = read_artifact(&output, "map");
+    let listing = read_artifact(&output, "lst");
+    assert_hex_is_programmable(&output);
+    assert!(map.contains("msg [rom, const]"));
+    assert!(listing.contains("retlw 0x4F"));
+    assert!(listing.contains("retlw 0x4B"));
+    assert!(listing.contains("retlw 0x00"));
+}
+
+#[test]
+/// Verifies non-const ROM objects are rejected clearly.
+fn reports_phase13_nonconst_rom_object() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase13-rom-nonconst.c",
+        "\
+#include <pic16/pic16f628a.h>
+__rom unsigned char table[] = {1, 2, 3};
+void main(void) {
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("must be declared `const`"));
+}
+
+#[test]
+/// Verifies local ROM declarations are rejected because Phase 13 keeps ROM objects at file scope.
+fn reports_phase13_local_rom_object() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase13-local-rom.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    const __rom unsigned char table[] = {1, 2, 3};
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("cannot use `__rom` storage"));
+}
+
+#[test]
+/// Verifies direct ROM indexing stays rejected in favor of the explicit builtin.
+fn reports_phase13_direct_rom_indexing() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase13-rom-indexing.c",
+        "\
+#include <pic16/pic16f628a.h>
+const __rom unsigned char table[] = {1, 2, 3};
+void main(void) {
+    PORTB = table[0];
+}
+",
+    );
+
+    assert!(error.contains("direct indexing of program-memory arrays"));
+}
+
+#[test]
+/// Verifies data-space pointers cannot bind directly to ROM objects.
+fn reports_phase13_data_pointer_to_rom() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase13-rom-pointer-mix.c",
+        "\
+#include <pic16/pic16f628a.h>
+const __rom unsigned char table[] = {1, 2, 3};
+unsigned char *ptr = table;
+void main(void) {
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("program-memory arrays do not decay to data-space pointers") || error.contains("cannot coerce"));
+}
+
+#[test]
+/// Verifies ROM reads remain forbidden inside interrupt handlers in this phase.
+fn reports_phase13_rom_read_in_isr() {
+    let error = compile_error(
+        "pic16f877a",
+        "phase13-rom-isr.c",
+        "\
+#include <pic16/pic16f877a.h>
+const __rom unsigned char table[] = {1, 2, 3};
+void __interrupt isr(void) {
+    PORTB = __rom_read8(table, 1);
+}
+void main(void) {
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+}
+",
+    );
+
+    assert!(error.contains("ROM reads are not supported inside interrupt handlers"));
+}
+
+#[test]
+/// Verifies checked-in Phase 13 examples compile cleanly through the `picc` CLI.
+fn phase13_examples_compile_via_picc() {
+    let examples = [
+        ("pic16f628a", "examples/pic16f628a/rom_table.c"),
+        ("pic16f877a", "examples/pic16f877a/rom_string.c"),
+        ("pic16f877a", "examples/pic16f877a/rom_lookup.c"),
     ];
 
     for (target, example) in examples {

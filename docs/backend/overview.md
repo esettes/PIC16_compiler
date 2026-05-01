@@ -10,7 +10,7 @@ Shared backend responsibilities:
 - IR -> PIC16 asm lowering
 - 14-bit word encoding
 
-Current backend phase: **Phase 12 richer data-space pointer lowering on top of Phase 11 aggregate completeness, Phase 10 static-data cleanup, Phase 9 control-flow coverage, Phase 8 aggregate/type-aware lowering, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**
+Current backend phase: **Phase 13 explicit program-memory const/string/table lowering on top of Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 static-data cleanup, Phase 9 control-flow coverage, Phase 8 aggregate/type-aware lowering, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**
 
 Backend owns:
 
@@ -30,6 +30,9 @@ Backend owns:
 - startup comments and map labels that annotate const/static data
 - startup address writes for pointer-valued globals/statics
 - RAM-backed string-literal data symbols and a dedicated map section for them
+- RETLW-backed ROM table emission in program memory for explicit `const __rom` byte arrays
+- inline ROM-read lowering through generated ROM table calls
+- separate ROM symbol map section
 - byte-wise whole-struct copy lowering through existing indirect memory instructions
 - switch compare-chain blocks through the ordinary branch emitter
 - pointer compare/subtract reuse ordinary 16-bit compare/arithmetic lowering
@@ -116,6 +119,7 @@ Phase 10 backend docs:
 Phase 11 backend docs:
 
 - [phase11-aggregate-copy.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase11-aggregate-copy.md:1)
+- [phase13-rom-data-layout.md](/home/settes/cursus/PIC16_compiler/docs/backend/phase13-rom-data-layout.md:1)
 
 Historical docs:
 

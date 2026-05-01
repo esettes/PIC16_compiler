@@ -4,6 +4,7 @@ use std::fmt::Write;
 pub struct MapFile {
     pub code_symbols: Vec<(String, u16)>,
     pub data_symbols: Vec<(String, u16)>,
+    pub rom_symbols: Vec<(String, u16)>,
 }
 
 /// Renders the linker map with code and data symbol addresses.
@@ -53,6 +54,14 @@ pub fn render_map(map: &MapFile) -> String {
         "  ISR Context",
         &map.data_symbols,
         |name| name.starts_with("__isr_ctx."),
+    );
+    let _ = writeln!(output);
+    render_section(&mut output, "ROM Symbols", &map.rom_symbols);
+    render_grouped(
+        &mut output,
+        "  User ROM",
+        &map.rom_symbols,
+        |_| true,
     );
     output
 }

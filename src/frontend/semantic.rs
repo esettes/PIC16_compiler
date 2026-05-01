@@ -157,6 +157,10 @@ pub enum TypedExprKind {
         value: Box<TypedExpr>,
         size: usize,
     },
+    RomRead8 {
+        symbol: SymbolId,
+        index: Box<TypedExpr>,
+    },
     Call {
         function: SymbolId,
         args: Vec<TypedExpr>,
@@ -464,6 +468,17 @@ impl<'a> SemanticAnalyzer<'a> {
         }
 
         self.symbols[symbol].is_defined = true;
+        if self.symbols[symbol].ty.is_rom() && global.initializer.is_none() {
+            diagnostics.error(
+                "semantic",
+                Some(global.span),
+                format!(
+                    "program-memory object `{}` requires a constant initializer in phase 13",
+                    global.name
+                ),
+                Some("initialize ROM tables and strings at the declaration site".to_string()),
+            );
+        }
         let initializer = global.initializer.as_ref().and_then(|init| {
             self.analyze_global_initializer(self.symbols[symbol].ty, init, global.span, diagnostics)
         });
@@ -926,6 +941,15 @@ impl<'a> SemanticAnalyzer<'a> {
         };
 
         if decay_arrays && typed.ty.is_array() {
+            if typed.ty.is_rom() {
+                diagnostics.error(
+                    "semantic",
+                    Some(expr.span),
+                    "program-memory arrays do not decay to data-space pointers in phase 13",
+                    Some("read ROM arrays with `__rom_read8(table, index)`".to_string()),
+                );
+                return Some(typed);
+            }
             Some(self.decay_array_expr(typed, expr.span))
         } else {
             Some(typed)
@@ -1071,6 +1095,15 @@ impl<'a> SemanticAnalyzer<'a> {
             );
             return None;
         }
+        if value.ty.is_rom() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "taking the address of a program-memory object is not supported in phase 13",
+                Some("read ROM data through `__rom_read8()`; ROM pointers are not modeled yet".to_string()),
+            );
+            return None;
+        }
         if !value.ty.is_supported_pointer_target() {
             diagnostics.error(
                 "semantic",
@@ -1132,6 +1165,10 @@ impl<'a> SemanticAnalyzer<'a> {
         span: Span,
         diagnostics: &mut DiagnosticBag,
     ) -> Option<TypedExpr> {
+        self.validate_const_placement(target_ty, span, "explicit cast target", diagnostics);
+        if target_ty.is_pointer() && target_ty.element_type().is_rom() {
+            return None;
+        }
         if target_ty.is_array() || target_ty.is_struct() {
             diagnostics.error(
                 "semantic",
@@ -1593,6 +1630,15 @@ impl<'a> SemanticAnalyzer<'a> {
     ) -> Option<TypedExpr> {
         let base = self.analyze_expr(base, diagnostics)?;
         let index = self.analyze_expr(index, diagnostics)?;
+        if base.ty.is_array() && base.ty.is_rom() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "direct indexing of program-memory arrays is not supported in phase 13",
+                Some("use `__rom_read8(table, index)` for ROM byte arrays".to_string()),
+            );
+            return None;
+        }
         if !base.ty.is_pointer() {
             diagnostics.error(
                 "semantic",
@@ -1724,6 +1770,10 @@ impl<'a> SemanticAnalyzer<'a> {
         span: Span,
         diagnostics: &mut DiagnosticBag,
     ) -> Option<TypedExpr> {
+        if callee == "__rom_read8" {
+            return self.analyze_rom_read8_expr(args, span, diagnostics);
+        }
+
         let Some(function) = self.globals_by_name.get(callee).copied() else {
             diagnostics.error(
                 "semantic",
@@ -1775,6 +1825,107 @@ impl<'a> SemanticAnalyzer<'a> {
                 args: typed_args,
             },
             ty: self.symbols[function].ty,
+            span,
+            value_category: ValueCategory::RValue,
+        })
+    }
+
+    /// Analyzes the Phase 13 ROM-byte intrinsic over one named `const __rom` byte array object.
+    fn analyze_rom_read8_expr(
+        &mut self,
+        args: &[Expr],
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        if args.len() != 2 {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("`__rom_read8` expects 2 argument(s), got {}", args.len()),
+                Some("use `__rom_read8(table, index)`".to_string()),
+            );
+            return None;
+        }
+        if self.current_function_is_interrupt() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "ROM reads are not supported inside interrupt handlers in phase 13",
+                Some("read ROM data outside the ISR and pass scalar values into the handler".to_string()),
+            );
+            return None;
+        }
+
+        let object = self.analyze_expr_with_decay(&args[0], diagnostics, false)?;
+        let TypedExprKind::Symbol(symbol) = object.kind else {
+            diagnostics.error(
+                "semantic",
+                Some(object.span),
+                "`__rom_read8` requires a named ROM array object as its first argument",
+                Some("pass the declared ROM table name directly".to_string()),
+            );
+            return None;
+        };
+        if !object.ty.is_array() || !object.ty.is_rom() {
+            diagnostics.error(
+                "semantic",
+                Some(object.span),
+                "first `__rom_read8` argument must be a `const __rom` byte array",
+                None,
+            );
+            return None;
+        }
+        if self.symbols[symbol].kind != SymbolKind::Global {
+            diagnostics.error(
+                "semantic",
+                Some(object.span),
+                "`__rom_read8` only accepts file-scope ROM objects in phase 13",
+                None,
+            );
+            return None;
+        }
+        let element_ty = object.ty.element_type();
+        if !matches!(element_ty.scalar, ScalarType::I8 | ScalarType::U8)
+            || element_ty.pointer_depth != 0
+            || element_ty.struct_id.is_some()
+        {
+            diagnostics.error(
+                "semantic",
+                Some(object.span),
+                format!(
+                    "`__rom_read8` only supports ROM arrays of `char` or `unsigned char`, got `{}`",
+                    object.ty
+                ),
+                None,
+            );
+            return None;
+        }
+
+        self.symbols[symbol].is_referenced = true;
+        let index = self.analyze_expr(&args[1], diagnostics)?;
+        if !index.ty.is_integer() {
+            diagnostics.error(
+                "semantic",
+                Some(index.span),
+                "`__rom_read8` index must be an integer expression",
+                None,
+            );
+            return None;
+        }
+        let index = self.coerce_expr(
+            index,
+            Type::new(ScalarType::U16),
+            diagnostics,
+            "ROM read index",
+            true,
+        );
+
+        Some(TypedExpr {
+            kind: TypedExprKind::RomRead8 {
+                symbol,
+                index: Box::new(index),
+            },
+            ty: Type::new(ScalarType::U8),
             span,
             value_category: ValueCategory::RValue,
         })
@@ -2763,7 +2914,8 @@ impl<'a> SemanticAnalyzer<'a> {
         span: Span,
         diagnostics: &mut DiagnosticBag,
     ) -> Option<TypedExpr> {
-        if !ty.has_size() || !ty.is_supported_object_type() && !ty.is_supported_value_type() {
+        let supported = ty.is_supported_object_type() || ty.is_supported_value_type() || ty.is_rom();
+        if !ty.has_size() || !supported {
             diagnostics.error(
                 "semantic",
                 Some(span),
@@ -3462,6 +3614,57 @@ impl<'a> SemanticAnalyzer<'a> {
         diagnostics: &mut DiagnosticBag,
     ) {
         self.validate_const_placement(ty, span, &format!("{context} `{name}`"), diagnostics);
+        if ty.is_rom() {
+            if context != "global" {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    format!("{context} `{name}` cannot use `__rom` storage in phase 13"),
+                    Some("keep ROM objects at file scope only".to_string()),
+                );
+                return;
+            }
+            if !ty.object_is_const() {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    format!("program-memory object `{name}` must be declared `const`"),
+                    Some("use `const __rom ...` for ROM tables and strings".to_string()),
+                );
+                return;
+            }
+            if !ty.is_array() {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    format!("program-memory object `{name}` uses unsupported type `{ty}`"),
+                    Some("phase 13 supports only ROM byte arrays".to_string()),
+                );
+                return;
+            }
+            let element_ty = ty.element_type();
+            if !matches!(element_ty.scalar, ScalarType::I8 | ScalarType::U8)
+                || element_ty.pointer_depth != 0
+                || element_ty.array_len.is_some()
+                || element_ty.struct_id.is_some()
+            {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    format!("program-memory object `{name}` uses unsupported ROM element type `{element_ty}`"),
+                    Some("use `const __rom char[]` or `const __rom unsigned char[]`".to_string()),
+                );
+            }
+            if ty.array_len.is_some_and(|len| len > 255) {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    format!("program-memory object `{name}` is too large for phase 13 ROM tables ({ty})"),
+                    Some("keep each ROM byte array at 255 elements or fewer".to_string()),
+                );
+            }
+            return;
+        }
         if ty.is_array() && ty.element_type().is_array() {
             diagnostics.error(
                 "semantic",
@@ -3487,11 +3690,19 @@ impl<'a> SemanticAnalyzer<'a> {
     /// Accepts Phase 12 const placement now that pointer/object qualifiers are represented directly.
     fn validate_const_placement(
         &self,
-        _ty: Type,
-        _span: Span,
-        _context: &str,
-        _diagnostics: &mut DiagnosticBag,
+        ty: Type,
+        span: Span,
+        context: &str,
+        diagnostics: &mut DiagnosticBag,
     ) {
+        if ty.is_pointer() && ty.element_type().is_rom() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("{context} uses unsupported ROM pointer type `{ty}`"),
+                Some("phase 13 supports ROM objects plus `__rom_read8()`, not ROM pointers".to_string()),
+            );
+        }
     }
 
     /// Checks struct fields for the same unsupported const-pointer forms rejected elsewhere.
@@ -3511,6 +3722,19 @@ impl<'a> SemanticAnalyzer<'a> {
                 } else {
                     None
                 };
+
+                if field_ty.is_rom() {
+                    diagnostics.error(
+                        "semantic",
+                        Some(field.span),
+                        format!(
+                            "struct `{}` field `{}` cannot use program-memory type `{}` in phase 13",
+                            def.name, field.name, field_ty
+                        ),
+                        Some("keep `__rom` objects at file scope only".to_string()),
+                    );
+                    continue;
+                }
 
                 if field_ty.is_void() {
                     diagnostics.error(
@@ -3886,6 +4110,10 @@ impl<'a> SemanticAnalyzer<'a> {
                 let _ = self.track_stack_pointer_expr(value, tainted_locals);
                 false
             }
+            TypedExprKind::RomRead8 { index, .. } => {
+                let _ = self.track_stack_pointer_expr(index, tainted_locals);
+                false
+            }
             TypedExprKind::Call { args, .. } => {
                 let arg_tainted = args
                     .iter()
@@ -4062,6 +4290,18 @@ impl<'a> SemanticAnalyzer<'a> {
                 );
                 self.walk_interrupt_expr(function, target, diagnostics);
                 self.walk_interrupt_expr(function, value, diagnostics);
+            }
+            TypedExprKind::RomRead8 { index, .. } => {
+                diagnostics.error(
+                    "semantic",
+                    Some(expr.span),
+                    format!(
+                        "interrupt handler `{}` cannot read ROM with `__rom_read8` in phase 13",
+                        self.symbols[function].name
+                    ),
+                    Some("read ROM outside the ISR and pass the byte in through normal state".to_string()),
+                );
+                self.walk_interrupt_expr(function, index, diagnostics);
             }
             TypedExprKind::IntLiteral(_) | TypedExprKind::Symbol(_) => {}
         }
@@ -4258,6 +4498,7 @@ fn is_constant_expression(expr: &TypedExpr) -> bool {
         TypedExprKind::Cast { expr, .. } => is_constant_expression(expr),
         TypedExprKind::Assign { .. }
         | TypedExprKind::StructAssign { .. }
+        | TypedExprKind::RomRead8 { .. }
         | TypedExprKind::Call { .. }
         | TypedExprKind::ArrayDecay(_)
         | TypedExprKind::AddressOf(_)
@@ -4294,6 +4535,7 @@ fn eval_integer_constant_expr(expr: &TypedExpr) -> Option<i64> {
         }
         TypedExprKind::Assign { .. }
         | TypedExprKind::StructAssign { .. }
+        | TypedExprKind::RomRead8 { .. }
         | TypedExprKind::Call { .. }
         | TypedExprKind::ArrayDecay(_)
         | TypedExprKind::AddressOf(_)
@@ -4456,6 +4698,7 @@ fn collect_expr_calls(expr: &TypedExpr, callees: &mut BTreeSet<SymbolId>) {
             collect_expr_calls(target, callees);
             collect_expr_calls(value, callees);
         }
+        TypedExprKind::RomRead8 { index, .. } => collect_expr_calls(index, callees),
         TypedExprKind::Call { function, args } => {
             callees.insert(*function);
             for arg in args {

@@ -3,6 +3,13 @@ use std::fmt::{Display, Formatter};
 pub type StructId = usize;
 pub const MAX_POINTER_DEPTH: usize = 8;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AddressSpace {
+    #[default]
+    Data,
+    Rom,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScalarType {
     Void,
@@ -36,6 +43,7 @@ pub enum StorageClass {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Type {
     pub scalar: ScalarType,
+    pub address_space: AddressSpace,
     pub qualifiers: Qualifiers,
     pub pointer_depth: u8,
     pub pointer_qualifiers: [Qualifiers; MAX_POINTER_DEPTH],
@@ -49,6 +57,7 @@ impl Type {
     pub const fn new(scalar: ScalarType) -> Self {
         Self {
             scalar,
+            address_space: AddressSpace::Data,
             qualifiers: Qualifiers {
                 is_const: false,
                 is_volatile: false,
@@ -68,6 +77,7 @@ impl Type {
     pub const fn struct_type(struct_id: StructId, struct_size: usize) -> Self {
         Self {
             scalar: ScalarType::Void,
+            address_space: AddressSpace::Data,
             qualifiers: Qualifiers {
                 is_const: false,
                 is_volatile: false,
@@ -86,6 +96,12 @@ impl Type {
     /// Returns a copy of the type with the provided qualifiers applied.
     pub const fn with_qualifiers(mut self, qualifiers: Qualifiers) -> Self {
         self.qualifiers = qualifiers;
+        self
+    }
+
+    /// Returns a copy of the type placed in the requested address space.
+    pub const fn with_address_space(mut self, address_space: AddressSpace) -> Self {
+        self.address_space = address_space;
         self
     }
 
@@ -192,6 +208,9 @@ impl Type {
         if self.has_struct_base() {
             return false;
         }
+        if self.address_space != AddressSpace::Data {
+            return false;
+        }
         matches!(
             self.scalar,
             ScalarType::Void | ScalarType::I8 | ScalarType::U8 | ScalarType::I16 | ScalarType::U16
@@ -225,7 +244,7 @@ impl Type {
 
     /// Returns true when the type can be the target of a Phase 3 data pointer.
     pub fn is_supported_pointer_target(self) -> bool {
-        self.array_len.is_none() && self.has_size()
+        self.array_len.is_none() && self.has_size() && self.address_space == AddressSpace::Data
     }
 
     /// Returns true when the type can live in a scalar value position in Phase 3.
@@ -321,6 +340,11 @@ impl Type {
     pub fn same_pointer_shape(self, other: Self) -> bool {
         self.is_pointer() && other.is_pointer() && self.unqualified() == other.unqualified()
     }
+
+    /// Returns true when the declared object lives in program memory.
+    pub fn is_rom(self) -> bool {
+        self.address_space == AddressSpace::Rom
+    }
 }
 
 impl Default for Type {
@@ -338,6 +362,9 @@ impl Display for Type {
         }
         if self.qualifiers.is_volatile {
             formatter.write_str("volatile ")?;
+        }
+        if self.address_space == AddressSpace::Rom {
+            formatter.write_str("__rom ")?;
         }
         let rendered_struct = if let Some(struct_id) = self.struct_id {
             format!("struct#{struct_id}")
@@ -374,7 +401,7 @@ impl Display for Type {
 
 #[cfg(test)]
 mod tests {
-    use super::{Qualifiers, ScalarType, Type};
+    use super::{AddressSpace, Qualifiers, ScalarType, Type};
 
     #[test]
     /// Confirms the supported integer widths and masks match Phase 2 expectations.
@@ -427,5 +454,21 @@ mod tests {
         assert!(ptr_to_const.element_type().qualifiers.is_const);
         assert!(const_ptr.object_is_const());
         assert!(!const_ptr.element_type().qualifiers.is_const);
+    }
+
+    #[test]
+    /// Verifies ROM address-space metadata survives array wrapping and display rendering.
+    fn phase_thirteen_rom_types_render_and_preserve_address_space() {
+        let rom = Type::new(ScalarType::U8)
+            .with_qualifiers(Qualifiers {
+                is_const: true,
+                is_volatile: false,
+            })
+            .with_address_space(AddressSpace::Rom)
+            .array_of(4);
+
+        assert!(rom.is_rom());
+        assert!(rom.element_type().is_rom());
+        assert_eq!(format!("{rom}"), "const __rom unsigned char[4]");
     }
 }
