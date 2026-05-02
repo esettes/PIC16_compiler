@@ -92,6 +92,6 @@ Given `arg_bytes = A`:
 ## Notes
 
 - `main` still requires zero parameters
-- recursion is rejected because stack depth is computed statically and there is no runtime overflow check
-- backend map output exposes helper symbols such as `__abi.stack_ptr.lo` and stack bounds such as `__stack.base`
+- recursion is still rejected in Phase 18; optional `--stack-check` adds runtime bounds checks but does not enable recursive cycles
+- backend map output exposes helper symbols such as `__abi.stack_ptr.lo` plus stack bounds such as `__stack_base` and `__stack_limit`
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->

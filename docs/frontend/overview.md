@@ -14,7 +14,7 @@ Output:
 
 - a typed program ready for IR lowering
 
-Current Phase 17 frontend surface:
+Current Phase 18 frontend surface:
 
 - parses `typedef`, `enum`, and named packed `struct` declarations
 - parses named packed `union` declarations and basic unsigned bitfield fields
@@ -50,6 +50,7 @@ Current Phase 17 frontend surface:
 - lowers bare function names and `&function` as function-pointer values
 - accepts compatible function-pointer equality/inequality and indirect calls in normal code
 - rejects function-pointer arithmetic, relational comparisons, pointer-to-function-pointer objects, and indirect calls inside ISR
+- detects direct and mutual recursion cycles with Phase 18 diagnostics that mention stack-check behavior
 - parses `switch`, `case`, and `default`
 - validates case-label constants, duplicate cases, default count, and switch expression types
 - preserves C-style fallthrough and innermost-construct `break` behavior for supported switch forms

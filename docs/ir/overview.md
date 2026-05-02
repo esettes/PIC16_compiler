@@ -84,7 +84,14 @@ Phase 17 indirect-call notes:
 - indirect-call recursion and stack-depth analysis expand across every known target in the matching signature group
 - no raw code pointer values or computed PIC16 calls are introduced
 
-Current Phase 17 limits:
+Phase 18 stack-analysis notes:
+
+- Phase 18 does not add a dedicated stack-check IR instruction
+- runtime stack guards are backend-inserted from frame/arg metadata, not frontend-only annotations
+- call-graph analysis expands across direct calls, helper-triggering operations, ISR roots, and known function-pointer target groups
+- recursion diagnostics remain semantic; backend stack reports assume acyclic call graphs after semantic validation
+
+Current Phase 18 limits:
 
 - no incomplete-struct/union pointers
 - no whole-aggregate copy inside interrupt handlers
@@ -96,6 +103,7 @@ Current Phase 17 limits:
 - no pointer-to-function-pointer object model
 - no function-pointer arithmetic or relational comparisons
 - no indirect calls inside interrupt handlers
+- no recursion, even with `--stack-check`
 
 Current detail:
 
@@ -112,6 +120,7 @@ Current detail:
 - [phase15-aggregate-lowering.md](phase15-aggregate-lowering.md)
 - [phase16-aggregate-index-lowering.md](phase16-aggregate-index-lowering.md)
 - [phase17-indirect-call-lowering.md](phase17-indirect-call-lowering.md)
+- [phase18-call-graph.md](phase18-call-graph.md)
 
 Historical detail:
 

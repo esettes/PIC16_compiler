@@ -12,11 +12,12 @@ Shared backend responsibilities:
 - IR -> PIC16 asm lowering
 - 14-bit word encoding
 
-Current backend phase: **Phase 17 controlled function pointers and indirect dispatch on top of Phase 16 multidimensional arrays and aggregate polish, Phase 15 named union support and basic unsigned bitfields, Phase 14 richer program-memory usability, Phase 13 explicit program-memory const/string/table lowering, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 static-data cleanup, Phase 9 control-flow coverage, Phase 8 aggregate/type-aware lowering, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**
+Current backend phase: **Phase 18 stack safety, call-graph analysis, and stack-usage reporting on top of Phase 17 controlled function pointers and indirect dispatch, Phase 16 multidimensional arrays and aggregate polish, Phase 15 named union support and basic unsigned bitfields, Phase 14 richer program-memory usability, Phase 13 explicit program-memory const/string/table lowering, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 static-data cleanup, Phase 9 control-flow coverage, Phase 8 aggregate/type-aware lowering, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**
 
 Backend owns:
 
 - software stack helper slots: `stack_ptr`, `frame_ptr`
+- stack bound symbols: `__stack_base`, `__stack_limit`, `__stack_ptr`, `__frame_ptr`
 - return helper slot: `return_high`
 - short-lived scratch slots: `scratch0`, `scratch1`
 - caller-pushed stack argument lowering
@@ -42,6 +43,9 @@ Backend owns:
 - switch compare-chain blocks through the ordinary branch emitter
 - pointer compare/subtract reuse ordinary 16-bit compare/arithmetic lowering
 - per-signature generated function-pointer dispatchers with dispatch-ID call lowering
+- optional inline stack growth checks before frame growth and argument pushes
+- generated `__stack_overflow_trap` infinite-loop handler when stack checks are enabled
+- per-function stack report rendering with helper, ISR, and function-pointer target-set accounting
 - no backend jump tables and no backend-side recovery of labels nested under unrelated control statements in phase 9
 - no backend-side recovery for chained designators or incomplete-struct/union pointers; those stay frontend diagnostics
 - bank/page reuse tracking
@@ -55,6 +59,7 @@ Current call contract:
 - callee restores `SP` to caller arg top
 - callee restores caller `FP`
 - caller subtracts argument bytes after return
+- when `--stack-check` is enabled, caller-side argument growth is guarded before bytes are pushed
 
 Current return contract:
 
@@ -70,6 +75,7 @@ Phase 5 helper contract:
 - helpers may mutate their own arg slots as working storage
 - helper locals/count/flags live above saved `FP` in helper frame storage
 - helper labels are emitted only when used and appear in `.map` / `.lst`
+- helper-call argument growth is guarded too when `--stack-check` is enabled
 
 Current backend docs:
 
@@ -122,7 +128,7 @@ Phase 10 backend docs:
 
 - [phase10-data-layout.md](phase10-data-layout.md)
 
-Phase 11-17 backend docs:
+Phase 11-18 backend docs:
 
 - [phase11-aggregate-copy.md](phase11-aggregate-copy.md)
 - [phase13-rom-data-layout.md](phase13-rom-data-layout.md)
@@ -130,6 +136,7 @@ Phase 11-17 backend docs:
 - [phase15-bitfield-codegen.md](phase15-bitfield-codegen.md)
 - [phase16-aggregate-layout.md](phase16-aggregate-layout.md)
 - [phase17-dispatcher.md](phase17-dispatcher.md)
+- [phase18-stack-safety.md](phase18-stack-safety.md)
 
 Historical docs:
 

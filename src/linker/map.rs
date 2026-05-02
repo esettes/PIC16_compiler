@@ -49,7 +49,12 @@ pub fn render_map(map: &MapFile) -> String {
         &mut output,
         "  ABI / Stack",
         &map.data_symbols,
-        |name| name.starts_with("__abi.") || name.starts_with("__stack."),
+        |name| {
+            name.starts_with("__abi.")
+                || name.starts_with("__stack.")
+                || name.starts_with("__stack_")
+                || name.starts_with("__frame_ptr")
+        },
     );
     render_grouped(
         &mut output,

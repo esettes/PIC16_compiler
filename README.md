@@ -30,9 +30,18 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 17: controlled function pointers and indirect dispatch on top of Phase 16 multidimensional arrays and aggregate-polish support, Phase 15 named `union` support and basic unsigned bitfields, Phase 14 richer program-memory data usability, Phase 13 explicit ROM objects, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 string/static-data cleanup, Phase 9 `switch` control flow, Phase 8 type-system work, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
+Current implementation is **Phase 18: stack safety, call-graph analysis, and stack-usage reporting on top of Phase 17 controlled function pointers and indirect dispatch, Phase 16 multidimensional arrays and aggregate-polish support, Phase 15 named `union` support and basic unsigned bitfields, Phase 14 richer program-memory data usability, Phase 13 explicit ROM objects, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 string/static-data cleanup, Phase 9 `switch` control flow, Phase 8 type-system work, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
 
-Phase 17 scope:
+Phase 18 scope:
+
+- target-aware software-stack bounds with `__stack_base`, `__stack_limit`, `__stack_ptr`, and `__frame_ptr`
+- optional `--stack-check` runtime overflow guards on frame growth, helper calls, direct calls, and function-pointer dispatcher calls
+- generated `__stack_overflow_trap` infinite-loop handler when runtime checks are enabled
+- `--stack-report` / `--stack-report-file` per-function stack-usage visibility, ISR context accounting, and function-pointer target-set reporting
+- stronger call-graph expansion across direct calls, helpers, ISR roots, and generated function-pointer dispatch groups
+- stronger recursion diagnostics; recursion remains rejected in this phase
+
+Phase 17 scope remains:
 
 - function pointer object types with supported zero-arg/one-arg scalar signatures
 - taking function addresses and assigning compatible function pointers
@@ -136,6 +145,7 @@ What changed from Phase 3:
 - Phase 15 adds named unions, union initializers/copy, and basic unsigned bitfield layout/read/write lowering
 - Phase 16 adds row-major multidimensional RAM arrays, chained designators, and multidimensional aggregate field access
 - Phase 17 adds controlled source-level function pointers, dispatch-ID lowering, and indirect-call diagnostics
+- Phase 18 adds target-aware stack bounds, opt-in runtime overflow checks, and stack reports without enabling recursion
 - active docs now describe stack-first behavior; old Phase 2/3 docs remain historical
 
 Historical milestone snapshots below describe what each phase introduced at the time. The current supported subset is summarized later under `Supported Subset`, `Current constraints`, and `Current Limits`.
@@ -558,7 +568,7 @@ Unsupported:
 
 Current constraints:
 
-- recursion is rejected because Phase 4 computes maximum software-stack depth statically and has no runtime overflow checks
+- recursion is still rejected in Phase 18; `--stack-check` adds runtime bounds checks for bounded acyclic call trees but does not enable recursive cycles
 - returning a pointer to stack-local storage is rejected, including direct forms and obvious local alias chains
 - explicit casts stay limited to scalar conversions, data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
 - aggregate initializers inside interrupt handlers remain rejected
@@ -575,6 +585,10 @@ Current constraints:
 - function pointers use generated compare-chain dispatchers; raw computed PIC16 indirect calls are not used
 - function-pointer calls and function-pointer table dispatch remain forbidden inside ISR code
 - pointer-to-function-pointer declarations remain rejected conservatively in this phase
+- software stack grows upward from target-specific `stack_base` toward exclusive `stack_limit`; map output exposes both bounds plus `__stack_ptr` and `__frame_ptr`
+- `--stack-check` emits inline overflow guards before frame growth and argument-push growth; overflow branches to `__stack_overflow_trap`, an infinite loop
+- `--stack-report` prints per-function frame/helper/call-depth data; `--stack-report-file <path>` writes same detailed report to disk
+- stack reports expand function-pointer indirect calls across every known target in the matching signature group and mark unknown target sets conservatively
 - multidimensional arrays are RAM-only in this phase; multidimensional `__rom` arrays are rejected explicitly
 - multidimensional arrays do not decay to pointers; direct indexing like `matrix[i][j]` is the supported access path
 - multidimensional array parameter types remain unsupported
@@ -779,6 +793,7 @@ picc --list-targets
 - [examples/pic16f628a/rom_index.c](examples/pic16f628a/rom_index.c)
 - [examples/pic16f628a/rom_table.c](examples/pic16f628a/rom_table.c)
 - [examples/pic16f628a/stack_abi.c](examples/pic16f628a/stack_abi.c)
+- [examples/pic16f628a/stack_report.c](examples/pic16f628a/stack_report.c)
 - [examples/pic16f628a/string_array.c](examples/pic16f628a/string_array.c)
 - [examples/pic16f628a/struct_array_field.c](examples/pic16f628a/struct_array_field.c)
 - [examples/pic16f628a/struct_initializer.c](examples/pic16f628a/struct_initializer.c)
@@ -806,6 +821,7 @@ picc --list-targets
 - [examples/pic16f877a/pointer16.c](examples/pic16f877a/pointer16.c)
 - [examples/pic16f877a/pointer_compare.c](examples/pic16f877a/pointer_compare.c)
 - [examples/pic16f877a/pointer_subtract.c](examples/pic16f877a/pointer_subtract.c)
+- [examples/pic16f877a/recursive_checked.c](examples/pic16f877a/recursive_checked.c)
 - [examples/pic16f877a/rom_lookup_direct.c](examples/pic16f877a/rom_lookup_direct.c)
 - [examples/pic16f877a/rom_lookup.c](examples/pic16f877a/rom_lookup.c)
 - [examples/pic16f877a/rom_string.c](examples/pic16f877a/rom_string.c)
@@ -814,12 +830,14 @@ picc --list-targets
 - [examples/pic16f877a/shift_mix.c](examples/pic16f877a/shift_mix.c)
 - [examples/pic16f877a/state_dispatch_fp.c](examples/pic16f877a/state_dispatch_fp.c)
 - [examples/pic16f877a/static_table.c](examples/pic16f877a/static_table.c)
+- [examples/pic16f877a/stack_check.c](examples/pic16f877a/stack_check.c)
 - [examples/pic16f877a/struct_copy.c](examples/pic16f877a/struct_copy.c)
 - [examples/pic16f877a/string_pointer.c](examples/pic16f877a/string_pointer.c)
 - [examples/pic16f877a/switch_enum.c](examples/pic16f877a/switch_enum.c)
 - [examples/pic16f877a/switch_fallthrough.c](examples/pic16f877a/switch_fallthrough.c)
 - [examples/pic16f877a/union_initializer.c](examples/pic16f877a/union_initializer.c)
 - [examples/pic16f877a/union_struct_nested.c](examples/pic16f877a/union_struct_nested.c)
+- [examples/pic16f877a/mutual_recursion_diagnostic.c](examples/pic16f877a/mutual_recursion_diagnostic.c)
 - [examples/pic16f628a/timer_interrupt.c](examples/pic16f628a/timer_interrupt.c)
 - [examples/pic16f877a/timer_interrupt.c](examples/pic16f877a/timer_interrupt.c)
 - [examples/pic16f877a/gpio_interrupt.c](examples/pic16f877a/gpio_interrupt.c)
@@ -841,6 +859,7 @@ picc --list-targets
 - [docs/backend/phase15-bitfield-codegen.md](docs/backend/phase15-bitfield-codegen.md)
 - [docs/backend/phase16-aggregate-layout.md](docs/backend/phase16-aggregate-layout.md)
 - [docs/backend/phase17-dispatcher.md](docs/backend/phase17-dispatcher.md)
+- [docs/backend/phase18-stack-safety.md](docs/backend/phase18-stack-safety.md)
 - [docs/backend/phase9-switch-codegen.md](docs/backend/phase9-switch-codegen.md)
 - [docs/ir/phase4-call-lowering.md](docs/ir/phase4-call-lowering.md)
 - [docs/backend/phase5-helper-calling.md](docs/backend/phase5-helper-calling.md)
@@ -853,6 +872,7 @@ picc --list-targets
 - [docs/ir/phase15-aggregate-lowering.md](docs/ir/phase15-aggregate-lowering.md)
 - [docs/ir/phase16-aggregate-index-lowering.md](docs/ir/phase16-aggregate-index-lowering.md)
 - [docs/ir/phase17-indirect-call-lowering.md](docs/ir/phase17-indirect-call-lowering.md)
+- [docs/ir/phase18-call-graph.md](docs/ir/phase18-call-graph.md)
 - [docs/ir/phase9-switch-lowering.md](docs/ir/phase9-switch-lowering.md)
 - [docs/frontend/phase10-string-literals.md](docs/frontend/phase10-string-literals.md)
 - [docs/frontend/phase11-aggregates.md](docs/frontend/phase11-aggregates.md)
@@ -863,6 +883,7 @@ picc --list-targets
 - [docs/frontend/phase16-multidimensional-arrays.md](docs/frontend/phase16-multidimensional-arrays.md)
 - [docs/frontend/phase17-function-pointers.md](docs/frontend/phase17-function-pointers.md)
 - [docs/frontend/phase9-switch.md](docs/frontend/phase9-switch.md)
+- [docs/developer-guide/stack-report.md](docs/developer-guide/stack-report.md)
 - [docs/runtime/phase5-arithmetic-helpers.md](docs/runtime/phase5-arithmetic-helpers.md)
 - [docs/migration/phase3-to-phase4-abi.md](docs/migration/phase3-to-phase4-abi.md)
 - [docs/developer-guide/adding-device.md](docs/developer-guide/adding-device.md)
@@ -876,4 +897,4 @@ picc --list-targets
 
 ## Current Limits
 
-Phase 17 adds controlled function pointers through generated dispatch IDs and per-signature dispatcher code. Current hard limits remain: no general ROM pointer model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no function-pointer calls inside ISR, no raw computed PIC16 indirect calls, no `float`, and no recursion.
+Phase 18 adds stack bounds visibility, opt-in runtime overflow checks, and stronger call-graph/stack reporting, but current hard limits remain: no general ROM pointer model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no function-pointer calls inside ISR, no raw computed PIC16 indirect calls, no `float`, and no recursion.

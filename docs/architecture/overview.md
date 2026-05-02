@@ -12,7 +12,7 @@
 
 Target backend is classic 14-bit PIC16 mid-range family, not a generic 8-bit CPU model.
 
-Current Phase 17 keeps that split intact while extending:
+Current Phase 18 keeps that split intact while extending:
 
 - stack-first caller-pushed ABI
 - per-call frame storage for locals and IR temps
@@ -40,6 +40,7 @@ Current Phase 17 keeps that split intact while extending:
 - Phase 15 named union layout/copy plus basic unsigned bitfield lowering without backend layering breaks
 - Phase 16 row-major multidimensional aggregate layout, indexing, and chained designator handling
 - Phase 17 controlled function-pointer typing plus dispatch-ID indirect-call lowering
+- Phase 18 target-aware stack bounds, optional runtime stack guards, and stronger call-graph/stack-report visibility
 - PIC16 banking/paging without backend duplication per device
 
 See:

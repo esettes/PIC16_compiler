@@ -50,6 +50,9 @@ pub struct CompileCommand {
     pub artifacts: OutputArtifacts,
     pub verbose: bool,
     pub opt_report: bool,
+    pub stack_check: bool,
+    pub stack_report: bool,
+    pub stack_report_file: Option<PathBuf>,
     pub warning_profile: WarningProfile,
 }
 
@@ -67,6 +70,9 @@ impl CliOptions {
         let mut optimization = OptimizationLevel::O0;
         let mut verbose = false;
         let mut opt_report = false;
+        let mut stack_check = false;
+        let mut stack_report = false;
+        let mut stack_report_file = None::<PathBuf>;
         let mut artifacts = OutputArtifacts::default();
         let mut warning_profile = WarningProfile::default();
 
@@ -83,6 +89,8 @@ impl CliOptions {
                 "--list-file" => artifacts.list_file = true,
                 "--verbose" => verbose = true,
                 "--opt-report" => opt_report = true,
+                "--stack-check" => stack_check = true,
+                "--stack-report" => stack_report = true,
                 "-Wall" => warning_profile.wall = true,
                 "-Wextra" => warning_profile.wextra = true,
                 "-Werror" => warning_profile.werror = true,
@@ -101,6 +109,13 @@ impl CliOptions {
                         .next()
                         .ok_or_else(|| "-o requires a value".to_string())?;
                     output = Some(PathBuf::from(value));
+                }
+                "--stack-report-file" => {
+                    let value = iter
+                        .next()
+                        .ok_or_else(|| "--stack-report-file requires a path".to_string())?;
+                    stack_report = true;
+                    stack_report_file = Some(PathBuf::from(value));
                 }
                 "-I" => {
                     let value = iter
@@ -153,6 +168,9 @@ impl CliOptions {
                 artifacts,
                 verbose,
                 opt_report,
+                stack_check,
+                stack_report,
+                stack_report_file,
                 warning_profile,
             }),
         })
@@ -204,6 +222,10 @@ pub fn help_text() -> &'static str {
         "  --map             Write map file next to output\n",
         "  --list-file       Write listing file next to output\n",
         "  --opt-report      Print optimization summary after a successful compile\n",
+        "  --stack-check     Emit runtime software-stack overflow checks\n",
+        "  --stack-report    Print stack usage summary after a successful compile\n",
+        "  --stack-report-file <path>\n",
+        "                    Write detailed stack report to file\n",
         "  --verbose         Enable verbose build logs"
     )
 }

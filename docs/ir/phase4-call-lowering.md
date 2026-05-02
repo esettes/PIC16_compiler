@@ -62,5 +62,10 @@ Phase 4 call lowering still does not support:
 - indirect calls
 - function pointers
 - recursion
-- runtime stack overflow checks
+
+Phase 18 note:
+
+- indirect calls are now supported through Phase 17 dispatch-ID lowering
+- recursion still rejects before IR generation
+- runtime stack overflow checks now exist as backend-inserted `--stack-check` guards rather than dedicated call IR
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->

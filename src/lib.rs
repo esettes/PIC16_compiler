@@ -18,7 +18,9 @@ use std::path::{Path, PathBuf};
 
 use assembler::listing::render_listing;
 use backend::pic16::devices::{DeviceRegistry, TargetDevice};
-use backend::pic16::midrange14::codegen::compile_program;
+use backend::pic16::midrange14::codegen::{
+    compile_program, BackendOptions, StackReportSummary,
+};
 use cli::{CliCommand, CliOptions, OptimizationLevel, CLI_NAME};
 use common::source::SourceManager;
 use diagnostics::{DiagnosticBag, DiagnosticEmitter, Severity, StageResult};
@@ -148,7 +150,7 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
         write_artifact(&command.output, "ast", &ast.render())?;
     }
 
-    let semantic = SemanticAnalyzer::new(target);
+    let semantic = SemanticAnalyzer::new(target, command.stack_check);
     let typed_program = semantic.analyze(ast, &mut diagnostics);
     if diagnostics.has_errors() {
         return Err(diagnostics);
@@ -174,7 +176,15 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
         write_artifact(&command.output, "ir", &ir_program.render())?;
     }
 
-    let assembled = compile_program(target, &typed_program, &ir_program, &mut diagnostics);
+    let assembled = compile_program(
+        target,
+        &typed_program,
+        &ir_program,
+        &BackendOptions {
+            stack_check: command.stack_check,
+        },
+        &mut diagnostics,
+    );
     if diagnostics.has_errors() {
         return Err(diagnostics);
     }
@@ -218,6 +228,25 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
         })?;
     }
 
+    if let Some(path) = &command.stack_report_file {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                DiagnosticBag::single(
+                    Severity::Error,
+                    "io",
+                    format!("failed to create stack report directory `{}`: {error}", parent.display()),
+                )
+            })?;
+        }
+        fs::write(path, &assembled.stack_report.text).map_err(|error| {
+            DiagnosticBag::single(
+                Severity::Error,
+                "io",
+                format!("failed to write stack report `{}`: {error}", path.display()),
+            )
+        })?;
+    }
+
     let hex_records = IntelHexWriter::new(target).emit(&assembled.words, target.default_config_word);
     fs::write(&command.output, hex_records).map_err(|error| {
         DiagnosticBag::single(
@@ -235,6 +264,11 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
 
     if command.opt_report {
         print_optimization_report(command.optimization, &optimization_report);
+        print_stack_report_summary(&assembled.stack_report.summary);
+    }
+
+    if command.stack_report {
+        println!("{}", assembled.stack_report.text);
     }
 
     let mut generated_files = vec![command.output.clone()];
@@ -242,6 +276,9 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
         generated_files.push(path);
     }
     if let Some(path) = listing_path {
+        generated_files.push(path);
+    }
+    if let Some(path) = command.stack_report_file.clone() {
         generated_files.push(path);
     }
 
@@ -308,6 +345,31 @@ fn print_optimization_report(level: OptimizationLevel, report: &OptimizationRepo
     println!(
         "  Helper calls avoided: {}",
         report.backend.helper_calls_avoided
+    );
+}
+
+/// Prints one compact stack summary suitable for `--opt-report`.
+fn print_stack_report_summary(summary: &StackReportSummary) {
+    println!("Stack summary");
+    println!(
+        "  bounds: base=0x{:04X} limit=0x{:04X} capacity={} check={}",
+        summary.stack_base,
+        summary.stack_limit,
+        summary.stack_capacity,
+        if summary.stack_check { "on" } else { "off" }
+    );
+    println!(
+        "  static usage: max_bytes={} max_call_depth={} isr_frame={} isr_context={}",
+        summary.static_max_stack,
+        summary.max_call_depth,
+        summary.isr_frame_bytes,
+        summary.isr_context_bytes
+    );
+    println!(
+        "  function-pointer groups: {} total_targets={} unknown_target_sets={}",
+        summary.function_pointer_groups,
+        summary.function_pointer_targets,
+        summary.unknown_function_pointer_target_sets
     );
 }
 

@@ -35,12 +35,39 @@ pub struct BackendOutput {
     pub words: BTreeMap<u16, u16>,
     pub map: MapFile,
     pub optimization: BackendOptimizationReport,
+    pub stack_report: StackReport,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct BackendOptimizationReport {
     pub peephole: PeepholeStats,
     pub helper_calls_avoided: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BackendOptions {
+    pub stack_check: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct StackReport {
+    pub summary: StackReportSummary,
+    pub text: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct StackReportSummary {
+    pub stack_base: u16,
+    pub stack_limit: u16,
+    pub stack_capacity: u16,
+    pub static_max_stack: u16,
+    pub max_call_depth: u16,
+    pub isr_frame_bytes: u16,
+    pub isr_context_bytes: u16,
+    pub function_pointer_groups: u16,
+    pub function_pointer_targets: u16,
+    pub unknown_function_pointer_target_sets: u16,
+    pub stack_check: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -86,6 +113,7 @@ struct StorageLayout {
     frames: BTreeMap<SymbolId, FrameLayout>,
     stack_base: u16,
     stack_end: u16,
+    stack_limit: u16,
     stack_capacity: u16,
     max_stack_depth: u16,
 }
@@ -111,23 +139,50 @@ struct RomTablePlacement {
     start: u16,
 }
 
+#[derive(Clone, Debug)]
+struct StackFunctionReport {
+    symbol: SymbolId,
+    frame: FrameLayout,
+    helper_extra: u16,
+    max_stack_bytes: u16,
+    max_call_depth: u16,
+    direct_callees: Vec<SymbolId>,
+    indirect_groups: Vec<IndirectTargetSet>,
+}
+
+#[derive(Clone, Debug)]
+struct IndirectTargetSet {
+    signature: Type,
+    targets: Vec<SymbolId>,
+    unknown: bool,
+}
+
+#[derive(Clone, Debug)]
+struct StackAnalysis {
+    functions: Vec<StackFunctionReport>,
+    summary: StackReportSummary,
+}
+
 /// Lowers typed IR into assembly, encoded words, and a final linker map.
 pub fn compile_program(
     target: &TargetDevice,
     typed_program: &TypedProgram,
     ir_program: &IrProgram,
+    options: &BackendOptions,
     diagnostics: &mut DiagnosticBag,
 ) -> Option<BackendOutput> {
     let layout = StorageAllocator::new(target.allocatable_gpr, target.shared_gpr)
         .layout(typed_program, ir_program, diagnostics)?;
+    let stack_analysis = analyze_stack(typed_program, ir_program, &layout, *options);
 
-    let mut codegen = CodegenContext::new(target, typed_program, &layout);
+    let mut codegen = CodegenContext::new(target, typed_program, &layout, *options);
     codegen.emit_program(ir_program, diagnostics);
     if diagnostics.has_errors() {
         return None;
     }
 
     let optimization = codegen.optimize_program();
+    codegen.emit_stack_overflow_trap();
     codegen.emit_rom_objects(diagnostics);
     if diagnostics.has_errors() {
         return None;
@@ -135,11 +190,16 @@ pub fn compile_program(
 
     let encoded = encode_program(&codegen.program, diagnostics)?;
     let map = build_map(typed_program, &layout, &encoded.labels);
+    let stack_report = StackReport {
+        summary: stack_analysis.summary,
+        text: render_stack_report(target, typed_program, &layout, &stack_analysis, *options),
+    };
     Some(BackendOutput {
         program: codegen.program,
         words: encoded.words,
         map,
         optimization,
+        stack_report,
     })
 }
 
@@ -369,6 +429,7 @@ impl<'a> StorageAllocator<'a> {
             frames,
             stack_base,
             stack_end,
+            stack_limit: stack_end + 1,
             stack_capacity,
             max_stack_depth,
         })
@@ -435,6 +496,7 @@ struct CodegenContext<'a> {
     target: &'a TargetDevice,
     typed_program: &'a TypedProgram,
     layout: &'a StorageLayout,
+    options: BackendOptions,
     program: AsmProgram,
     current_bank: u8,
     label_counter: usize,
@@ -444,11 +506,17 @@ struct CodegenContext<'a> {
 
 impl<'a> CodegenContext<'a> {
     /// Creates a backend codegen context for one target, program, and storage layout.
-    fn new(target: &'a TargetDevice, typed_program: &'a TypedProgram, layout: &'a StorageLayout) -> Self {
+    fn new(
+        target: &'a TargetDevice,
+        typed_program: &'a TypedProgram,
+        layout: &'a StorageLayout,
+        options: BackendOptions,
+    ) -> Self {
         Self {
             target,
             typed_program,
             layout,
+            options,
             program: AsmProgram::new(),
             current_bank: UNKNOWN_BANK,
             label_counter: 0,
@@ -512,11 +580,13 @@ impl<'a> CodegenContext<'a> {
     /// Emits startup initialization for globals and transfers control to `main`.
     fn emit_startup(&mut self, ir_program: &IrProgram, diagnostics: &mut DiagnosticBag) {
         self.program.push(AsmLine::Comment(format!(
-            "stack base=0x{:04X} end=0x{:04X} capacity={} max_depth={}",
+            "stack base=0x{:04X} end=0x{:04X} limit=0x{:04X} capacity={} max_depth={} stack_check={}",
             self.layout.stack_base,
             self.layout.stack_end,
+            self.layout.stack_limit,
             self.layout.stack_capacity,
-            self.layout.max_stack_depth
+            self.layout.max_stack_depth,
+            if self.options.stack_check { "on" } else { "off" }
         )));
         self.program
             .push(AsmLine::Comment("static data initialization".to_string()));
@@ -873,6 +943,8 @@ impl<'a> CodegenContext<'a> {
         }
 
         let callee_symbol = &self.typed_program.symbols[callee];
+        let arg_bytes = self.function_arg_bytes(callee);
+        self.emit_stack_growth_check(arg_bytes, &format!("call {} arguments", callee_symbol.name));
         for (index, arg) in args.iter().enumerate() {
             let Some(param_ty) = callee_symbol.parameter_types.get(index).copied() else {
                 diagnostics.error(
@@ -890,7 +962,6 @@ impl<'a> CodegenContext<'a> {
         self.program.push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
         self.program.push(AsmLine::Instr(AsmInstr::Call(label)));
 
-        let arg_bytes = self.function_arg_bytes(callee);
         if arg_bytes != 0 {
             self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(arg_bytes));
         }
@@ -951,6 +1022,8 @@ impl<'a> CodegenContext<'a> {
         };
 
         let parameter_types = self.function_pointer_param_types(signature);
+        let arg_bytes = self.function_pointer_arg_bytes(signature);
+        self.emit_stack_growth_check(arg_bytes, &format!("indirect call {} arguments", signature));
         for (index, arg) in args.iter().enumerate() {
             let Some(param_ty) = parameter_types.get(index).copied() else {
                 diagnostics.error(
@@ -973,7 +1046,6 @@ impl<'a> CodegenContext<'a> {
         self.program.push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
         self.program.push(AsmLine::Instr(AsmInstr::Call(label)));
 
-        let arg_bytes = self.function_pointer_arg_bytes(signature);
         if arg_bytes != 0 {
             self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(arg_bytes));
         }
@@ -1808,6 +1880,7 @@ impl<'a> CodegenContext<'a> {
         let helper = binary_helper(op, ty).expect("phase five helper exists");
         let info = helper.info();
         self.used_helpers.insert(helper);
+        self.emit_stack_growth_check(info.arg_bytes, &format!("runtime helper {} arguments", info.label));
         self.push_operand(function_symbol, lhs, info.operand_ty);
         self.push_operand(function_symbol, rhs, info.operand_ty);
         self.program
@@ -2044,6 +2117,10 @@ impl<'a> CodegenContext<'a> {
     fn emit_prologue(&mut self, function_symbol: SymbolId) {
         let arg_bytes = self.frame_layout(function_symbol).arg_bytes;
         let frame_bytes = self.frame_layout(function_symbol).frame_bytes;
+        self.emit_stack_growth_check(
+            frame_bytes,
+            &format!("frame allocation for {}", self.symbol_name(function_symbol)),
+        );
         self.load_addr_to_w(self.layout.helpers.frame_ptr.lo);
         self.store_w_to_addr(self.layout.helpers.scratch0);
         self.load_addr_to_w(self.layout.helpers.frame_ptr.hi);
@@ -2162,6 +2239,68 @@ impl<'a> CodegenContext<'a> {
             self.load_operand_byte_to_w(function_symbol, operand, ty, byte);
             self.push_w();
         }
+    }
+
+    /// Emits one Phase 18 runtime stack bound check before stack growth.
+    fn emit_stack_growth_check(&mut self, bytes: u16, reason: &str) {
+        if !self.options.stack_check || bytes == 0 {
+            return;
+        }
+
+        let ok_label = self.unique_label("stack_ok");
+        self.program.push(AsmLine::Comment(format!(
+            "phase18 stack check +{bytes} before {reason}"
+        )));
+        self.copy_pair_with_signed_offset(
+            self.layout.helpers.stack_ptr,
+            RegisterPair {
+                lo: self.layout.helpers.scratch0,
+                hi: self.layout.helpers.scratch1,
+            },
+            bytes,
+        );
+
+        self.emit_const_to_w(high_byte(
+            i64::from(self.layout.stack_limit),
+            Type::new(ScalarType::U16),
+        ));
+        self.select_bank(self.layout.helpers.scratch1);
+        self.program.push(AsmLine::Instr(AsmInstr::Subwf {
+            f: low7(self.layout.helpers.scratch1),
+            d: Dest::W,
+        }));
+        self.program.push(AsmLine::Instr(AsmInstr::Btfss {
+            f: low7(STATUS_ADDR),
+            b: STATUS_C_BIT,
+        }));
+        self.branch_to_label(&ok_label);
+        self.program.push(AsmLine::Instr(AsmInstr::Btfss {
+            f: low7(STATUS_ADDR),
+            b: STATUS_Z_BIT,
+        }));
+        self.branch_to_label("__stack_overflow_trap");
+
+        self.emit_const_to_w(low_byte(
+            i64::from(self.layout.stack_limit),
+            Type::new(ScalarType::U16),
+        ));
+        self.select_bank(self.layout.helpers.scratch0);
+        self.program.push(AsmLine::Instr(AsmInstr::Subwf {
+            f: low7(self.layout.helpers.scratch0),
+            d: Dest::W,
+        }));
+        self.program.push(AsmLine::Instr(AsmInstr::Btfss {
+            f: low7(STATUS_ADDR),
+            b: STATUS_C_BIT,
+        }));
+        self.branch_to_label(&ok_label);
+        self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+            f: low7(STATUS_ADDR),
+            b: STATUS_Z_BIT,
+        }));
+        self.branch_to_label(&ok_label);
+        self.branch_to_label("__stack_overflow_trap");
+        self.program.push(AsmLine::Label(ok_label));
     }
 
     /// Pushes the current `W` byte to the stack top and advances `SP`.
@@ -2744,6 +2883,18 @@ impl<'a> CodegenContext<'a> {
         }
     }
 
+    /// Emits one infinite-loop trap when Phase 18 stack checks are enabled.
+    fn emit_stack_overflow_trap(&mut self) {
+        if !self.options.stack_check {
+            return;
+        }
+        self.program.push(AsmLine::Label("__stack_overflow_trap".to_string()));
+        self.program
+            .push(AsmLine::Comment("phase18 stack overflow trap".to_string()));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Goto("__stack_overflow_trap".to_string())));
+    }
+
     /// Emits every Phase 14 ROM object as one callable RETLW table in program memory.
     fn emit_rom_objects(&mut self, diagnostics: &mut DiagnosticBag) {
         let placements = self.allocate_rom_tables(diagnostics);
@@ -3068,6 +3219,10 @@ impl<'a> CodegenContext<'a> {
 
     /// Emits the common stack-first runtime-helper prologue.
     fn emit_runtime_prologue(&mut self, info: RuntimeHelperInfo) {
+        self.emit_stack_growth_check(
+            info.frame_bytes,
+            &format!("runtime helper frame {}", info.label),
+        );
         self.load_addr_to_w(self.layout.helpers.frame_ptr.lo);
         self.store_w_to_addr(self.layout.helpers.scratch0);
         self.load_addr_to_w(self.layout.helpers.frame_ptr.hi);
@@ -3491,6 +3646,136 @@ fn compute_max_stack_depth_with_interrupts(
     normal_max + interrupt_extra
 }
 
+/// Builds one stack analysis model used by Phase 18 reports and visibility features.
+fn analyze_stack(
+    typed_program: &TypedProgram,
+    ir_program: &IrProgram,
+    layout: &StorageLayout,
+    options: BackendOptions,
+) -> StackAnalysis {
+    let mut helper_depths = BTreeMap::<SymbolId, u16>::new();
+    let mut direct_callees = BTreeMap::<SymbolId, Vec<SymbolId>>::new();
+    let mut indirect_groups = BTreeMap::<SymbolId, Vec<IndirectTargetSet>>::new();
+    let mut unknown_function_pointer_target_sets = 0u16;
+
+    for function in &ir_program.functions {
+        let mut callees = Vec::new();
+        let mut helper_depth = 0u16;
+        let mut fnptr_groups = Vec::new();
+        for block in &function.blocks {
+            for instr in &block.instructions {
+                match instr {
+                    IrInstr::Call { function: callee, .. } => callees.push(*callee),
+                    IrInstr::IndirectCall { signature, .. } => {
+                        let target_set = if let Some(group) = typed_program
+                            .function_pointer_groups
+                            .iter()
+                            .find(|group| group.ty == signature.without_object_qualifiers())
+                        {
+                            let targets = group
+                                .targets
+                                .iter()
+                                .map(|target| target.function)
+                                .collect::<Vec<_>>();
+                            callees.extend(targets.iter().copied());
+                            IndirectTargetSet {
+                                signature: *signature,
+                                targets,
+                                unknown: false,
+                            }
+                        } else {
+                            unknown_function_pointer_target_sets =
+                                unknown_function_pointer_target_sets.saturating_add(1);
+                            IndirectTargetSet {
+                                signature: *signature,
+                                targets: Vec::new(),
+                                unknown: true,
+                            }
+                        };
+                        fnptr_groups.push(target_set);
+                    }
+                    IrInstr::Binary { dst, op, .. } => {
+                        if let Some(helper) = binary_helper(*op, function.temp_types[*dst]) {
+                            let info = helper.info();
+                            helper_depth = helper_depth.max(info.arg_bytes + info.frame_bytes);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        helper_depths.insert(function.symbol, helper_depth);
+        direct_callees.insert(function.symbol, callees);
+        indirect_groups.insert(function.symbol, fnptr_groups);
+    }
+
+    let mut memo_bytes = BTreeMap::new();
+    let mut memo_depth = BTreeMap::new();
+    let mut functions = Vec::new();
+    for function in &typed_program.functions {
+        functions.push(StackFunctionReport {
+            symbol: function.symbol,
+            frame: layout.frames[&function.symbol].clone(),
+            helper_extra: helper_depths.get(&function.symbol).copied().unwrap_or(0),
+            max_stack_bytes: stack_bytes_for_function(
+                function.symbol,
+                &direct_callees,
+                &helper_depths,
+                &layout.frames,
+                &mut memo_bytes,
+                &mut BTreeSet::new(),
+            ),
+            max_call_depth: call_depth_for_function(
+                function.symbol,
+                &direct_callees,
+                &mut memo_depth,
+                &mut BTreeSet::new(),
+            ),
+            direct_callees: direct_callees
+                .get(&function.symbol)
+                .cloned()
+                .unwrap_or_default(),
+            indirect_groups: indirect_groups
+                .get(&function.symbol)
+                .cloned()
+                .unwrap_or_default(),
+        });
+    }
+    functions.sort_by_key(|info| typed_program.symbols[info.symbol].name.clone());
+
+    let isr_frame_bytes = ir_program
+        .functions
+        .iter()
+        .filter(|function| function.is_interrupt)
+        .map(|function| layout.frames.get(&function.symbol).map_or(0, |frame| frame.frame_bytes))
+        .max()
+        .unwrap_or(0);
+    let isr_context_bytes = layout.interrupt.map_or(0, |_| 11);
+    let function_pointer_groups = typed_program.function_pointer_groups.len() as u16;
+    let function_pointer_targets = typed_program
+        .function_pointer_groups
+        .iter()
+        .map(|group| group.targets.len() as u16)
+        .sum();
+
+    StackAnalysis {
+        functions,
+        summary: StackReportSummary {
+            stack_base: layout.stack_base,
+            stack_limit: layout.stack_limit,
+            stack_capacity: layout.stack_capacity,
+            static_max_stack: layout.max_stack_depth,
+            max_call_depth: memo_depth.values().copied().max().unwrap_or(0),
+            isr_frame_bytes,
+            isr_context_bytes,
+            function_pointer_groups,
+            function_pointer_targets,
+            unknown_function_pointer_target_sets,
+            stack_check: options.stack_check,
+        },
+    }
+}
+
 #[cfg(test)]
 /// Compatibility wrapper for tests that do not model interrupts explicitly.
 fn compute_max_stack_depth(ir_program: &IrProgram, frames: &BTreeMap<SymbolId, FrameLayout>) -> u16 {
@@ -3547,6 +3832,151 @@ fn compute_function_stack_depth(
     depth
 }
 
+/// Computes worst-case stack bytes while one function is active.
+fn stack_bytes_for_function(
+    symbol: SymbolId,
+    calls: &BTreeMap<SymbolId, Vec<SymbolId>>,
+    helper_depths: &BTreeMap<SymbolId, u16>,
+    frames: &BTreeMap<SymbolId, FrameLayout>,
+    memo: &mut BTreeMap<SymbolId, u16>,
+    active: &mut BTreeSet<SymbolId>,
+) -> u16 {
+    if let Some(depth) = memo.get(&symbol).copied() {
+        return depth;
+    }
+    if !active.insert(symbol) {
+        return frames.get(&symbol).map_or(0, |frame| frame.frame_bytes);
+    }
+
+    let own = frames.get(&symbol).map_or(0, |frame| frame.frame_bytes);
+    let nested = calls
+        .get(&symbol)
+        .into_iter()
+        .flatten()
+        .map(|callee| {
+            let arg_bytes = frames.get(callee).map_or(0, |frame| frame.arg_bytes);
+            arg_bytes + stack_bytes_for_function(*callee, calls, helper_depths, frames, memo, active)
+        })
+        .max()
+        .unwrap_or(0);
+    let depth = own + nested.max(helper_depths.get(&symbol).copied().unwrap_or(0));
+    active.remove(&symbol);
+    memo.insert(symbol, depth);
+    depth
+}
+
+/// Computes one call-depth count for reporting.
+fn call_depth_for_function(
+    symbol: SymbolId,
+    calls: &BTreeMap<SymbolId, Vec<SymbolId>>,
+    memo: &mut BTreeMap<SymbolId, u16>,
+    active: &mut BTreeSet<SymbolId>,
+) -> u16 {
+    if let Some(depth) = memo.get(&symbol).copied() {
+        return depth;
+    }
+    if !active.insert(symbol) {
+        return 1;
+    }
+    let nested = calls
+        .get(&symbol)
+        .into_iter()
+        .flatten()
+        .map(|callee| call_depth_for_function(*callee, calls, memo, active))
+        .max()
+        .unwrap_or(0);
+    let depth = 1 + nested;
+    active.remove(&symbol);
+    memo.insert(symbol, depth);
+    depth
+}
+
+/// Renders human-readable Phase 18 stack report text.
+fn render_stack_report(
+    target: &TargetDevice,
+    typed_program: &TypedProgram,
+    layout: &StorageLayout,
+    analysis: &StackAnalysis,
+    options: BackendOptions,
+) -> String {
+    use std::fmt::Write;
+
+    let mut output = String::new();
+    let _ = writeln!(output, "Stack report");
+    let _ = writeln!(output, "------------");
+    let _ = writeln!(output, "target: {}", target.name);
+    let _ = writeln!(output, "growth: upward");
+    let _ = writeln!(output, "base: 0x{:04X}", layout.stack_base);
+    let _ = writeln!(output, "limit: 0x{:04X}", layout.stack_limit);
+    let _ = writeln!(output, "capacity: {}", layout.stack_capacity);
+    let _ = writeln!(output, "static max usage: {}", layout.max_stack_depth);
+    let _ = writeln!(
+        output,
+        "runtime stack checks: {}",
+        if options.stack_check { "enabled" } else { "disabled" }
+    );
+    let _ = writeln!(output, "isr frame bytes: {}", analysis.summary.isr_frame_bytes);
+    let _ = writeln!(output, "isr context bytes: {}", analysis.summary.isr_context_bytes);
+    let _ = writeln!(
+        output,
+        "function-pointer groups: {} targets={} unknown_target_sets={}",
+        analysis.summary.function_pointer_groups,
+        analysis.summary.function_pointer_targets,
+        analysis.summary.unknown_function_pointer_target_sets
+    );
+    let _ = writeln!(output);
+    let _ = writeln!(output, "Per-function");
+    let _ = writeln!(output, "------------");
+    for info in &analysis.functions {
+        let symbol = &typed_program.symbols[info.symbol];
+        let _ = writeln!(
+            output,
+            "{}: frame={} args={} locals={} temps={} helper_extra={} max_stack={} max_depth={}",
+            symbol.name,
+            info.frame.frame_bytes,
+            info.frame.arg_bytes,
+            info.frame.local_bytes,
+            info.frame.temp_bytes,
+            info.helper_extra,
+            info.max_stack_bytes,
+            info.max_call_depth
+        );
+        if !info.direct_callees.is_empty() {
+            let names = info
+                .direct_callees
+                .iter()
+                .map(|callee| typed_program.symbols[*callee].name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(output, "  direct callees: {names}");
+        }
+        for group in &info.indirect_groups {
+            if group.unknown {
+                let _ = writeln!(output, "  indirect {} -> unknown target set", group.signature);
+            } else {
+                let names = group
+                    .targets
+                    .iter()
+                    .map(|callee| typed_program.symbols[*callee].name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let _ = writeln!(output, "  indirect {} -> {}", group.signature, names);
+            }
+        }
+    }
+    let _ = writeln!(output);
+    let _ = writeln!(
+        output,
+        "Recursion policy: rejected in phase 18. Runtime stack checks guard bounded acyclic growth only."
+    );
+    let _ = writeln!(
+        output,
+        "Trap: __stack_overflow_trap is infinite loop{}.",
+        if options.stack_check { " when enabled" } else { " (not emitted unless --stack-check)" }
+    );
+    output
+}
+
 /// Builds the final map file from encoded labels and allocated data symbols.
 fn build_map(
     typed_program: &TypedProgram,
@@ -3582,11 +4012,19 @@ fn build_map(
         ("__abi.stack_ptr.hi".to_string(), layout.helpers.stack_ptr.hi),
         ("__abi.frame_ptr.lo".to_string(), layout.helpers.frame_ptr.lo),
         ("__abi.frame_ptr.hi".to_string(), layout.helpers.frame_ptr.hi),
+        ("__stack_ptr".to_string(), layout.helpers.stack_ptr.lo),
+        ("__stack_ptr.lo".to_string(), layout.helpers.stack_ptr.lo),
+        ("__stack_ptr.hi".to_string(), layout.helpers.stack_ptr.hi),
+        ("__frame_ptr".to_string(), layout.helpers.frame_ptr.lo),
+        ("__frame_ptr.lo".to_string(), layout.helpers.frame_ptr.lo),
+        ("__frame_ptr.hi".to_string(), layout.helpers.frame_ptr.hi),
         ("__abi.return_high".to_string(), layout.helpers.return_high),
         ("__abi.scratch0".to_string(), layout.helpers.scratch0),
         ("__abi.scratch1".to_string(), layout.helpers.scratch1),
         ("__stack.base".to_string(), layout.stack_base),
+        ("__stack_base".to_string(), layout.stack_base),
         ("__stack.end".to_string(), layout.stack_end),
+        ("__stack_limit".to_string(), layout.stack_limit),
     ]);
     if let Some(interrupt) = layout.interrupt {
         data_symbols.extend([
@@ -3741,7 +4179,8 @@ const fn negate_u16(value: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::{
-        compile_program, compute_max_stack_depth, low7, CodegenContext, FrameLayout, StorageAllocator,
+        compile_program, compute_max_stack_depth, low7, BackendOptions, CodegenContext, FrameLayout,
+        StorageAllocator,
     };
     use crate::backend::pic16::midrange14::asm::{AsmInstr, AsmLine};
     use crate::backend::pic16::devices::DeviceRegistry;
@@ -3809,7 +4248,14 @@ mod tests {
             }],
         };
         let mut diagnostics = DiagnosticBag::new(WarningProfile::default());
-        let output = compile_program(target, &program, &ir, &mut diagnostics).expect("backend");
+        let output = compile_program(
+            target,
+            &program,
+            &ir,
+            &BackendOptions::default(),
+            &mut diagnostics,
+        )
+        .expect("backend");
 
         assert!(!diagnostics.has_errors());
         let asm = output.program.render();
@@ -3963,7 +4409,14 @@ mod tests {
             ],
         };
         let mut diagnostics = DiagnosticBag::new(WarningProfile::default());
-        let output = compile_program(target, &program, &ir, &mut diagnostics).expect("backend");
+        let output = compile_program(
+            target,
+            &program,
+            &ir,
+            &BackendOptions::default(),
+            &mut diagnostics,
+        )
+        .expect("backend");
 
         assert!(!diagnostics.has_errors());
         let asm = output.program.render();
@@ -4132,7 +4585,7 @@ mod tests {
         let layout = StorageAllocator::new(target.allocatable_gpr, target.shared_gpr)
             .layout(&program, &ir, &mut diagnostics)
             .expect("layout");
-        let mut codegen = CodegenContext::new(target, &program, &layout);
+        let mut codegen = CodegenContext::new(target, &program, &layout, BackendOptions::default());
         codegen.emit_program(&ir, &mut diagnostics);
 
         assert!(!diagnostics.has_errors());
@@ -4241,7 +4694,14 @@ mod tests {
             }],
         };
         let mut diagnostics = DiagnosticBag::new(WarningProfile::default());
-        let output = compile_program(target, &program, &ir, &mut diagnostics).expect("backend");
+        let output = compile_program(
+            target,
+            &program,
+            &ir,
+            &BackendOptions::default(),
+            &mut diagnostics,
+        )
+        .expect("backend");
 
         assert!(!diagnostics.has_errors());
         let asm = output.program.render();
@@ -4293,7 +4753,14 @@ mod tests {
             }],
         };
         let mut diagnostics = DiagnosticBag::new(WarningProfile::default());
-        let output = compile_program(target, &program, &ir, &mut diagnostics).expect("backend");
+        let output = compile_program(
+            target,
+            &program,
+            &ir,
+            &BackendOptions::default(),
+            &mut diagnostics,
+        )
+        .expect("backend");
 
         assert!(!diagnostics.has_errors());
         let asm = output.program.render();
@@ -4338,7 +4805,14 @@ mod tests {
             }],
         };
         let mut diagnostics = DiagnosticBag::new(WarningProfile::default());
-        let output = compile_program(target, &program, &ir, &mut diagnostics).expect("backend");
+        let output = compile_program(
+            target,
+            &program,
+            &ir,
+            &BackendOptions::default(),
+            &mut diagnostics,
+        )
+        .expect("backend");
 
         assert!(!diagnostics.has_errors());
         assert_eq!(output.words[&target.vectors.interrupt], 0x0009);
@@ -4413,7 +4887,14 @@ mod tests {
             ],
         };
         let mut diagnostics = DiagnosticBag::new(WarningProfile::default());
-        let output = compile_program(target, &program, &ir, &mut diagnostics).expect("backend");
+        let output = compile_program(
+            target,
+            &program,
+            &ir,
+            &BackendOptions::default(),
+            &mut diagnostics,
+        )
+        .expect("backend");
 
         assert!(!diagnostics.has_errors());
         let reset_dispatch = output

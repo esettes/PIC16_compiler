@@ -91,9 +91,12 @@ Software stack is real backend state:
 - `stack_ptr` and `frame_ptr` live in backend helper RAM slots
 - startup initializes both to `stack_base`
 - all frame accesses route through `FSR/INDF`
-- stack depth is computed statically over the non-recursive call graph
+- target descriptors define `stack_base` and exclusive `stack_limit`
+- optional `--stack-check` emits inline growth guards that branch to `__stack_overflow_trap`
+- `--stack-report` surfaces per-function frame/helper/call-depth data plus ISR context cost
+- stack depth is computed statically over the non-recursive call graph and expanded across known function-pointer dispatcher targets
 
-Recursion stays unsupported because stack depth is not checked dynamically.
+Recursion stays unsupported in Phase 18 even when runtime stack checks are enabled.
 
 ### Phase 5 Arithmetic Runtime Helpers
 
@@ -545,3 +548,22 @@ Current limitations:
 - function-pointer arithmetic and relational comparisons remain rejected
 - function-pointer calls remain rejected inside interrupt handlers
 - ROM tables of function addresses and ROM function-pointer objects remain rejected
+
+## Phase 18 Stack Safety
+
+Phase 18 improves stack safety without changing the Stack-first ABI or enabling recursion.
+
+Rules:
+
+- software stack still grows upward from `stack_base` toward exclusive `stack_limit`
+- backend map output exposes `__stack_base`, `__stack_limit`, `__stack_ptr`, and `__frame_ptr`
+- `--stack-check` inserts inline growth checks before frame allocation, helper call argument growth, direct call argument growth, and indirect dispatcher-call argument growth
+- overflow branches to `__stack_overflow_trap`, an infinite loop with no helper calls
+- `--stack-report` prints a human-readable report; `--stack-report-file <path>` writes same detailed text to disk
+- static call-graph analysis expands direct calls, helper cost, ISR roots, and supported function-pointer dispatcher target groups
+
+Current limitations:
+
+- recursion still rejects at semantic-analysis time
+- stack reports remain conservative when a function-pointer signature group has no known target set
+- function-pointer calls remain rejected inside interrupt handlers

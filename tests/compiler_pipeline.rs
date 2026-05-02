@@ -59,6 +59,9 @@ fn compile_input(target: &str, input: PathBuf) -> PathBuf {
             },
             verbose: false,
             opt_report: false,
+            stack_check: false,
+            stack_report: false,
+            stack_report_file: None,
             warning_profile: WarningProfile {
                 wall: true,
                 wextra: true,
@@ -108,6 +111,9 @@ fn compile_source_with_optimization(
             },
             verbose: false,
             opt_report: false,
+            stack_check: false,
+            stack_report: false,
+            stack_report_file: None,
             warning_profile: WarningProfile {
                 wall: true,
                 wextra: true,
@@ -134,6 +140,9 @@ fn compile_error(target: &str, name: &str, source: &str) -> String {
             artifacts: OutputArtifacts::default(),
             verbose: false,
             opt_report: false,
+            stack_check: false,
+            stack_report: false,
+            stack_report_file: None,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -159,6 +168,9 @@ fn compile_path_with_profile(
             artifacts: OutputArtifacts::default(),
             verbose: false,
             opt_report: false,
+            stack_check: false,
+            stack_report: false,
+            stack_report_file: None,
             warning_profile,
         }),
     });
@@ -192,6 +204,15 @@ fn compile_example_with_profile(
 
 /// Compiles one checked-in example through the built `picc` CLI under strict warnings.
 fn compile_example_via_picc_cli(target: &str, input: &str) -> PathBuf {
+    compile_example_via_picc_cli_with_extra_args(target, input, &[])
+}
+
+/// Compiles one checked-in example through `picc` with extra CLI args.
+fn compile_example_via_picc_cli_with_extra_args(
+    target: &str,
+    input: &str,
+    extra_args: &[&str],
+) -> PathBuf {
     let out_dir = temp_dir_path("phase8-cli");
     fs::create_dir_all(&out_dir).expect("out dir");
     let stem = Path::new(input)
@@ -199,20 +220,22 @@ fn compile_example_via_picc_cli(target: &str, input: &str) -> PathBuf {
         .and_then(|name| name.to_str())
         .expect("example stem");
     let out_hex = out_dir.join(format!("{stem}.hex"));
-    let output = Command::new(picc_bin())
-        .current_dir(repo("."))
-        .args([
-            "--target",
-            target,
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-O2",
-            "-I",
-            "include",
-            "--map",
-            "--list-file",
-        ])
+    let mut command = Command::new(picc_bin());
+    command.current_dir(repo("."));
+    command.args([
+        "--target",
+        target,
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-O2",
+        "-I",
+        "include",
+        "--map",
+        "--list-file",
+    ]);
+    command.args(extra_args);
+    let output = command
         .arg("-o")
         .arg(&out_hex)
         .arg(input)
@@ -1040,6 +1063,9 @@ void main(void) {
             artifacts: OutputArtifacts::default(),
             verbose: false,
             opt_report: false,
+            stack_check: false,
+            stack_report: false,
+            stack_report_file: None,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -1079,6 +1105,9 @@ void main(void) {
             artifacts: OutputArtifacts::default(),
             verbose: false,
             opt_report: false,
+            stack_check: false,
+            stack_report: false,
+            stack_report_file: None,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -1118,6 +1147,9 @@ void main(void) {
             artifacts: OutputArtifacts::default(),
             verbose: false,
             opt_report: false,
+            stack_check: false,
+            stack_report: false,
+            stack_report_file: None,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -1266,6 +1298,9 @@ void main(void) {
             artifacts: OutputArtifacts::default(),
             verbose: false,
             opt_report: false,
+            stack_check: false,
+            stack_report: false,
+            stack_report_file: None,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -1275,7 +1310,7 @@ void main(void) {
 }
 
 #[test]
-/// Verifies direct recursion is rejected under the current non-reentrant Phase 4 model.
+/// Verifies direct recursion is rejected under the current Phase 18 stack policy.
 fn reports_unsupported_recursion() {
     let error = execute(CliOptions {
         command: CliCommand::Compile(CompileCommand {
@@ -1305,12 +1340,48 @@ void main(void) {
             artifacts: OutputArtifacts::default(),
             verbose: false,
             opt_report: false,
+            stack_check: false,
+            stack_report: false,
+            stack_report_file: None,
             warning_profile: WarningProfile::default(),
         }),
     })
     .expect_err("must fail");
 
     assert!(format!("{error}").contains("recursive call cycle"));
+}
+
+#[test]
+/// Verifies mutual recursion is rejected even when one side starts as a prototype.
+fn reports_phase18_mutual_recursion_cycle() {
+    let error = compile_error(
+        "pic16f877a",
+        "phase18-mutual-recursion.c",
+        "\
+#include <pic16/pic16f877a.h>
+unsigned char odd(unsigned char value);
+unsigned char even(unsigned char value) {
+    if (value == 0) {
+        return 1;
+    }
+    return odd(value - 1);
+}
+unsigned char odd(unsigned char value) {
+    if (value == 0) {
+        return 0;
+    }
+    return even(value - 1);
+}
+void main(void) {
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    PORTB = even(4);
+}
+",
+    );
+
+    assert!(error.contains("recursive call cycle"));
+    assert!(error.contains("even -> odd -> even") || error.contains("odd -> even -> odd"));
 }
 
 #[test]
@@ -1346,6 +1417,9 @@ void main(void) {
             artifacts: OutputArtifacts::default(),
             verbose: false,
             opt_report: false,
+            stack_check: false,
+            stack_report: false,
+            stack_report_file: None,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -1389,6 +1463,9 @@ void main(void) {
             artifacts: OutputArtifacts::default(),
             verbose: false,
             opt_report: false,
+            stack_check: false,
+            stack_report: false,
+            stack_report_file: None,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -1426,6 +1503,9 @@ void main(void) {
             artifacts: OutputArtifacts::default(),
             verbose: false,
             opt_report: false,
+            stack_check: false,
+            stack_report: false,
+            stack_report_file: None,
             warning_profile: WarningProfile::default(),
         }),
     })
@@ -2413,7 +2493,289 @@ fn cli_opt_report_works() {
     assert!(stdout.contains("IR constant propagation/folding"));
     assert!(stdout.contains("Backend peephole"));
     assert!(stdout.contains("Helper calls avoided"));
+    assert!(stdout.contains("Stack summary"));
     assert_hex_is_programmable(&out_hex);
+}
+
+#[test]
+/// Verifies Phase 18 stack bounds symbols are exposed in the map output.
+fn phase18_stack_bounds_symbols_appear_in_map() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase18-stack-bounds.c",
+        "\
+#include <pic16/pic16f628a.h>
+void main(void) {
+    TRISB = 0x00;
+    PORTB = 0x01;
+}
+",
+    );
+
+    let map = read_artifact(&output, "map");
+    assert!(map.contains("__stack_base"));
+    assert!(map.contains("__stack_limit"));
+    assert!(map.contains("__stack_ptr"));
+    assert!(map.contains("__frame_ptr"));
+}
+
+#[test]
+/// Verifies `--stack-report` and `--stack-report-file` emit Phase 18 stack usage details.
+fn phase18_stack_report_prints_and_writes_file() {
+    let out_dir = temp_dir_path("cli-stack-report");
+    fs::create_dir_all(&out_dir).expect("out dir");
+    let out_hex = out_dir.join("stack-report.hex");
+    let report_path = out_dir.join("stack-report.txt");
+    let output = Command::new(picc_bin())
+        .current_dir(repo("."))
+        .args([
+            "--target",
+            "pic16f628a",
+            "-Wall",
+            "-Wextra",
+            "-O2",
+            "--stack-report",
+            "--stack-report-file",
+        ])
+        .arg(&report_path)
+        .args(["-I", "include", "--emit-asm"])
+        .arg("-o")
+        .arg(&out_hex)
+        .arg("examples/pic16f628a/stack_report.c")
+        .output()
+        .expect("run picc with stack report");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Stack report"));
+    assert!(stdout.contains("Per-function"));
+    let report = fs::read_to_string(&report_path).expect("stack report file");
+    assert!(report.contains("base: 0x"));
+    assert!(report.contains("Recursion policy: rejected in phase 18"));
+    assert_hex_is_programmable(&out_hex);
+}
+
+#[test]
+/// Verifies `--stack-check` emits runtime checks and the overflow trap label.
+fn phase18_stack_check_emits_checks_and_trap() {
+    let input = temp_file("phase18-stack-check.c");
+    fs::write(
+        &input,
+        "\
+#include <pic16/pic16f877a.h>
+unsigned int add3(unsigned int a, unsigned int b, unsigned int c) {
+    unsigned char local[8];
+    local[0] = 1;
+    return a + b + c + local[0];
+}
+void main(void) {
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    PORTB = add3(1, 2, 3);
+}
+",
+    )
+    .expect("fixture");
+    let output_hex = temp_file("phase18-stack-check.hex");
+    execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: "pic16f877a".to_string(),
+            input,
+            output: output_hex.clone(),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O2,
+            artifacts: OutputArtifacts {
+                emit_asm: true,
+                map: true,
+                list_file: true,
+                ..OutputArtifacts::default()
+            },
+            verbose: false,
+            opt_report: false,
+            stack_check: true,
+            stack_report: false,
+            stack_report_file: None,
+            warning_profile: WarningProfile::default(),
+        }),
+    })
+    .expect("compile with stack check");
+
+    let asm = read_artifact(&output_hex, "asm");
+    let map = read_artifact(&output_hex, "map");
+    let lst = read_artifact(&output_hex, "lst");
+    assert!(asm.contains("phase18 stack check +"));
+    assert!(asm.contains("__stack_overflow_trap:"));
+    assert!(map.contains("__stack_limit"));
+    assert!(lst.contains("phase18 stack check +"));
+}
+
+#[test]
+/// Verifies stack reports include helper usage, ISR usage, and function-pointer target sets.
+fn phase18_stack_report_covers_helpers_isr_and_fnptr() {
+    let input = temp_file("phase18-stack-report-details.c");
+    let report = temp_file("phase18.stack");
+    fs::write(
+        &input,
+        "\
+#include <pic16/pic16f877a.h>
+typedef void (*Handler)(void);
+
+void off(void) {
+    PORTB = 0x00;
+}
+
+void on(void) {
+    PORTB = 0x01;
+}
+
+Handler table[2] = {off, on};
+
+unsigned int twice(unsigned int value) {
+    return value * 2;
+}
+
+void __interrupt isr(void) {
+    PORTB = 0x55;
+}
+
+void main(void) {
+    unsigned char index = 1;
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    table[index]();
+    PORTB = twice(7);
+}
+",
+    )
+    .expect("fixture");
+    execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: "pic16f877a".to_string(),
+            input,
+            output: temp_file("phase18-stack-report.hex"),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O2,
+            artifacts: OutputArtifacts::default(),
+            verbose: false,
+            opt_report: false,
+            stack_check: false,
+            stack_report: false,
+            stack_report_file: Some(report.clone()),
+            warning_profile: WarningProfile::default(),
+        }),
+    })
+    .expect("compile with stack report file");
+
+    let text = fs::read_to_string(report).expect("stack report");
+    assert!(text.contains("helper_extra="));
+    assert!(text.contains("isr frame bytes:"));
+    assert!(text.contains("isr context bytes:"));
+    assert!(text.contains("indirect fnptr<"));
+    assert!(text.contains("off"));
+    assert!(text.contains("on"));
+}
+
+#[test]
+/// Verifies recursion stays rejected even when `--stack-check` is enabled.
+fn phase18_recursion_still_rejected_with_stack_check() {
+    let input = temp_file("phase18-recursive-checked.c");
+    fs::write(
+        &input,
+        "\
+#include <pic16/pic16f877a.h>
+unsigned char countdown(unsigned char depth) {
+    if (depth == 0) {
+        return 0;
+    }
+    return countdown(depth - 1);
+}
+void main(void) {
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    PORTB = countdown(3);
+}
+",
+    )
+    .expect("fixture");
+    let error = execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: "pic16f877a".to_string(),
+            input,
+            output: temp_file("phase18-recursive-checked.hex"),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O0,
+            artifacts: OutputArtifacts::default(),
+            verbose: false,
+            opt_report: false,
+            stack_check: true,
+            stack_report: false,
+            stack_report_file: None,
+            warning_profile: WarningProfile::default(),
+        }),
+    })
+    .expect_err("recursion must stay unsupported");
+
+    let text = format!("{error}");
+    assert!(text.contains("recursive call cycle"));
+    assert!(text.contains("phase 18"));
+}
+
+#[test]
+/// Verifies checked-in Phase 18 examples and diagnostics stay wired to the release CLI.
+fn phase18_examples_compile_via_picc() {
+    let compiling = [
+        ("pic16f628a", "examples/pic16f628a/stack_report.c", &[][..]),
+        ("pic16f877a", "examples/pic16f877a/stack_check.c", &["--stack-check"][..]),
+    ];
+
+    for (target, example, extra_args) in compiling {
+        let output = compile_example_via_picc_cli_with_extra_args(target, example, extra_args);
+        assert_hex_is_programmable(&output);
+        assert!(output.with_extension("map").exists());
+        assert!(output.with_extension("lst").exists());
+    }
+
+    let recursive = Command::new(picc_bin())
+        .current_dir(repo("."))
+        .args([
+            "--target",
+            "pic16f877a",
+            "-Wall",
+            "-Wextra",
+            "-O2",
+            "--stack-check",
+            "-I",
+            "include",
+            "-o",
+        ])
+        .arg(temp_file("phase18-recursive-diag.hex"))
+        .arg("examples/pic16f877a/recursive_checked.c")
+        .output()
+        .expect("run picc recursive diagnostic");
+    assert!(!recursive.status.success());
+    assert!(String::from_utf8_lossy(&recursive.stderr).contains("recursive call cycle"));
+
+    let mutual = Command::new(picc_bin())
+        .current_dir(repo("."))
+        .args([
+            "--target",
+            "pic16f877a",
+            "-Wall",
+            "-Wextra",
+            "-O2",
+            "-I",
+            "include",
+            "-o",
+        ])
+        .arg(temp_file("phase18-mutual-recursion-diag.hex"))
+        .arg("examples/pic16f877a/mutual_recursion_diagnostic.c")
+        .output()
+        .expect("run picc mutual recursion diagnostic");
+    assert!(!mutual.status.success());
+    assert!(String::from_utf8_lossy(&mutual.stderr).contains("recursive call cycle"));
 }
 
 #[test]

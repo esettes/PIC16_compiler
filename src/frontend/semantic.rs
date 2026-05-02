@@ -267,6 +267,7 @@ enum PointerConversionError {
 
 pub struct SemanticAnalyzer<'a> {
     target: &'a TargetDevice,
+    stack_check_enabled: bool,
     symbols: Vec<Symbol>,
     globals: Vec<TypedGlobal>,
     functions: Vec<TypedFunction>,
@@ -292,9 +293,10 @@ enum VisitState {
 
 impl<'a> SemanticAnalyzer<'a> {
     /// Creates a semantic analyzer primed with target-specific device registers.
-    pub fn new(target: &'a TargetDevice) -> Self {
+    pub fn new(target: &'a TargetDevice, stack_check_enabled: bool) -> Self {
         let mut analyzer = Self {
             target,
+            stack_check_enabled,
             symbols: Vec::new(),
             globals: Vec::new(),
             functions: Vec::new(),
@@ -520,7 +522,7 @@ impl<'a> SemanticAnalyzer<'a> {
             kind: SymbolKind::Function,
             span: function.span,
             fixed_address: None,
-            is_defined: function.body.is_none(),
+            is_defined: function.body.is_some(),
             is_referenced: function.is_interrupt,
             parameter_types,
             enum_const_value: None,
@@ -564,6 +566,9 @@ impl<'a> SemanticAnalyzer<'a> {
         let Some(symbol) = self.globals_by_name.get(&function.name).copied() else {
             return;
         };
+        if function.body.is_none() {
+            return;
+        }
         if self.symbols[symbol].is_defined && function.body.is_some() && self.has_body(symbol) {
             diagnostics.error(
                 "semantic",
@@ -5288,7 +5293,7 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
-    /// Rejects direct or mutual recursion because Phase 4 stack sizing is static and non-cyclic.
+    /// Rejects direct or mutual recursion because Phase 18 still requires an acyclic call graph.
     fn reject_recursive_calls(&self, diagnostics: &mut DiagnosticBag) {
         let mut state = BTreeMap::<SymbolId, VisitState>::new();
         for function in &self.functions {
@@ -5328,8 +5333,12 @@ impl<'a> SemanticAnalyzer<'a> {
                 diagnostics.error(
                     "semantic",
                     Some(self.symbols[symbol].span),
-                    format!("recursive call cycle involving `{name}` is not supported in phase 4"),
-                    Some("phase 4 computes software-stack usage statically; keep the call graph acyclic".to_string()),
+                    format!("recursive call cycle involving `{name}` is not supported in phase 18"),
+                    Some(if self.stack_check_enabled {
+                        "phase 18 adds runtime stack checks, but recursive stack growth remains intentionally unsupported; keep the call graph acyclic".to_string()
+                    } else {
+                        "use an acyclic call graph; `--stack-check` adds runtime bounds checks but does not enable recursion in phase 18".to_string()
+                    }),
                 );
                 return;
             }
@@ -5338,7 +5347,11 @@ impl<'a> SemanticAnalyzer<'a> {
 
         state.insert(symbol, VisitState::Active);
         stack.push(symbol);
-        if let Some(function) = self.functions.iter().find(|function| function.symbol == symbol)
+        if let Some(function) = self
+            .functions
+            .iter()
+            .rev()
+            .find(|function| function.symbol == symbol && function.body.is_some())
             && let Some(body) = &function.body
         {
             let mut callees = BTreeSet::new();
@@ -5367,8 +5380,12 @@ impl<'a> SemanticAnalyzer<'a> {
                     diagnostics.error(
                         "semantic",
                         Some(self.symbols[callee].span),
-                        format!("recursive call cycle `{cycle}` is not supported in phase 4"),
-                        Some("phase 4 computes software-stack usage statically; keep the call graph acyclic".to_string()),
+                        format!("recursive call cycle `{cycle}` is not supported in phase 18"),
+                        Some(if self.stack_check_enabled {
+                            "phase 18 still rejects recursive cycles even with runtime stack checks; keep the call graph acyclic".to_string()
+                        } else {
+                            "use an acyclic call graph; `--stack-check` adds runtime bounds checks but does not enable recursion in phase 18".to_string()
+                        }),
                     );
                     continue;
                 }

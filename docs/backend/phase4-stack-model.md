@@ -26,7 +26,14 @@ Startup initializes:
 - `SP = stack_base`
 - `FP = stack_base`
 
-`stack_base`, `stack_end`, and helper locations appear in emitted map output.
+Phase 18 also exposes:
+
+- `__stack_base`
+- `__stack_limit`
+- `__stack_ptr`
+- `__frame_ptr`
+
+Legacy `__stack.base` / `__stack.end` aliases remain in emitted map output.
 
 ## Growth Direction
 
@@ -89,6 +96,7 @@ Direct banked file-register instructions remain in use for globals, SFRs, and he
 ## Safety Limits
 
 - maximum stack depth is computed statically across non-recursive call graph
+- optional `--stack-check` guards frame/argument growth at runtime and branches to `__stack_overflow_trap`
 - oversized frames or call chains fail compilation
 - recursion remains unsupported
 - returning pointers that may refer to stack locals is rejected conservatively
