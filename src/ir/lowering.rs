@@ -532,6 +532,32 @@ impl FunctionBuilder {
                     Operand::Temp(dst)
                 }
             }
+            TypedExprKind::IndirectCall {
+                callee,
+                signature,
+                args,
+            } => {
+                let callee = self.lower_expr(callee);
+                let args = args.iter().map(|arg| self.lower_expr(arg)).collect::<Vec<_>>();
+                if expr.ty.is_void() {
+                    self.emit(IrInstr::IndirectCall {
+                        dst: None,
+                        callee,
+                        signature: *signature,
+                        args,
+                    });
+                    Operand::Constant(0)
+                } else {
+                    let dst = self.new_temp(expr.ty);
+                    self.emit(IrInstr::IndirectCall {
+                        dst: Some(dst),
+                        callee,
+                        signature: *signature,
+                        args,
+                    });
+                    Operand::Temp(dst)
+                }
+            }
         }
     }
 
@@ -901,6 +927,7 @@ mod tests {
                 return_type: u8_ty,
                 span,
             }],
+            function_pointer_groups: Vec::new(),
         };
 
         let mut diagnostics = DiagnosticBag::new(WarningProfile::default());

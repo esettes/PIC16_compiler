@@ -97,6 +97,12 @@ pub enum IrInstr {
         function: SymbolId,
         args: Vec<Operand>,
     },
+    IndirectCall {
+        dst: Option<TempId>,
+        callee: Operand,
+        signature: Type,
+        args: Vec<Operand>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -218,6 +224,31 @@ fn render_instr(instr: &IrInstr) -> String {
                 format!("t{dst} = call f{function}({rendered_args})")
             } else {
                 format!("call f{function}({rendered_args})")
+            }
+        }
+        IrInstr::IndirectCall {
+            dst,
+            callee,
+            signature,
+            args,
+        } => {
+            let rendered_args = args
+                .iter()
+                .map(|arg| render_operand(*arg))
+                .collect::<Vec<_>>()
+                .join(", ");
+            if let Some(dst) = dst {
+                format!(
+                    "t{dst} = icall {} :: {}({rendered_args})",
+                    render_operand(*callee),
+                    signature
+                )
+            } else {
+                format!(
+                    "icall {} :: {}({rendered_args})",
+                    render_operand(*callee),
+                    signature
+                )
             }
         }
     }

@@ -14,7 +14,7 @@ Output:
 
 - a typed program ready for IR lowering
 
-Current Phase 15 frontend surface:
+Current Phase 17 frontend surface:
 
 - parses `typedef`, `enum`, and named packed `struct` declarations
 - parses named packed `union` declarations and basic unsigned bitfield fields
@@ -27,6 +27,9 @@ Current Phase 15 frontend surface:
 - accepts first-field and designated union initializers with whole-storage zero-fill
 - accepts whole-struct and whole-union assignment between compatible complete types
 - lowers bitfield reads/writes as real lvalues instead of pretending they are plain byte objects
+- accepts fixed-size multidimensional RAM arrays with row-major layout
+- accepts repeated indexing like `matrix[i][j]`
+- accepts chained designated initializers across mixed `.field` / `[index]` paths
 - parses string literals with the supported escape subset
 - infers omitted array sizes from supported brace or string initializers
 - accepts string literal initialization for `char` / `unsigned char` arrays
@@ -42,6 +45,11 @@ Current Phase 15 frontend surface:
 - accepts `const __rom char[]`, `const __rom unsigned char[]`, `const __rom int[]`, and `const __rom unsigned int[]` initializers from brace lists or string literals
 - rejects ROM/data-pointer mixing and rejects ROM pointer forms
 - lowers direct ROM indexing plus `__rom_read8(table, index)` / `__rom_read16(table, index)` as the supported ROM read surfaces
+- parses supported function-pointer declarators, typedefs, arrays, and struct fields
+- validates supported zero-arg/one-arg integer signatures for function-pointer objects
+- lowers bare function names and `&function` as function-pointer values
+- accepts compatible function-pointer equality/inequality and indirect calls in normal code
+- rejects function-pointer arithmetic, relational comparisons, pointer-to-function-pointer objects, and indirect calls inside ISR
 - parses `switch`, `case`, and `default`
 - validates case-label constants, duplicate cases, default count, and switch expression types
 - preserves C-style fallthrough and innermost-construct `break` behavior for supported switch forms
@@ -59,3 +67,5 @@ Current detail:
 - [phase13-rom-address-space.md](phase13-rom-address-space.md)
 - [phase14-rom-indexing.md](phase14-rom-indexing.md)
 - [phase15-union-bitfields.md](phase15-union-bitfields.md)
+- [phase16-multidimensional-arrays.md](phase16-multidimensional-arrays.md)
+- [phase17-function-pointers.md](phase17-function-pointers.md)

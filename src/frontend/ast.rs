@@ -49,6 +49,7 @@ pub struct EnumConstant {
     pub span: Span,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub enum Item {
     Function(FunctionDecl),
@@ -182,7 +183,7 @@ pub enum ExprKind {
         value: Box<Expr>,
     },
     Call {
-        callee: String,
+        callee: Box<Expr>,
         args: Vec<Expr>,
     },
     Member {
@@ -407,7 +408,7 @@ fn render_expr(expr: &Expr) -> String {
         }
         ExprKind::Call { callee, args } => format!(
             "{}({})",
-            callee,
+            render_expr(callee),
             args.iter().map(render_expr).collect::<Vec<_>>().join(", ")
         ),
         ExprKind::Member { base, field } => format!("{}.{}", render_expr(base), field),

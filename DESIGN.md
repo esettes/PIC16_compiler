@@ -178,44 +178,50 @@ Supported:
 - `void`, `char`, `unsigned char`, `int`, `unsigned int`
 - functions
 - globals, locals, static locals
-- `const` scalar, one-dimensional array, and complete named struct/union objects
+- `const` scalar, fixed-size array, and complete named struct/union objects
 - file-scope `const __rom char[]`, `const __rom unsigned char[]`, `const __rom int[]`, and `const __rom unsigned int[]`
 - file-scope `typedef` aliases for supported object/value types
 - `enum` declarations and enumerator constants
-- named packed `struct` declarations with nested struct, named union, one-dimensional array, and basic unsigned bitfield fields
+- named packed `struct` declarations with nested struct, named union, fixed-size array, multidimensional array, function-pointer, and basic unsigned bitfield fields
 - named packed `union` declarations with supported scalar, pointer, array, struct, or union fields
-- fixed-size one-dimensional arrays of supported scalar types and complete named struct/union types
+- fixed-size arrays with complete explicit dimensions over supported scalar types and complete named struct/union types
 - omitted array size when inferred from a brace initializer list or string literal
-- complete named struct objects with scalar, one-dimensional array, nested struct, named union, bitfield, or supported pointer fields
+- complete named struct objects with scalar, fixed-size array, multidimensional array, nested struct, named union, bitfield, supported pointer, or supported function-pointer fields
 - complete named union objects with supported scalar, pointer, array, struct, or union fields
 - nested data-space pointers to supported scalar, pointer, or complete named struct/union types
+- controlled source-level function pointers with supported scalar signatures
 - `if/else`, `while`, `for`, `do while`, `switch/case/default`, `break`, `continue`, `return`
-- direct calls
+- direct calls and controlled indirect calls through compatible function-pointer values
 - `&obj`, `*ptr`, `a[i]`, `p[i]`
+- repeated multidimensional indexing like `matrix[i][j]`
 - `.` and `->`
 - basic unsigned bitfield member access and assignment
 - `==`, `!=`, `<`, `<=`, `>`, `>=`
 - `+`, `-`, `*`, `/`, `%`, `<<`, `>>`, `&`, `|`, `^`, `!`, `~`
 - compile-time `sizeof`
 - positional and designated array/struct/union initializer lists with zero-fill
+- chained designated initializer paths such as `.a.x`, `[1][2]`, and `.field[1][2]`
 - nested aggregate initializer lists
 - string literal initialization for char/unsigned-char array fields inside structs
 - whole-struct and whole-union assignment between compatible complete types
 - string literals for char/unsigned-char array initialization
 - RAM-backed string literal initialization of `char *` and `const char *`
 - `__rom_read8(table, index)` and `__rom_read16(table, index)` for explicit program-memory arrays
+- function-pointer arguments and returns as ordinary 16-bit scalar values
 - explicit casts for supported scalar and data-pointer forms
 
 Deferred:
-- chained designators
+- anonymous nested struct/union/enum fields without declarators
 - incomplete-struct/union pointers
+- ROM/function-pointer mixing beyond the explicit dispatcher model
 
 Not implemented:
 
-- source-level function pointers
-- multidimensional arrays
-- anonymous nested struct/union/enum fields without declarators
 - signed bitfields
+- pointer-to-function-pointer object models
+- function-pointer arithmetic or relational comparisons
+- function-pointer calls inside ISR
+- ROM tables of function pointers or ROM function addresses
 - floats
 - recursion
 - program-memory / code-space pointer models
@@ -251,13 +257,16 @@ Not implemented:
 - omitted array size is inferred from supported brace or string initializers before storage layout is fixed
 - const objects are RAM-backed and read-only only at semantic level
 - explicit `__rom` objects are file-scope-only 8-bit/16-bit integer arrays that bypass RAM startup data and emit as RETLW-backed program-memory tables
-- designated initializers support `.field` and `[index]` forms; chained designators remain deferred
+- multidimensional arrays use packed row-major layout and require every dimension beyond an optional outer inferred bound to be explicit
+- designated initializers support chained `.field` / `[index]` paths over complete array/struct/union subobjects
 - whole-struct and whole-union assignment lower to byte-wise copies and stay rejected inside interrupt handlers
 - bitfield reads lower to load + shift + mask; writes lower to read-modify-write over the containing storage unit
 - explicit casts cover scalar conversions, data-pointer bitcasts, `(T*)0`, and pointer-to-16-bit-integer casts
 - pointer comparisons use raw 16-bit RAM address ordering for compatible pointer types
 - pointer subtraction lowers through inline 16-bit subtraction and optional divide-by-two scaling for compatible 1-byte/2-byte element types
 - `__rom_read8()` / `__rom_read16()` plus direct `rom_table[index]` reads are the supported ROM read surfaces; ROM arrays do not decay to data pointers and ROM pointers are still unsupported
+- supported source-level function pointers lower as 16-bit dispatch IDs, not raw code addresses
+- function-pointer calls use per-signature generated compare-chain dispatchers and stay rejected inside interrupt handlers
 - switch expressions must be integer-valued; case labels must be constant and representable in the switch type
 - switch lowering evaluates the controlling expression once, compares through a linear branch chain, allows fallthrough, and routes `break` to the innermost switch end
 - case/default labels nested under other control statements in the same switch are rejected in phase 9
@@ -280,6 +289,7 @@ IR models:
 - `IrInstr::LoadIndirect`
 - `IrInstr::StoreIndirect`
 - `IrInstr::Call`
+- `IrInstr::IndirectCall`
 - typed branch conditions
 
 Boolean expressions lower through branch form first. Memory expressions lower through explicit address and indirect ops.
@@ -316,6 +326,20 @@ Phase 15 keeps unions and bitfields inside the same aggregate model. It adds:
 - packed union metadata with field offset `0` and max-field-size storage
 - explicit typed bitfield lvalues that lower to ordinary shift/mask/read-modify-write IR
 - byte-wise whole-union copy through the same indirect load/store path already used for structs
+
+Phase 16 keeps multidimensional arrays inside the same explicit aggregate and address model. It adds:
+
+- row-major fixed-size multidimensional array layout
+- recursive flattening of multidimensional initializer lists into row-major scalar slots
+- chained `.field` / `[index]` designator resolution before IR generation
+- typed element-address computation for repeated indexing like `matrix[i][j]`
+
+Phase 17 keeps indirect calls inside the typed IR instead of introducing raw PIC16 code pointers. It adds:
+
+- `IrInstr::IndirectCall` carrying the callee operand, normalized function-pointer signature, and ordinary argument operands
+- one dispatcher group per supported function-pointer signature
+- direct function names and `&function` lowered to stable per-signature dispatch IDs
+- indirect-call stack-depth accounting by expanding each signature group across its reachable concrete callees
 
 Interrupt functions stay structurally ordinary IR functions, but carry interrupt metadata so the backend can:
 
@@ -417,7 +441,7 @@ Current limitation:
 - const data is still RAM-backed rather than modeled in separate program memory
 - duplicate string pooling is not attempted
 
-## Phase 11 Aggregates
+## Historical Phase 11 Aggregates
 
 Phase 11 extends aggregate support without changing the packed-layout or RAM-backed data model.
 
@@ -431,13 +455,13 @@ Rules:
 - whole-struct assignment is allowed only between compatible complete struct types
 - whole-struct assignment lowers as a byte-wise copy, not as a hidden helper call
 
-Current limitations:
+At the end of Phase 11, remaining limitations still included:
 
-- multidimensional arrays remain unsupported
-- chained designators such as `.outer.inner = 1` remain unsupported
-- anonymous nested fields without declarators remain unsupported
-- pointers to incomplete struct types remain unsupported
-- local aggregate initializers and whole-struct copies remain rejected inside interrupt handlers
+- multidimensional arrays
+- chained designators such as `.outer.inner = 1`
+- anonymous nested fields without declarators
+- pointers to incomplete struct types
+- local aggregate initializers and whole-struct copies inside interrupt handlers
 
 ## Phase 12 Pointers
 
@@ -481,3 +505,43 @@ Current limitations:
 - no non-const ROM objects
 - no ROM structs, unions, or bitfield objects
 - dynamic ROM reads inside interrupt handlers remain rejected
+
+## Phase 16 Multidimensional Arrays
+
+Phase 16 extends the existing packed aggregate model to fixed-size multidimensional RAM arrays.
+
+Rules:
+
+- multidimensional arrays use row-major layout
+- every dimension is explicit except an optional outermost inferred bound from a brace initializer
+- repeated indexing like `matrix[i][j]` lowers by composing one row-major byte offset
+- multidimensional arrays may appear inside complete structs and unions
+- multidimensional initializer lists flatten to row-major scalar slots with zero-fill
+- chained designators support `.field`, `[index]`, and mixed complete paths such as `.field[1][2]`
+
+Current limitations:
+
+- multidimensional arrays do not decay to data pointers
+- multidimensional array parameter types remain rejected instead of inventing a pointer-to-array ABI
+- multidimensional `__rom` arrays remain rejected
+- helper-requiring dynamic multidimensional indexing stays rejected inside interrupt handlers
+
+## Phase 17 Function Pointers
+
+Phase 17 adds one conservative function-pointer model for classic PIC16 without raw computed calls.
+
+Rules:
+
+- supported function-pointer values are represented as 16-bit dispatch IDs, not machine code addresses
+- supported signatures are `void`, `char`, `unsigned char`, `int`, or `unsigned int` return with zero or one integer argument
+- taking the address of a supported function or using the bare function name as a value yields a dispatch ID
+- compatible function-pointer variables, arrays, and struct fields are supported
+- calling through a function pointer lowers to one ordinary ABI call into a generated per-signature dispatcher
+- dispatcher miss paths return zeroed return registers instead of jumping to unknown code
+
+Current limitations:
+
+- pointer-to-function-pointer object models remain rejected
+- function-pointer arithmetic and relational comparisons remain rejected
+- function-pointer calls remain rejected inside interrupt handlers
+- ROM tables of function addresses and ROM function-pointer objects remain rejected

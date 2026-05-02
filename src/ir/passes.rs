@@ -182,6 +182,33 @@ pub fn constant_fold(program: &mut IrProgram) -> ConstantFoldStats {
                             constants.remove(&dst);
                         }
                     }
+                    IrInstr::IndirectCall {
+                        dst,
+                        callee,
+                        signature,
+                        args,
+                    } => {
+                        let resolved_callee = resolve_operand(callee, &constants);
+                        let resolved_args = args
+                            .iter()
+                            .map(|arg| resolve_operand(*arg, &constants))
+                            .collect::<Vec<_>>();
+                        stats.operands_propagated += usize::from(resolved_callee != callee)
+                            + args
+                                .iter()
+                                .zip(&resolved_args)
+                                .filter(|(before, after)| **before != **after)
+                                .count();
+                        *instr = IrInstr::IndirectCall {
+                            dst,
+                            callee: resolved_callee,
+                            signature,
+                            args: resolved_args,
+                        };
+                        if let Some(dst) = dst {
+                            constants.remove(&dst);
+                        }
+                    }
                 }
             }
 
@@ -329,6 +356,18 @@ pub fn dead_code_elimination(program: &mut IrProgram) -> DeadCodeStats {
                         }
                         retained.push(instr.clone());
                     }
+                    IrInstr::IndirectCall {
+                        dst, callee, args, ..
+                    } => {
+                        if let Some(dst) = dst {
+                            live_temps.remove(dst);
+                        }
+                        collect_operand(*callee, &mut live_temps);
+                        for arg in args {
+                            collect_operand(*arg, &mut live_temps);
+                        }
+                        retained.push(instr.clone());
+                    }
                 }
             }
             stats.instructions_removed += block.instructions.len().saturating_sub(retained.len());
@@ -432,6 +471,17 @@ fn collect_instr_temps(instr: &IrInstr, temps: &mut BTreeSet<usize>) {
                 collect_operand(*arg, temps);
             }
         }
+        IrInstr::IndirectCall {
+            dst, callee, args, ..
+        } => {
+            if let Some(dst) = dst {
+                temps.insert(*dst);
+            }
+            collect_operand(*callee, temps);
+            for arg in args {
+                collect_operand(*arg, temps);
+            }
+        }
     }
 }
 
@@ -489,6 +539,17 @@ fn remap_block(block: &mut super::model::IrBlock, remap: &BTreeMap<usize, usize>
                 if let Some(dst) = dst {
                     *dst = remap[dst];
                 }
+                for arg in args {
+                    *arg = remap_operand(*arg, remap);
+                }
+            }
+            IrInstr::IndirectCall {
+                dst, callee, args, ..
+            } => {
+                if let Some(dst) = dst {
+                    *dst = remap[dst];
+                }
+                *callee = remap_operand(*callee, remap);
                 for arg in args {
                     *arg = remap_operand(*arg, remap);
                 }

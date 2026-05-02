@@ -9,7 +9,8 @@ use crate::common::integer::{
 use crate::diagnostics::DiagnosticBag;
 use crate::frontend::ast::{BinaryOp, UnaryOp};
 use crate::frontend::semantic::{
-    Symbol, SymbolId, SymbolKind, TypedExpr, TypedExprKind, TypedGlobalInitializer, TypedProgram,
+    FunctionPointerDispatchGroup, Symbol, SymbolId, SymbolKind, TypedExpr, TypedExprKind,
+    TypedGlobalInitializer, TypedProgram,
 };
 use crate::frontend::types::{CastKind, ScalarType, StorageClass, Type};
 use crate::ir::model::{IrCondition, IrFunction, IrInstr, IrProgram, IrTerminator, Operand};
@@ -343,7 +344,11 @@ impl<'a> StorageAllocator<'a> {
             return None;
         };
 
-        let max_stack_depth = compute_max_stack_depth_with_interrupts(ir_program, &frames);
+        let max_stack_depth = compute_max_stack_depth_with_interrupts(
+            typed_program,
+            ir_program,
+            &frames,
+        );
         if max_stack_depth > stack_capacity {
             diagnostics.error(
                 "backend",
@@ -459,6 +464,7 @@ impl<'a> CodegenContext<'a> {
         for function in &ir_program.functions {
             self.emit_function(function, diagnostics);
         }
+        self.emit_function_pointer_dispatchers();
         self.emit_runtime_helpers();
     }
 
@@ -794,6 +800,14 @@ impl<'a> CodegenContext<'a> {
             } => {
                 self.emit_call(function, *callee, args, *dst, diagnostics);
             }
+            IrInstr::IndirectCall {
+                dst,
+                callee,
+                signature,
+                args,
+            } => {
+                self.emit_indirect_call(function, *callee, *signature, args, *dst, diagnostics);
+            }
         }
     }
 
@@ -877,6 +891,89 @@ impl<'a> CodegenContext<'a> {
         self.program.push(AsmLine::Instr(AsmInstr::Call(label)));
 
         let arg_bytes = self.function_arg_bytes(callee);
+        if arg_bytes != 0 {
+            self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(arg_bytes));
+        }
+
+        if let Some(dst) = dst {
+            let dst_ty = function.temp_types[dst];
+            self.store_w_to_temp_byte(function.symbol, dst, 0);
+            if dst_ty.byte_width() == 2 {
+                self.load_addr_to_w(self.layout.helpers.return_high);
+                self.store_w_to_temp_byte(function.symbol, dst, 1);
+            }
+        }
+    }
+
+    /// Lowers one Phase 17 function-pointer call through a generated dispatch-ID trampoline.
+    fn emit_indirect_call(
+        &mut self,
+        function: &IrFunction,
+        callee: Operand,
+        signature: Type,
+        args: &[Operand],
+        dst: Option<usize>,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        if function.is_interrupt {
+            diagnostics.error(
+                "backend",
+                None,
+                format!(
+                    "interrupt handler `{}` reached function-pointer call lowering",
+                    self.symbol_name(function.symbol)
+                ),
+                Some("phase 17 forbids function-pointer calls inside ISRs".to_string()),
+            );
+            if let Some(dst) = dst {
+                self.clear_temp(function.symbol, dst, function.temp_types[dst]);
+            }
+            return;
+        }
+
+        let Some(group_ty) = self
+            .function_pointer_dispatch_group(signature)
+            .map(|group| group.ty)
+        else {
+            diagnostics.error(
+                "backend",
+                None,
+                format!(
+                    "missing function-pointer dispatcher group for signature `{}`",
+                    signature
+                ),
+                None,
+            );
+            if let Some(dst) = dst {
+                self.clear_temp(function.symbol, dst, function.temp_types[dst]);
+            }
+            return;
+        };
+
+        let parameter_types = self.function_pointer_param_types(signature);
+        for (index, arg) in args.iter().enumerate() {
+            let Some(param_ty) = parameter_types.get(index).copied() else {
+                diagnostics.error(
+                    "backend",
+                    None,
+                    "indirect call passes more arguments than its signature permits",
+                    None,
+                );
+                continue;
+            };
+            self.push_operand(function.symbol, *arg, param_ty);
+        }
+
+        self.load_operand_byte_to_w(function.symbol, callee, signature, 0);
+        self.store_w_to_addr(self.layout.helpers.scratch0);
+        self.load_operand_byte_to_w(function.symbol, callee, signature, 1);
+        self.store_w_to_addr(self.layout.helpers.scratch1);
+
+        let label = function_pointer_dispatch_label(group_ty);
+        self.program.push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
+        self.program.push(AsmLine::Instr(AsmInstr::Call(label)));
+
+        let arg_bytes = self.function_pointer_arg_bytes(signature);
         if arg_bytes != 0 {
             self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(arg_bytes));
         }
@@ -3189,6 +3286,96 @@ impl<'a> CodegenContext<'a> {
         &self.typed_program.symbols[symbol].name
     }
 
+    /// Looks up one emitted Phase 17 dispatcher group by normalized function-pointer signature.
+    fn function_pointer_dispatch_group(&self, signature: Type) -> Option<&FunctionPointerDispatchGroup> {
+        let signature = signature.without_object_qualifiers();
+        self.typed_program
+            .function_pointer_groups
+            .iter()
+            .find(|group| group.ty == signature)
+    }
+
+    /// Expands one inline Phase 17 function-pointer signature into ordinary parameter types.
+    fn function_pointer_param_types(&self, signature: Type) -> Vec<Type> {
+        let mut params = Vec::new();
+        for index in 0..signature.function_param_len().unwrap_or(0) {
+            let scalar = signature
+                .function_param_scalar(index)
+                .expect("function pointer parameter index in range");
+            params.push(Type::new(scalar));
+        }
+        params
+    }
+
+    /// Returns the byte width of one function-pointer argument list under the existing ABI.
+    fn function_pointer_arg_bytes(&self, signature: Type) -> u16 {
+        self.function_pointer_param_types(signature)
+            .iter()
+            .map(|ty| ty.byte_width() as u16)
+            .sum()
+    }
+
+    /// Emits one per-signature dispatcher chain for every address-taken function group.
+    fn emit_function_pointer_dispatchers(&mut self) {
+        let groups = self.typed_program.function_pointer_groups.clone();
+        for group in groups {
+            let label = function_pointer_dispatch_label(group.ty);
+            let miss_label = format!("{label}__miss");
+            let done_label = format!("{label}__done");
+
+            self.program.push(AsmLine::Label(label.clone()));
+            self.program.push(AsmLine::Comment(format!(
+                "phase17 function-pointer dispatcher for {}",
+                group.ty
+            )));
+            self.select_bank(self.layout.helpers.scratch1);
+            self.program.push(AsmLine::Instr(AsmInstr::Movf {
+                f: low7(self.layout.helpers.scratch1),
+                d: Dest::W,
+            }));
+            self.program.push(AsmLine::Instr(AsmInstr::Btfss {
+                f: low7(STATUS_ADDR),
+                b: STATUS_Z_BIT,
+            }));
+            self.branch_to_label(&miss_label);
+
+            for target in &group.targets {
+                let next_label = format!("{label}__next_{}", target.id);
+                let case_label = format!(
+                    "{label}__id_{}_{}",
+                    target.id,
+                    self.symbol_name(target.function)
+                );
+                self.load_addr_to_w(self.layout.helpers.scratch0);
+                self.program
+                    .push(AsmLine::Instr(AsmInstr::Xorlw(target.id as u8)));
+                self.program.push(AsmLine::Instr(AsmInstr::Btfss {
+                    f: low7(STATUS_ADDR),
+                    b: STATUS_Z_BIT,
+                }));
+                self.branch_to_label(&next_label);
+                self.program.push(AsmLine::Label(case_label));
+                let callee_label = function_label(self.symbol_name(target.function));
+                self.program.push(AsmLine::Comment(format!(
+                    "dispatch id {} -> {}",
+                    target.id,
+                    self.symbol_name(target.function)
+                )));
+                self.program.push(AsmLine::Instr(AsmInstr::SetPage(callee_label.clone())));
+                self.program.push(AsmLine::Instr(AsmInstr::Call(callee_label)));
+                self.branch_to_label(&done_label);
+                self.program.push(AsmLine::Label(next_label));
+            }
+
+            self.program.push(AsmLine::Label(miss_label));
+            self.emit_const_to_w(0);
+            self.store_w_to_addr(self.layout.helpers.return_high);
+            self.emit_const_to_w(0);
+            self.program.push(AsmLine::Label(done_label));
+            self.program.push(AsmLine::Instr(AsmInstr::Return));
+        }
+    }
+
     /// Creates a fresh backend-internal label name.
     fn unique_label(&mut self, prefix: &str) -> String {
         let label = format!("__{prefix}_{}", self.label_counter);
@@ -3202,6 +3389,36 @@ fn function_label(name: &str) -> String {
     format!("fn_{name}")
 }
 
+/// Builds the assembly label used for one Phase 17 function-pointer dispatcher.
+fn function_pointer_dispatch_label(signature: Type) -> String {
+    let mut key = String::new();
+    key.push_str(match signature.function_return_scalar().unwrap_or(ScalarType::Void) {
+        ScalarType::Void => "v",
+        ScalarType::I8 => "i8",
+        ScalarType::U8 => "u8",
+        ScalarType::I16 => "i16",
+        ScalarType::U16 => "u16",
+    });
+    key.push_str("__");
+    if signature.function_param_len().unwrap_or(0) == 0 {
+        key.push_str("void");
+    } else {
+        for index in 0..signature.function_param_len().unwrap_or(0) {
+            if index != 0 {
+                key.push('_');
+            }
+            key.push_str(match signature.function_param_scalar(index).unwrap_or(ScalarType::Void) {
+                ScalarType::Void => "v",
+                ScalarType::I8 => "i8",
+                ScalarType::U8 => "u8",
+                ScalarType::I16 => "i16",
+                ScalarType::U16 => "u16",
+            });
+        }
+    }
+    format!("__fp_dispatch_{key}")
+}
+
 /// Builds the assembly label used for one function-local basic block.
 fn block_label(function_name: &str, block: usize) -> String {
     format!("fn_{function_name}_b{block}")
@@ -3209,6 +3426,7 @@ fn block_label(function_name: &str, block: usize) -> String {
 
 /// Computes the worst-case software-stack depth across normal code plus one interrupt frame.
 fn compute_max_stack_depth_with_interrupts(
+    typed_program: &TypedProgram,
     ir_program: &IrProgram,
     frames: &BTreeMap<SymbolId, FrameLayout>,
 ) -> u16 {
@@ -3224,6 +3442,15 @@ fn compute_max_stack_depth_with_interrupts(
             for instr in &block.instructions {
                 match instr {
                     IrInstr::Call { function: callee, .. } => callees.push(*callee),
+                    IrInstr::IndirectCall { signature, .. } => {
+                        if let Some(group) = typed_program
+                            .function_pointer_groups
+                            .iter()
+                            .find(|group| group.ty == signature.without_object_qualifiers())
+                        {
+                            callees.extend(group.targets.iter().map(|target| target.function));
+                        }
+                    }
                     IrInstr::Binary { dst, op, .. } => {
                         if let Some(helper) = binary_helper(*op, function.temp_types[*dst]) {
                             let info = helper.info();
@@ -3242,7 +3469,16 @@ fn compute_max_stack_depth_with_interrupts(
     let normal_max = calls
         .keys()
         .copied()
-        .map(|symbol| compute_function_stack_depth(symbol, &calls, &helper_depths, frames, &mut memo))
+        .map(|symbol| {
+            compute_function_stack_depth(
+                symbol,
+                &calls,
+                &helper_depths,
+                frames,
+                &mut memo,
+                &mut BTreeSet::new(),
+            )
+        })
         .max()
         .unwrap_or(0);
     let interrupt_extra = ir_program
@@ -3258,7 +3494,16 @@ fn compute_max_stack_depth_with_interrupts(
 #[cfg(test)]
 /// Compatibility wrapper for tests that do not model interrupts explicitly.
 fn compute_max_stack_depth(ir_program: &IrProgram, frames: &BTreeMap<SymbolId, FrameLayout>) -> u16 {
-    compute_max_stack_depth_with_interrupts(ir_program, frames)
+    compute_max_stack_depth_with_interrupts(
+        &TypedProgram {
+            symbols: Vec::new(),
+            globals: Vec::new(),
+            functions: Vec::new(),
+            function_pointer_groups: Vec::new(),
+        },
+        ir_program,
+        frames,
+    )
 }
 
 /// Computes the worst-case stack usage while one function is active.
@@ -3268,9 +3513,13 @@ fn compute_function_stack_depth(
     helper_depths: &BTreeMap<SymbolId, u16>,
     frames: &BTreeMap<SymbolId, FrameLayout>,
     memo: &mut BTreeMap<SymbolId, u16>,
+    active: &mut BTreeSet<SymbolId>,
 ) -> u16 {
     if let Some(depth) = memo.get(&symbol).copied() {
         return depth;
+    }
+    if !active.insert(symbol) {
+        return frames.get(&symbol).map_or(0, |frame| frame.frame_bytes);
     }
 
     let own = frames.get(&symbol).map_or(0, |frame| frame.frame_bytes);
@@ -3280,11 +3529,20 @@ fn compute_function_stack_depth(
         .flatten()
         .map(|callee| {
             let arg_bytes = frames.get(callee).map_or(0, |frame| frame.arg_bytes);
-            arg_bytes + compute_function_stack_depth(*callee, calls, helper_depths, frames, memo)
+            arg_bytes
+                + compute_function_stack_depth(
+                    *callee,
+                    calls,
+                    helper_depths,
+                    frames,
+                    memo,
+                    active,
+                )
         })
         .max()
         .unwrap_or(0);
     let depth = own + nested.max(helper_depths.get(&symbol).copied().unwrap_or(0));
+    active.remove(&symbol);
     memo.insert(symbol, depth);
     depth
 }
@@ -3432,6 +3690,7 @@ fn eval_const_expr(expr: &TypedExpr) -> i64 {
         | TypedExprKind::RomRead8 { .. }
         | TypedExprKind::RomRead16 { .. }
         | TypedExprKind::Call { .. }
+        | TypedExprKind::IndirectCall { .. }
         | TypedExprKind::ArrayDecay(_)
         | TypedExprKind::AddressOf(_)
         | TypedExprKind::Deref(_)
@@ -3518,6 +3777,7 @@ mod tests {
                 return_type: Type::new(ScalarType::Void),
                 span: Span::new(0, 0),
             }],
+            function_pointer_groups: Vec::new(),
         };
         let ir = IrProgram {
             globals: vec![1],
@@ -3661,6 +3921,7 @@ mod tests {
                     span: Span::new(0, 0),
                 },
             ],
+            function_pointer_groups: Vec::new(),
         };
         let ir = IrProgram {
             globals: Vec::new(),
@@ -3732,6 +3993,7 @@ mod tests {
                 return_type: Type::new(ScalarType::Void),
                 span: Span::new(0, 0),
             }],
+            function_pointer_groups: Vec::new(),
         };
         let ir = IrProgram {
             globals: Vec::new(),
@@ -3813,6 +4075,7 @@ mod tests {
                     span: Span::new(0, 0),
                 },
             ],
+            function_pointer_groups: Vec::new(),
         };
         let ir = IrProgram {
             globals: Vec::new(),
@@ -3952,6 +4215,7 @@ mod tests {
                 return_type: Type::new(ScalarType::Void),
                 span: Span::new(0, 0),
             }],
+            function_pointer_groups: Vec::new(),
         };
         let ir = IrProgram {
             globals: Vec::new(),
@@ -4003,6 +4267,7 @@ mod tests {
                 return_type: Type::new(ScalarType::Void),
                 span: Span::new(0, 0),
             }],
+            function_pointer_groups: Vec::new(),
         };
         let ir = IrProgram {
             globals: Vec::new(),
@@ -4052,6 +4317,7 @@ mod tests {
                 return_type: Type::new(ScalarType::Void),
                 span: Span::new(0, 0),
             }],
+            function_pointer_groups: Vec::new(),
         };
         let ir = IrProgram {
             globals: Vec::new(),
@@ -4109,6 +4375,7 @@ mod tests {
                     span: Span::new(0, 0),
                 },
             ],
+            function_pointer_groups: Vec::new(),
         };
         let ir = IrProgram {
             globals: Vec::new(),

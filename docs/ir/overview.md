@@ -17,6 +17,7 @@ Current IR carries:
 - explicit address materialization
 - explicit indirect load/store
 - direct-call instructions with arbitrary argument lists
+- indirect-call instructions with normalized function-pointer signatures
 - typed arithmetic and shift instructions for helper-aware lowering
 - member-access-friendly base + constant-offset address computations
 - recursive aggregate initializer lowering into scalar stores or global byte payloads
@@ -31,7 +32,7 @@ Phase 7 optimization passes:
 - dead code elimination
 - temp-slot compaction
 
-Phase 8-15 lowering notes:
+Phase 8-17 lowering notes:
 
 - local array/struct initializers are flattened before or during IR lowering into per-slot stores
 - global array/struct initializers arrive as byte payloads for backend startup writes
@@ -70,10 +71,21 @@ Phase 15 aggregate lowering notes:
 - bitfield writes lower to ordinary read-modify-write sequences on the containing byte/word storage unit
 - no dedicated union-copy or bitfield IR instruction is introduced; existing indirect copy/arithmetic ops stay sufficient
 
-Current Phase 15 limits:
+Phase 16 aggregate indexing notes:
 
-- no multidimensional arrays
-- no chained designators such as `.outer.inner = 1`
+- repeated multidimensional indexing lowers through row-major byte-offset composition
+- chained designators resolve to one final scalar or aggregate target before IR generation
+- multidimensional local/global initializers flatten to row-major scalar slots before backend startup or local-store lowering
+
+Phase 17 indirect-call notes:
+
+- supported function-pointer calls lower to one explicit `IndirectCall` instruction
+- direct function names and `&function` lower to stable per-signature dispatch IDs
+- indirect-call recursion and stack-depth analysis expand across every known target in the matching signature group
+- no raw code pointer values or computed PIC16 calls are introduced
+
+Current Phase 17 limits:
+
 - no incomplete-struct/union pointers
 - no whole-aggregate copy inside interrupt handlers
 - no program-memory / code-space pointer model
@@ -81,6 +93,9 @@ Current Phase 15 limits:
 - no pointer subtraction for element sizes larger than 2 bytes
 - no anonymous nested aggregate fields
 - no signed bitfields
+- no pointer-to-function-pointer object model
+- no function-pointer arithmetic or relational comparisons
+- no indirect calls inside interrupt handlers
 
 Current detail:
 
@@ -95,6 +110,8 @@ Current detail:
 - [phase13-rom-lowering.md](phase13-rom-lowering.md)
 - [phase14-rom-read-lowering.md](phase14-rom-read-lowering.md)
 - [phase15-aggregate-lowering.md](phase15-aggregate-lowering.md)
+- [phase16-aggregate-index-lowering.md](phase16-aggregate-index-lowering.md)
+- [phase17-indirect-call-lowering.md](phase17-indirect-call-lowering.md)
 
 Historical detail:
 

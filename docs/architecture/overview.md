@@ -12,7 +12,7 @@
 
 Target backend is classic 14-bit PIC16 mid-range family, not a generic 8-bit CPU model.
 
-Current Phase 15 keeps that split intact while extending:
+Current Phase 17 keeps that split intact while extending:
 
 - stack-first caller-pushed ABI
 - per-call frame storage for locals and IR temps
@@ -38,6 +38,8 @@ Current Phase 15 keeps that split intact while extending:
 - Phase 13 RETLW-backed program-memory table emission plus `__rom_read8()` lowering
 - Phase 14 direct ROM indexing, 16-bit ROM tables, and `__rom_read16()` lowering
 - Phase 15 named union layout/copy plus basic unsigned bitfield lowering without backend layering breaks
+- Phase 16 row-major multidimensional aggregate layout, indexing, and chained designator handling
+- Phase 17 controlled function-pointer typing plus dispatch-ID indirect-call lowering
 - PIC16 banking/paging without backend duplication per device
 
 See:

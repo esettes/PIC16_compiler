@@ -22,6 +22,19 @@ pub struct TypedProgram {
     pub symbols: Vec<Symbol>,
     pub globals: Vec<TypedGlobal>,
     pub functions: Vec<TypedFunction>,
+    pub function_pointer_groups: Vec<FunctionPointerDispatchGroup>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FunctionPointerDispatchGroup {
+    pub ty: Type,
+    pub targets: Vec<FunctionPointerDispatchTarget>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct FunctionPointerDispatchTarget {
+    pub id: u16,
+    pub function: SymbolId,
 }
 
 #[derive(Clone, Debug)]
@@ -51,6 +64,7 @@ pub enum SymbolKind {
     EnumConstant,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub enum TypedGlobalInitializer {
     Scalar(TypedExpr),
@@ -74,6 +88,7 @@ pub struct TypedFunction {
     pub span: Span,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub enum TypedStmt {
     Block(Vec<TypedStmt>, Span),
@@ -178,6 +193,11 @@ pub enum TypedExprKind {
         function: SymbolId,
         args: Vec<TypedExpr>,
     },
+    IndirectCall {
+        callee: Box<TypedExpr>,
+        signature: Type,
+        args: Vec<TypedExpr>,
+    },
     Cast {
         kind: CastKind,
         expr: Box<TypedExpr>,
@@ -218,6 +238,7 @@ struct AggregateInitPlan {
     assignments: Vec<AggregateAssignment>,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 enum AnalyzedInitializer {
     Scalar(TypedExpr),
@@ -258,6 +279,9 @@ pub struct SemanticAnalyzer<'a> {
     switch_stack: Vec<SwitchContext>,
     switch_label_modes: Vec<bool>,
     string_literal_counter: usize,
+    function_pointer_groups: Vec<FunctionPointerDispatchGroup>,
+    function_pointer_group_by_type: BTreeMap<Type, usize>,
+    function_pointer_target_ids: BTreeMap<(usize, SymbolId), u16>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -283,6 +307,9 @@ impl<'a> SemanticAnalyzer<'a> {
             switch_stack: Vec::new(),
             switch_label_modes: Vec::new(),
             string_literal_counter: 0,
+            function_pointer_groups: Vec::new(),
+            function_pointer_group_by_type: BTreeMap::new(),
+            function_pointer_target_ids: BTreeMap::new(),
         };
         analyzer.seed_device_registers();
         analyzer
@@ -326,6 +353,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 symbols: self.symbols,
                 globals: self.globals,
                 functions: self.functions,
+                function_pointer_groups: self.function_pointer_groups,
             })
         }
     }
@@ -1070,13 +1098,7 @@ impl<'a> SemanticAnalyzer<'a> {
             return None;
         };
         if self.symbols[symbol].kind == SymbolKind::Function {
-            diagnostics.error(
-                "semantic",
-                Some(span),
-                "function values and function pointers are not supported in phase 3",
-                Some("call the function directly instead".to_string()),
-            );
-            return None;
+            return self.analyze_function_pointer_value(symbol, span, diagnostics);
         }
 
         if self.symbols[symbol].kind == SymbolKind::EnumConstant {
@@ -1108,6 +1130,142 @@ impl<'a> SemanticAnalyzer<'a> {
             span,
             value_category: ValueCategory::LValue,
         }
+    }
+
+    /// Converts one named function into one Phase 17 dispatch-ID value when used as data.
+    fn analyze_function_pointer_value(
+        &mut self,
+        symbol: SymbolId,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        let parameter_types = self.symbols[symbol].parameter_types.clone();
+        let Some(target_ty) =
+            self.function_pointer_type_from_signature(self.symbols[symbol].ty, &parameter_types)
+        else {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!(
+                    "function `{}` cannot be used as a function-pointer value in phase 17",
+                    self.symbols[symbol].name
+                ),
+                Some(
+                    "supported indirect-call signatures use `void`, `char`, `unsigned char`, `int`, or `unsigned int` with zero or one integer argument"
+                        .to_string(),
+                ),
+            );
+            return None;
+        };
+        let id = self.intern_function_pointer_target(target_ty, symbol, span, diagnostics)?;
+        self.symbols[symbol].is_referenced = true;
+        Some(TypedExpr {
+            kind: TypedExprKind::IntLiteral(i64::from(id)),
+            ty: target_ty,
+            span,
+            value_category: ValueCategory::RValue,
+        })
+    }
+
+    /// Builds one supported Phase 17 function-pointer type from a direct function signature.
+    fn function_pointer_type_from_signature(
+        &self,
+        return_ty: Type,
+        parameter_types: &[Type],
+    ) -> Option<Type> {
+        let return_scalar = if return_ty.is_void() {
+            ScalarType::Void
+        } else if return_ty.is_integer() {
+            return_ty.scalar
+        } else {
+            return None;
+        };
+
+        if parameter_types.len() > 1 {
+            return None;
+        }
+
+        let mut param_scalars = Vec::new();
+        for param in parameter_types {
+            if !param.is_integer() {
+                return None;
+            }
+            param_scalars.push(param.scalar);
+        }
+
+        Some(Type::function_pointer(return_scalar, &param_scalars))
+    }
+
+    /// Expands one inline function-pointer signature into ordinary parameter type descriptors.
+    fn function_pointer_parameter_types(&self, ty: Type) -> Vec<Type> {
+        let mut params = Vec::new();
+        for index in 0..ty.function_param_len().unwrap_or(0) {
+            let scalar = ty
+                .function_param_scalar(index)
+                .expect("function pointer parameter index in range");
+            params.push(Type::new(scalar));
+        }
+        params
+    }
+
+    /// Converts one function-pointer return descriptor into the normal scalar return type model.
+    fn function_pointer_return_type(&self, ty: Type) -> Type {
+        Type::new(ty.function_return_scalar().unwrap_or(ScalarType::Void))
+    }
+
+    /// Assigns one stable dispatch ID for a function under one supported function-pointer signature.
+    fn intern_function_pointer_target(
+        &mut self,
+        ty: Type,
+        function: SymbolId,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<u16> {
+        let key = ty.without_object_qualifiers();
+        let group_index = if let Some(existing) = self.function_pointer_group_by_type.get(&key).copied() {
+            existing
+        } else {
+            let index = self.function_pointer_groups.len();
+            self.function_pointer_groups.push(FunctionPointerDispatchGroup {
+                ty: key,
+                targets: Vec::new(),
+            });
+            self.function_pointer_group_by_type.insert(key, index);
+            index
+        };
+
+        if let Some(id) = self
+            .function_pointer_target_ids
+            .get(&(group_index, function))
+            .copied()
+        {
+            return Some(id);
+        }
+
+        let next_id = self.function_pointer_groups[group_index]
+            .targets
+            .len()
+            .checked_add(1)
+            .and_then(|value| u16::try_from(value).ok());
+        let Some(id) = next_id else {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!(
+                    "too many function-pointer targets share signature `{}` in phase 17",
+                    key
+                ),
+                Some("keep each indirect-dispatch signature under 65535 target functions".to_string()),
+            );
+            return None;
+        };
+
+        self.function_pointer_groups[group_index]
+            .targets
+            .push(FunctionPointerDispatchTarget { id, function });
+        self.function_pointer_target_ids
+            .insert((group_index, function), id);
+        Some(id)
     }
 
     /// Analyzes one unary expression in the supported Phase 3 scalar model.
@@ -1170,6 +1328,14 @@ impl<'a> SemanticAnalyzer<'a> {
         span: Span,
         diagnostics: &mut DiagnosticBag,
     ) -> Option<TypedExpr> {
+        if let ExprKind::Name(name) = &expr.kind
+            && let Some(symbol) = self
+                .resolve_name(name)
+                .or_else(|| self.globals_by_name.get(name).copied())
+            && self.symbols[symbol].kind == SymbolKind::Function
+        {
+            return self.analyze_function_pointer_value(symbol, span, diagnostics);
+        }
         let value = self.analyze_expr_with_decay(expr, diagnostics, false)?;
         if matches!(value.kind, TypedExprKind::RomRead8 { .. } | TypedExprKind::RomRead16 { .. }) {
             diagnostics.error(
@@ -1561,11 +1727,29 @@ impl<'a> SemanticAnalyzer<'a> {
             BinaryOp::Equal | BinaryOp::NotEqual => {
                 let lhs = self.analyze_expr(lhs, diagnostics)?;
                 let rhs = self.analyze_expr(rhs, diagnostics)?;
+                if lhs.ty.is_function_pointer() || rhs.ty.is_function_pointer() {
+                    return self.analyze_function_pointer_equality_expr(
+                        op,
+                        lhs,
+                        rhs,
+                        span,
+                        diagnostics,
+                    );
+                }
                 self.analyze_equality_expr(op, lhs, rhs, span, diagnostics)
             }
             BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => {
                 let lhs = self.analyze_expr(lhs, diagnostics)?;
                 let rhs = self.analyze_expr(rhs, diagnostics)?;
+                if lhs.ty.is_function_pointer() || rhs.ty.is_function_pointer() {
+                    diagnostics.error(
+                        "semantic",
+                        Some(span),
+                        "relational comparison of function pointers is not supported in phase 17",
+                        Some("compare function pointers only with `==`, `!=`, or literal zero".to_string()),
+                    );
+                    return None;
+                }
                 if lhs.ty.is_pointer() || rhs.ty.is_pointer() {
                     return self.analyze_pointer_relational_expr(op, lhs, rhs, span, diagnostics);
                 }
@@ -1585,6 +1769,15 @@ impl<'a> SemanticAnalyzer<'a> {
             BinaryOp::Add | BinaryOp::Sub => {
                 let lhs = self.analyze_expr(lhs, diagnostics)?;
                 let rhs = self.analyze_expr(rhs, diagnostics)?;
+                if lhs.ty.is_function_pointer() || rhs.ty.is_function_pointer() {
+                    diagnostics.error(
+                        "semantic",
+                        Some(span),
+                        "function-pointer arithmetic is not supported in phase 17",
+                        Some("store, compare, or call function pointers instead of doing arithmetic on them".to_string()),
+                    );
+                    return None;
+                }
                 self.analyze_add_sub_expr(op, lhs, rhs, span, diagnostics)
             }
             BinaryOp::ShiftLeft | BinaryOp::ShiftRight => {
@@ -1641,6 +1834,28 @@ impl<'a> SemanticAnalyzer<'a> {
         }
 
         let (lhs, rhs, _) = self.balance_integer_operands(op, lhs, rhs, diagnostics, span);
+        Some(TypedExpr {
+            kind: TypedExprKind::Binary {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            },
+            ty: Type::new(ScalarType::U8),
+            span,
+            value_category: ValueCategory::RValue,
+        })
+    }
+
+    /// Analyzes equality and inequality across compatible Phase 17 function-pointer values.
+    fn analyze_function_pointer_equality_expr(
+        &mut self,
+        op: BinaryOp,
+        lhs: TypedExpr,
+        rhs: TypedExpr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        let (lhs, rhs) = self.balance_function_pointer_operands(lhs, rhs, diagnostics, span)?;
         Some(TypedExpr {
             kind: TypedExprKind::Binary {
                 op,
@@ -2056,39 +2271,85 @@ impl<'a> SemanticAnalyzer<'a> {
         })
     }
 
-    /// Analyzes one direct function call within the Phase 4 call ABI.
+    /// Analyzes one direct or indirect function call within the Phase 17 call model.
     fn analyze_call_expr(
         &mut self,
-        callee: &str,
+        callee: &Expr,
         args: &[Expr],
         span: Span,
         diagnostics: &mut DiagnosticBag,
     ) -> Option<TypedExpr> {
-        if callee == "__rom_read8" {
-            return self.analyze_rom_read8_expr(args, span, diagnostics);
-        }
-        if callee == "__rom_read16" {
-            return self.analyze_rom_read16_expr(args, span, diagnostics);
+        if let ExprKind::Name(name) = &callee.kind {
+            if name == "__rom_read8" {
+                return self.analyze_rom_read8_expr(args, span, diagnostics);
+            }
+            if name == "__rom_read16" {
+                return self.analyze_rom_read16_expr(args, span, diagnostics);
+            }
+            if let Some(function) = self.globals_by_name.get(name).copied()
+                && self.symbols[function].kind == SymbolKind::Function
+            {
+                return self.analyze_direct_call_expr(function, name, args, span, diagnostics);
+            }
         }
 
-        let Some(function) = self.globals_by_name.get(callee).copied() else {
+        let callee = self.analyze_expr(callee, diagnostics)?;
+        if !callee.ty.is_function_pointer() {
             diagnostics.error(
                 "semantic",
-                Some(span),
-                format!("undefined function `{callee}`"),
-                None,
-            );
-            return None;
-        };
-        if self.symbols[function].kind != SymbolKind::Function {
-            diagnostics.error(
-                "semantic",
-                Some(span),
-                format!("symbol `{callee}` is not callable"),
-                None,
+                Some(callee.span),
+                format!("expression of type `{}` is not callable", callee.ty),
+                Some("call a named function or a compatible function-pointer value".to_string()),
             );
             return None;
         }
+        if self.current_function_is_interrupt() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "function-pointer calls are not supported inside interrupt handlers in phase 17",
+                Some("keep ISR control flow inline and call function pointers from normal code only".to_string()),
+            );
+            return None;
+        }
+
+        let parameter_types = self.function_pointer_parameter_types(callee.ty);
+        if args.len() != parameter_types.len() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!(
+                    "function pointer `{}` expects {} argument(s), got {}",
+                    callee.ty,
+                    parameter_types.len(),
+                    args.len()
+                ),
+                None,
+            );
+        }
+
+        let typed_args = self.analyze_call_arguments(args, &parameter_types, diagnostics);
+        Some(TypedExpr {
+            kind: TypedExprKind::IndirectCall {
+                callee: Box::new(callee.clone()),
+                signature: callee.ty.without_object_qualifiers(),
+                args: typed_args,
+            },
+            ty: self.function_pointer_return_type(callee.ty),
+            span,
+            value_category: ValueCategory::RValue,
+        })
+    }
+
+    /// Analyzes one direct named call that continues to use the ordinary Phase 4 ABI path.
+    fn analyze_direct_call_expr(
+        &mut self,
+        function: SymbolId,
+        callee_name: &str,
+        args: &[Expr],
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
         self.symbols[function].is_referenced = true;
 
         let parameter_types = self.symbols[function].parameter_types.clone();
@@ -2097,7 +2358,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 "semantic",
                 Some(span),
                 format!(
-                    "function `{callee}` expects {} argument(s), got {}",
+                    "function `{callee_name}` expects {} argument(s), got {}",
                     parameter_types.len(),
                     args.len()
                 ),
@@ -2105,17 +2366,7 @@ impl<'a> SemanticAnalyzer<'a> {
             );
         }
 
-        let mut typed_args = Vec::new();
-        for (index, argument) in args.iter().enumerate() {
-            let Some(arg) = self.analyze_expr(argument, diagnostics) else {
-                continue;
-            };
-            let Some(param_ty) = parameter_types.get(index).copied() else {
-                typed_args.push(arg);
-                continue;
-            };
-            typed_args.push(self.coerce_expr(arg, param_ty, diagnostics, "function argument", true));
-        }
+        let typed_args = self.analyze_call_arguments(args, &parameter_types, diagnostics);
         Some(TypedExpr {
             kind: TypedExprKind::Call {
                 function,
@@ -2125,6 +2376,33 @@ impl<'a> SemanticAnalyzer<'a> {
             span,
             value_category: ValueCategory::RValue,
         })
+    }
+
+    /// Analyzes, counts, and coerces one argument list against one already-known parameter list.
+    fn analyze_call_arguments(
+        &mut self,
+        args: &[Expr],
+        parameter_types: &[Type],
+        diagnostics: &mut DiagnosticBag,
+    ) -> Vec<TypedExpr> {
+        let mut typed_args = Vec::new();
+        for (index, argument) in args.iter().enumerate() {
+            let Some(arg) = self.analyze_expr(argument, diagnostics) else {
+                continue;
+            };
+            let Some(param_ty) = parameter_types.get(index).copied() else {
+                typed_args.push(arg);
+                continue;
+            };
+            typed_args.push(self.coerce_expr(
+                arg,
+                param_ty,
+                diagnostics,
+                "function argument",
+                true,
+            ));
+        }
+        typed_args
     }
 
     /// Analyzes the Phase 14 ROM-byte intrinsic over one named `const __rom` byte array object.
@@ -3012,14 +3290,12 @@ impl<'a> SemanticAnalyzer<'a> {
                 )
             }
             Designator::Field(field_name, span) => {
-                let Some(field) = self.lookup_aggregate_designator_field(
+                let field = self.lookup_aggregate_designator_field(
                     target_ty,
                     field_name,
                     *span,
                     diagnostics,
-                ) else {
-                    return None;
-                };
+                )?;
                 if let Some(bit_width) = field.bit_width {
                     if !tail.is_empty() {
                         diagnostics.error(
@@ -3058,9 +3334,7 @@ impl<'a> SemanticAnalyzer<'a> {
         diagnostics: &mut DiagnosticBag,
     ) -> Option<super::ast::StructField> {
         if target_ty.is_struct() {
-            let Some(struct_id) = target_ty.struct_id else {
-                return None;
-            };
+            let struct_id = target_ty.struct_id?;
             let Some(def) = self.struct_defs.get(struct_id) else {
                 diagnostics.error(
                     "semantic",
@@ -3086,9 +3360,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 });
         }
         if target_ty.is_union() {
-            let Some(union_id) = target_ty.union_id else {
-                return None;
-            };
+            let union_id = target_ty.union_id?;
             let Some(def) = self.union_defs.get(union_id) else {
                 diagnostics.error(
                     "semantic",
@@ -3898,6 +4170,87 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
+    /// Harmonizes supported Phase 17 function-pointer comparisons plus explicit null values.
+    fn balance_function_pointer_operands(
+        &mut self,
+        lhs: TypedExpr,
+        rhs: TypedExpr,
+        diagnostics: &mut DiagnosticBag,
+        span: Span,
+    ) -> Option<(TypedExpr, TypedExpr)> {
+        if lhs.ty.is_function_pointer() && rhs.ty.is_function_pointer() {
+            if lhs.ty.same_function_pointer_signature(rhs.ty) {
+                let rhs = self.coerce_expr(
+                    rhs,
+                    lhs.ty.without_object_qualifiers(),
+                    diagnostics,
+                    "function pointer comparison",
+                    false,
+                );
+                let lhs = self.coerce_expr(
+                    lhs,
+                    rhs.ty.without_object_qualifiers(),
+                    diagnostics,
+                    "function pointer comparison",
+                    false,
+                );
+                return Some((lhs, rhs));
+            }
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!(
+                    "function pointer comparison requires compatible signatures, got `{}` and `{}`",
+                    lhs.ty, rhs.ty
+                ),
+                None,
+            );
+            return None;
+        }
+
+        if lhs.ty.is_function_pointer() && self.is_null_pointer_constant(&rhs) {
+            let lhs = TypedExpr {
+                kind: lhs.kind,
+                ty: lhs.ty.without_object_qualifiers(),
+                span: lhs.span,
+                value_category: ValueCategory::RValue,
+            };
+            let rhs = TypedExpr {
+                kind: TypedExprKind::IntLiteral(0),
+                ty: lhs.ty.without_object_qualifiers(),
+                span: rhs.span,
+                value_category: ValueCategory::RValue,
+            };
+            return Some((lhs, rhs));
+        }
+        if rhs.ty.is_function_pointer() && self.is_null_pointer_constant(&lhs) {
+            let rhs = TypedExpr {
+                kind: rhs.kind,
+                ty: rhs.ty.without_object_qualifiers(),
+                span: rhs.span,
+                value_category: ValueCategory::RValue,
+            };
+            let lhs = TypedExpr {
+                kind: TypedExprKind::IntLiteral(0),
+                ty: rhs.ty.without_object_qualifiers(),
+                span: lhs.span,
+                value_category: ValueCategory::RValue,
+            };
+            return Some((lhs, rhs));
+        }
+
+        diagnostics.error(
+            "semantic",
+            Some(span),
+            "unsupported function pointer comparison operands",
+            Some(
+                "compare matching function pointer types or compare one function pointer against literal zero"
+                    .to_string(),
+            ),
+        );
+        None
+    }
+
     /// Harmonizes supported pointer comparisons, including explicit null pointer constants.
     fn balance_pointer_operands(
         &mut self,
@@ -4124,6 +4477,80 @@ impl<'a> SemanticAnalyzer<'a> {
         if expr.ty == target_ty {
             return expr;
         }
+        if target_ty.is_function_pointer() {
+            let span = expr.span;
+            if expr.ty.is_function_pointer() {
+                if expr.ty.same_function_pointer_signature(target_ty) {
+                    return TypedExpr {
+                        kind: expr.kind,
+                        ty: target_ty,
+                        span,
+                        value_category: ValueCategory::RValue,
+                    };
+                }
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    format!(
+                        "incompatible function pointer conversion from `{}` to `{}` in {context}",
+                        expr.ty, target_ty
+                    ),
+                    Some("use matching return and parameter types for function pointers".to_string()),
+                );
+                return TypedExpr {
+                    kind: expr.kind,
+                    ty: target_ty,
+                    span,
+                    value_category: ValueCategory::RValue,
+                };
+            }
+            if self.is_null_pointer_constant(&expr) {
+                return TypedExpr {
+                    kind: TypedExprKind::IntLiteral(0),
+                    ty: target_ty,
+                    span,
+                    value_category: ValueCategory::RValue,
+                };
+            }
+            if expr.ty.is_pointer() {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    format!(
+                        "cannot convert data pointer `{}` to function pointer `{}` in {context}",
+                        expr.ty, target_ty
+                    ),
+                    Some("keep data pointers and function pointers in separate storage and APIs".to_string()),
+                );
+                return TypedExpr {
+                    kind: expr.kind,
+                    ty: target_ty,
+                    span,
+                    value_category: ValueCategory::RValue,
+                };
+            }
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("cannot coerce `{}` to `{}` in {context}", expr.ty, target_ty),
+                Some("use a compatible function name, function pointer value, or literal zero".to_string()),
+            );
+            return TypedExpr {
+                kind: expr.kind,
+                ty: target_ty,
+                span,
+                value_category: ValueCategory::RValue,
+            };
+        }
+        if expr.ty.is_function_pointer() {
+            diagnostics.error(
+                "semantic",
+                Some(expr.span),
+                format!("cannot coerce `{}` to `{}` in {context}", expr.ty, target_ty),
+                Some("do not mix function pointers with integers or data pointers in phase 17".to_string()),
+            );
+            return expr;
+        }
         if target_ty.is_pointer() {
             if expr.ty.is_pointer() {
                 let span = expr.span;
@@ -4316,6 +4743,14 @@ impl<'a> SemanticAnalyzer<'a> {
             &format!("function `{name}`"),
             diagnostics,
         );
+        if !self.validate_function_pointer_usage_type(
+            ty,
+            span,
+            &format!("function `{name}` return type"),
+            diagnostics,
+        ) {
+            return;
+        }
         if ty.is_void() {
             return;
         }
@@ -4387,6 +4822,14 @@ impl<'a> SemanticAnalyzer<'a> {
         diagnostics: &mut DiagnosticBag,
     ) {
         self.validate_const_placement(ty, span, &format!("parameter `{name}`"), diagnostics);
+        if !self.validate_function_pointer_usage_type(
+            ty,
+            span,
+            &format!("parameter `{name}`"),
+            diagnostics,
+        ) {
+            return;
+        }
         if ty.is_array() && ty.array_rank > 1 {
             diagnostics.error(
                 "semantic",
@@ -4416,6 +4859,14 @@ impl<'a> SemanticAnalyzer<'a> {
         diagnostics: &mut DiagnosticBag,
     ) {
         self.validate_const_placement(ty, span, &format!("{context} `{name}`"), diagnostics);
+        if !self.validate_function_pointer_usage_type(
+            ty,
+            span,
+            &format!("{context} `{name}`"),
+            diagnostics,
+        ) {
+            return;
+        }
         if ty.is_rom() {
             if context != "global" {
                 diagnostics.error(
@@ -4514,6 +4965,85 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
+    /// Validates one function-pointer object shape, including the Phase 17 signature subset.
+    fn validate_function_pointer_usage_type(
+        &self,
+        ty: Type,
+        span: Span,
+        context: &str,
+        diagnostics: &mut DiagnosticBag,
+    ) -> bool {
+        if ty.is_array() {
+            return self.validate_function_pointer_usage_type(
+                ty.element_type(),
+                span,
+                context,
+                diagnostics,
+            );
+        }
+        if ty.is_pointer() && ty.element_type().is_function_pointer() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("{context} uses unsupported pointer-to-function-pointer type `{ty}`"),
+                Some("store function pointers directly, not through another data pointer layer".to_string()),
+            );
+            return false;
+        }
+
+        let candidate = ty;
+        if !candidate.is_function_pointer() {
+            return true;
+        }
+
+        let return_scalar = candidate.function_return_scalar().unwrap_or(ScalarType::Void);
+        if !matches!(
+            return_scalar,
+            ScalarType::Void | ScalarType::I8 | ScalarType::U8 | ScalarType::I16 | ScalarType::U16
+        ) {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("{context} uses unsupported function-pointer return type `{candidate}`"),
+                Some(
+                    "supported indirect-call returns are `void`, `char`, `unsigned char`, `int`, or `unsigned int`"
+                        .to_string(),
+                ),
+            );
+            return false;
+        }
+
+        let param_len = candidate.function_param_len().unwrap_or(0);
+        if param_len > 1 {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("{context} uses unsupported function-pointer signature `{candidate}`"),
+                Some("phase 17 supports zero or one integer parameter in function-pointer signatures".to_string()),
+            );
+            return false;
+        }
+        for index in 0..param_len {
+            let scalar = candidate
+                .function_param_scalar(index)
+                .expect("function pointer parameter index in range");
+            if !matches!(scalar, ScalarType::I8 | ScalarType::U8 | ScalarType::I16 | ScalarType::U16) {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    format!("{context} uses unsupported function-pointer parameter type `{candidate}`"),
+                    Some(
+                        "supported indirect-call parameters are `char`, `unsigned char`, `int`, or `unsigned int`"
+                            .to_string(),
+                    ),
+                );
+                return false;
+            }
+        }
+
+        true
+    }
+
     /// Checks struct and union fields for aggregate, ROM, and bitfield restrictions.
     fn validate_aggregate_field_types(&mut self, diagnostics: &mut DiagnosticBag) {
         for def in &self.struct_defs {
@@ -4558,6 +5088,14 @@ impl<'a> SemanticAnalyzer<'a> {
             &format!("{aggregate_kind} `{aggregate_name}` field `{}`", field.name),
             diagnostics,
         );
+        if !self.validate_function_pointer_usage_type(
+            field.ty,
+            field.span,
+            &format!("{aggregate_kind} `{aggregate_name}` field `{}`", field.name),
+            diagnostics,
+        ) {
+            return;
+        }
 
         let field_ty = field.ty;
         let element_ty = if field_ty.is_array() {
@@ -4805,6 +5343,19 @@ impl<'a> SemanticAnalyzer<'a> {
         {
             let mut callees = BTreeSet::new();
             collect_stmt_calls(body, &mut callees);
+            let mut indirect_signatures = BTreeSet::new();
+            collect_stmt_indirect_call_signatures(body, &mut indirect_signatures);
+            for signature in indirect_signatures {
+                if let Some(group_index) = self
+                    .function_pointer_group_by_type
+                    .get(&signature.without_object_qualifiers())
+                    .copied()
+                {
+                    for target in &self.function_pointer_groups[group_index].targets {
+                        callees.insert(target.function);
+                    }
+                }
+            }
             for callee in callees {
                 if matches!(state.get(&callee).copied(), Some(VisitState::Active)) {
                     let cycle = stack
@@ -5020,6 +5571,13 @@ impl<'a> SemanticAnalyzer<'a> {
                     .fold(false, |acc, arg| self.track_stack_pointer_expr(arg, tainted_locals) || acc);
                 expr.ty.is_pointer() && arg_tainted
             }
+            TypedExprKind::IndirectCall { callee, args, .. } => {
+                let callee_tainted = self.track_stack_pointer_expr(callee, tainted_locals);
+                let arg_tainted = args
+                    .iter()
+                    .fold(false, |acc, arg| self.track_stack_pointer_expr(arg, tainted_locals) || acc);
+                expr.ty.is_pointer() && (callee_tainted || arg_tainted)
+            }
             TypedExprKind::Cast { expr, .. } => self.track_stack_pointer_expr(expr, tainted_locals),
         }
     }
@@ -5148,6 +5706,21 @@ impl<'a> SemanticAnalyzer<'a> {
                     ),
                     Some("keep ISR code inline; call normal functions from non-interrupt code".to_string()),
                 );
+                for arg in args {
+                    self.walk_interrupt_expr(function, arg, diagnostics);
+                }
+            }
+            TypedExprKind::IndirectCall { callee, args, .. } => {
+                diagnostics.error(
+                    "semantic",
+                    Some(expr.span),
+                    format!(
+                        "interrupt handler `{}` cannot call through a function pointer in phase 17",
+                        self.symbols[function].name
+                    ),
+                    Some("keep ISR control flow inline; dispatch through function pointers from normal code only".to_string()),
+                );
+                self.walk_interrupt_expr(function, callee, diagnostics);
                 for arg in args {
                     self.walk_interrupt_expr(function, arg, diagnostics);
                 }
@@ -5440,6 +6013,7 @@ fn is_constant_expression(expr: &TypedExpr) -> bool {
         | TypedExprKind::RomRead8 { .. }
         | TypedExprKind::RomRead16 { .. }
         | TypedExprKind::Call { .. }
+        | TypedExprKind::IndirectCall { .. }
         | TypedExprKind::ArrayDecay(_)
         | TypedExprKind::AddressOf(_)
         | TypedExprKind::Deref(_)
@@ -5449,7 +6023,7 @@ fn is_constant_expression(expr: &TypedExpr) -> bool {
 
 /// Evaluates one typed integer constant expression under the compiler's fixed-width rules.
 fn eval_integer_constant_expr(expr: &TypedExpr) -> Option<i64> {
-    if !expr.ty.is_integer() {
+    if !expr.ty.is_integer() && !expr.ty.is_function_pointer() {
         return None;
     }
 
@@ -5479,6 +6053,7 @@ fn eval_integer_constant_expr(expr: &TypedExpr) -> Option<i64> {
         | TypedExprKind::RomRead8 { .. }
         | TypedExprKind::RomRead16 { .. }
         | TypedExprKind::Call { .. }
+        | TypedExprKind::IndirectCall { .. }
         | TypedExprKind::ArrayDecay(_)
         | TypedExprKind::AddressOf(_)
         | TypedExprKind::Deref(_)
@@ -5648,6 +6223,130 @@ fn collect_expr_calls(expr: &TypedExpr, callees: &mut BTreeSet<SymbolId>) {
             callees.insert(*function);
             for arg in args {
                 collect_expr_calls(arg, callees);
+            }
+        }
+        TypedExprKind::IndirectCall { callee, args, .. } => {
+            collect_expr_calls(callee, callees);
+            for arg in args {
+                collect_expr_calls(arg, callees);
+            }
+        }
+        TypedExprKind::IntLiteral(_) | TypedExprKind::Symbol(_) => {}
+    }
+}
+
+/// Collects indirect-call signatures that appear anywhere inside one typed statement tree.
+fn collect_stmt_indirect_call_signatures(stmt: &TypedStmt, signatures: &mut BTreeSet<Type>) {
+    match stmt {
+        TypedStmt::Block(statements, _) => {
+            for statement in statements {
+                collect_stmt_indirect_call_signatures(statement, signatures);
+            }
+        }
+        TypedStmt::Switch { expr, body, .. } => {
+            collect_expr_indirect_call_signatures(expr, signatures);
+            collect_stmt_indirect_call_signatures(body, signatures);
+        }
+        TypedStmt::Case { body, .. } | TypedStmt::Default { body, .. } => {
+            collect_stmt_indirect_call_signatures(body, signatures);
+        }
+        TypedStmt::VarDecl(_, initializer, _) => {
+            if let Some(initializer) = initializer {
+                collect_expr_indirect_call_signatures(initializer, signatures);
+            }
+        }
+        TypedStmt::Expr(expr, _) => collect_expr_indirect_call_signatures(expr, signatures),
+        TypedStmt::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_expr_indirect_call_signatures(condition, signatures);
+            collect_stmt_indirect_call_signatures(then_branch, signatures);
+            if let Some(else_branch) = else_branch {
+                collect_stmt_indirect_call_signatures(else_branch, signatures);
+            }
+        }
+        TypedStmt::While {
+            condition, body, ..
+        } => {
+            collect_expr_indirect_call_signatures(condition, signatures);
+            collect_stmt_indirect_call_signatures(body, signatures);
+        }
+        TypedStmt::DoWhile {
+            body, condition, ..
+        } => {
+            collect_stmt_indirect_call_signatures(body, signatures);
+            collect_expr_indirect_call_signatures(condition, signatures);
+        }
+        TypedStmt::For {
+            init,
+            condition,
+            step,
+            body,
+            ..
+        } => {
+            if let Some(init) = init {
+                collect_stmt_indirect_call_signatures(init, signatures);
+            }
+            if let Some(condition) = condition {
+                collect_expr_indirect_call_signatures(condition, signatures);
+            }
+            if let Some(step) = step {
+                collect_expr_indirect_call_signatures(step, signatures);
+            }
+            collect_stmt_indirect_call_signatures(body, signatures);
+        }
+        TypedStmt::Return(expr, _) => {
+            if let Some(expr) = expr {
+                collect_expr_indirect_call_signatures(expr, signatures);
+            }
+        }
+        TypedStmt::Break(_) | TypedStmt::Continue(_) | TypedStmt::Empty(_) => {}
+    }
+}
+
+/// Collects indirect-call signatures that appear anywhere inside one typed expression tree.
+fn collect_expr_indirect_call_signatures(expr: &TypedExpr, signatures: &mut BTreeSet<Type>) {
+    match &expr.kind {
+        TypedExprKind::Unary { expr, .. }
+        | TypedExprKind::ArrayDecay(expr)
+        | TypedExprKind::AddressOf(expr)
+        | TypedExprKind::Deref(expr)
+        | TypedExprKind::Cast { expr, .. } => collect_expr_indirect_call_signatures(expr, signatures),
+        TypedExprKind::BitField { storage, .. } => {
+            collect_expr_indirect_call_signatures(storage, signatures)
+        }
+        TypedExprKind::Binary { lhs, rhs, .. } => {
+            collect_expr_indirect_call_signatures(lhs, signatures);
+            collect_expr_indirect_call_signatures(rhs, signatures);
+        }
+        TypedExprKind::Assign { target, value } => {
+            collect_expr_indirect_call_signatures(target, signatures);
+            collect_expr_indirect_call_signatures(value, signatures);
+        }
+        TypedExprKind::StructAssign { target, value, .. } => {
+            collect_expr_indirect_call_signatures(target, signatures);
+            collect_expr_indirect_call_signatures(value, signatures);
+        }
+        TypedExprKind::RomRead8 { index, .. } | TypedExprKind::RomRead16 { index, .. } => {
+            collect_expr_indirect_call_signatures(index, signatures)
+        }
+        TypedExprKind::Call { args, .. } => {
+            for arg in args {
+                collect_expr_indirect_call_signatures(arg, signatures);
+            }
+        }
+        TypedExprKind::IndirectCall {
+            callee,
+            signature,
+            args,
+        } => {
+            signatures.insert(signature.without_object_qualifiers());
+            collect_expr_indirect_call_signatures(callee, signatures);
+            for arg in args {
+                collect_expr_indirect_call_signatures(arg, signatures);
             }
         }
         TypedExprKind::IntLiteral(_) | TypedExprKind::Symbol(_) => {}

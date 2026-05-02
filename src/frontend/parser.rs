@@ -747,22 +747,11 @@ impl<'a> Parser<'a> {
                     }
                 }
                 self.expect_symbol(Symbol::RParen);
-
-                let callee = match expr.kind {
-                    ExprKind::Name(name) => name,
-                    _ => {
-                        self.diagnostics.error(
-                            "parser",
-                            Some(expr.span),
-                            "only direct function calls are supported",
-                            Some("call a named function directly in this phase".to_string()),
-                        );
-                        "__error".to_string()
-                    }
-                };
-
                 expr = Expr {
-                    kind: ExprKind::Call { callee, args },
+                    kind: ExprKind::Call {
+                        callee: Box::new(expr),
+                        args,
+                    },
                     span: Span::new(start, self.previous_span().end),
                 };
                 continue;
@@ -1616,21 +1605,10 @@ impl<'a> Parser<'a> {
         self.global_value_names.insert(name.to_string());
     }
 
-    /// Parses a named declarator with Phase 3 pointer and one-dimensional array suffixes.
+    /// Parses a named declarator with pointer, array, and Phase 17 function-pointer forms.
     fn parse_declarator(&mut self, mut ty: Type) -> (String, Span, Type) {
         if self.check_symbol(Symbol::LParen) && self.peek_symbol(1, Symbol::Star) {
-            let span = self.current_span();
-            self.diagnostics.error(
-                "parser",
-                Some(span),
-                "function pointer declarators are not supported in phase 8",
-                Some("use direct function calls only for now".to_string()),
-            );
-            while !self.check_symbol(Symbol::RParen) && !self.is_eof() {
-                self.advance();
-            }
-            self.expect_symbol(Symbol::RParen);
-            return ("__unsupported".to_string(), span, ty);
+            return self.parse_function_pointer_declarator(ty);
         }
         while self.match_symbol(Symbol::Star) {
             let qualifiers = self.parse_pointer_qualifiers();
@@ -1649,6 +1627,49 @@ impl<'a> Parser<'a> {
         }
         let (name, span) = self.expect_identifier();
         (name, span, self.parse_type_suffixes(ty))
+    }
+
+    /// Parses one raw `(*name)(...)` function-pointer declarator plus optional inner array suffixes.
+    fn parse_function_pointer_declarator(&mut self, return_ty: Type) -> (String, Span, Type) {
+        let start = self.current_span().start;
+        self.expect_symbol(Symbol::LParen);
+
+        let mut pointer_qualifiers = Vec::new();
+        while self.match_symbol(Symbol::Star) {
+            pointer_qualifiers.push(self.parse_pointer_qualifiers());
+        }
+        if pointer_qualifiers.is_empty() {
+            let span = Span::new(start, self.current_span().end);
+            self.diagnostics.error(
+                "parser",
+                Some(span),
+                "expected `*` in function-pointer declarator",
+                None,
+            );
+        }
+        if pointer_qualifiers.len() > 1 {
+            self.diagnostics.error(
+                "parser",
+                Some(Span::new(start, self.current_span().end)),
+                "pointer-to-function-pointer declarators are not supported in phase 17",
+                Some("use one function-pointer object level only".to_string()),
+            );
+        }
+
+        let (name, span) = self.expect_identifier();
+        let inner_suffixes = self.parse_type_suffixes(Type::new(ScalarType::Void));
+        self.expect_symbol(Symbol::RParen);
+        self.expect_symbol(Symbol::LParen);
+        let params = self.parse_function_pointer_param_types();
+
+        let mut ty = self.build_function_pointer_type(return_ty, &params, Span::new(start, self.previous_span().end));
+        if let Some(qualifiers) = pointer_qualifiers.first().copied() {
+            ty = ty.with_object_qualifiers(qualifiers);
+        }
+        for len in &inner_suffixes.array_dims[..inner_suffixes.array_rank as usize] {
+            ty = ty.array_of(*len);
+        }
+        (name, span, ty)
     }
 
     /// Parses a standalone type name used by `sizeof(type)`.
@@ -1827,6 +1848,99 @@ impl<'a> Parser<'a> {
             }
         }
         ty
+    }
+
+    /// Parses one function-pointer parameter type list with optional parameter names.
+    fn parse_function_pointer_param_types(&mut self) -> Vec<Type> {
+        if self.match_symbol(Symbol::RParen) {
+            return Vec::new();
+        }
+        if self.check_keyword(Keyword::Void) && self.peek_symbol(1, Symbol::RParen) {
+            self.advance();
+            self.expect_symbol(Symbol::RParen);
+            return Vec::new();
+        }
+
+        let mut params = Vec::new();
+        loop {
+            let start = self.current_span().start;
+            let decl = self.parse_decl_specifiers();
+            if decl.is_interrupt || decl.is_typedef || decl.storage_class != StorageClass::Auto {
+                self.diagnostics.error(
+                    "parser",
+                    Some(Span::new(start, self.previous_span().end)),
+                    "function-pointer parameter types do not support storage class, typedef, or interrupt qualifiers",
+                    None,
+                );
+            }
+            let ty = if self.check_symbol(Symbol::Comma) || self.check_symbol(Symbol::RParen) {
+                decl.ty
+            } else {
+                let (_, _, ty) = self.parse_declarator(decl.ty);
+                ty
+            };
+            params.push(ty);
+            if self.match_symbol(Symbol::Comma) {
+                continue;
+            }
+            self.expect_symbol(Symbol::RParen);
+            break;
+        }
+        params
+    }
+
+    /// Converts one parsed raw function-pointer signature into the Phase 17 inline type model.
+    fn build_function_pointer_type(
+        &mut self,
+        return_ty: Type,
+        params: &[Type],
+        span: Span,
+    ) -> Type {
+        let return_scalar = if return_ty.is_void() && !return_ty.is_function_pointer() {
+            ScalarType::Void
+        } else if return_ty.is_integer() {
+            return_ty.scalar
+        } else {
+            self.diagnostics.error(
+                "parser",
+                Some(span),
+                format!(
+                    "function pointer return type `{}` is not supported in phase 17",
+                    return_ty
+                ),
+                Some("use `void`, `char`, `unsigned char`, `int`, or `unsigned int`".to_string()),
+            );
+            ScalarType::Void
+        };
+
+        if params.len() > crate::frontend::types::MAX_FUNCTION_POINTER_PARAMS {
+            self.diagnostics.error(
+                "parser",
+                Some(span),
+                "function pointer signature exceeds the supported parameter count in phase 17",
+                Some("use at most four scalar parameters".to_string()),
+            );
+        }
+
+        let mut param_scalars = Vec::new();
+        for param in params.iter().take(crate::frontend::types::MAX_FUNCTION_POINTER_PARAMS) {
+            if !param.is_integer() {
+                self.diagnostics.error(
+                    "parser",
+                    Some(span),
+                    format!(
+                        "function pointer parameter type `{}` is not supported in phase 17",
+                        param
+                    ),
+                    Some("use integer scalar parameter types only".to_string()),
+                );
+                param_scalars.push(ScalarType::I16);
+                continue;
+            }
+            param_scalars.push(param.scalar);
+        }
+
+        Type::function_pointer(return_scalar, &param_scalars)
     }
 
     /// Parses one fixed array length expression restricted to an integer literal.
@@ -2354,6 +2468,56 @@ void main(void) {
         assert!(!diagnostics.has_errors(), "{diagnostics}");
         assert!(ast.contains("struct Font"));
         assert!(ast.contains("global struct#0 font"));
+    }
+
+    #[test]
+    /// Verifies one raw function-pointer variable declarator parses into the Phase 17 type model.
+    fn parses_phase17_function_pointer_variable() {
+        let (ast, diagnostics) = parse_source(
+            "\
+void (*handler)(void);
+void main(void) {
+}
+",
+        );
+
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert!(ast.contains("global fnptr<void(void)> handler"));
+    }
+
+    #[test]
+    /// Verifies typedef aliases may name raw function-pointer declarators and later array uses.
+    fn parses_phase17_function_pointer_typedef_and_array() {
+        let (ast, diagnostics) = parse_source(
+            "\
+typedef unsigned char (*Transform)(unsigned char);
+Transform table[2];
+void main(void) {
+}
+",
+        );
+
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert!(ast.contains("fnptr<unsigned char(unsigned char)>"), "{ast}");
+        assert!(ast.contains("table"), "{ast}");
+    }
+
+    #[test]
+    /// Verifies function-pointer fields inside structs parse through typedef aliases.
+    fn parses_phase17_function_pointer_struct_field() {
+        let (ast, diagnostics) = parse_source(
+            "\
+typedef void (*Handler)(void);
+struct Device {
+    Handler handler;
+};
+void main(void) {
+}
+",
+        );
+
+        assert!(!diagnostics.has_errors(), "{diagnostics}");
+        assert!(ast.contains("handler:fnptr<void(void)>@0"));
     }
 }
 // SPDX-License-Identifier: GPL-3.0-or-later

@@ -12,7 +12,7 @@ Shared backend responsibilities:
 - IR -> PIC16 asm lowering
 - 14-bit word encoding
 
-Current backend phase: **Phase 15 named union support and basic unsigned bitfields on top of Phase 14 richer program-memory usability, Phase 13 explicit program-memory const/string/table lowering, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 static-data cleanup, Phase 9 control-flow coverage, Phase 8 aggregate/type-aware lowering, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**
+Current backend phase: **Phase 17 controlled function pointers and indirect dispatch on top of Phase 16 multidimensional arrays and aggregate polish, Phase 15 named union support and basic unsigned bitfields, Phase 14 richer program-memory usability, Phase 13 explicit program-memory const/string/table lowering, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 static-data cleanup, Phase 9 control-flow coverage, Phase 8 aggregate/type-aware lowering, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**
 
 Backend owns:
 
@@ -38,8 +38,10 @@ Backend owns:
 - byte-wise whole-struct and whole-union copy lowering through existing indirect memory instructions
 - union field accesses through shared aggregate base-address lowering
 - bitfield read-modify-write lowering through ordinary mask/shift/indirect-store machinery
+- row-major multidimensional aggregate offset lowering for locals, globals, and nested aggregate fields
 - switch compare-chain blocks through the ordinary branch emitter
 - pointer compare/subtract reuse ordinary 16-bit compare/arithmetic lowering
+- per-signature generated function-pointer dispatchers with dispatch-ID call lowering
 - no backend jump tables and no backend-side recovery of labels nested under unrelated control statements in phase 9
 - no backend-side recovery for chained designators or incomplete-struct/union pointers; those stay frontend diagnostics
 - bank/page reuse tracking
@@ -120,12 +122,14 @@ Phase 10 backend docs:
 
 - [phase10-data-layout.md](phase10-data-layout.md)
 
-Phase 11-15 backend docs:
+Phase 11-17 backend docs:
 
 - [phase11-aggregate-copy.md](phase11-aggregate-copy.md)
 - [phase13-rom-data-layout.md](phase13-rom-data-layout.md)
 - [phase14-retlw-tables.md](phase14-retlw-tables.md)
 - [phase15-bitfield-codegen.md](phase15-bitfield-codegen.md)
+- [phase16-aggregate-layout.md](phase16-aggregate-layout.md)
+- [phase17-dispatcher.md](phase17-dispatcher.md)
 
 Historical docs:
 

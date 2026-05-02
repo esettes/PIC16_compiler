@@ -30,9 +30,17 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 16: multidimensional arrays and aggregate-polish support on top of Phase 15 named `union` support and basic unsigned bitfields, Phase 14 richer program-memory data usability, Phase 13 explicit ROM objects, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 string/static-data cleanup, Phase 9 `switch` control flow, Phase 8 type-system work, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
+Current implementation is **Phase 17: controlled function pointers and indirect dispatch on top of Phase 16 multidimensional arrays and aggregate-polish support, Phase 15 named `union` support and basic unsigned bitfields, Phase 14 richer program-memory data usability, Phase 13 explicit ROM objects, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 string/static-data cleanup, Phase 9 `switch` control flow, Phase 8 type-system work, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
 
-Phase 16 scope:
+Phase 17 scope:
+
+- function pointer object types with supported zero-arg/one-arg scalar signatures
+- taking function addresses and assigning compatible function pointers
+- direct calls through function pointers, arrays of function pointers, and function-pointer struct fields
+- generated dispatch-ID trampolines instead of raw PIC16 computed calls
+- explicit diagnostics for incompatible signatures, function-pointer arithmetic/relational comparisons, and ISR indirect-call restrictions
+
+Phase 16 scope remains:
 
 - fixed multidimensional RAM arrays with row-major layout
 - repeated indexing like `matrix[i][j]`
@@ -127,6 +135,7 @@ What changed from Phase 3:
 - Phase 14 adds direct ROM indexing, 16-bit ROM tables, `__rom_read16()`, constant-index inline ROM reads, and constant-only ISR ROM access
 - Phase 15 adds named unions, union initializers/copy, and basic unsigned bitfield layout/read/write lowering
 - Phase 16 adds row-major multidimensional RAM arrays, chained designators, and multidimensional aggregate field access
+- Phase 17 adds controlled source-level function pointers, dispatch-ID lowering, and indirect-call diagnostics
 - active docs now describe stack-first behavior; old Phase 2/3 docs remain historical
 
 Historical milestone snapshots below describe what each phase introduced at the time. The current supported subset is summarized later under `Supported Subset`, `Current constraints`, and `Current Limits`.
@@ -472,6 +481,7 @@ Supported:
 - complete named union objects with supported scalar, pointer, array, struct, or union fields
 - `const` scalar, one-dimensional array, and complete named struct/union objects
 - nested data-space pointers to supported scalar, pointer, or complete named struct/union types in PIC16 RAM
+- controlled source-level function pointers with supported scalar signatures
 - `&obj`
 - `*ptr`
 - `a[i]`
@@ -486,6 +496,7 @@ Supported:
 - direct `rom_table[index]` reads for supported ROM arrays
 - `__rom_read8(table, index)` for program-memory byte arrays
 - `__rom_read16(table, index)` for program-memory 16-bit arrays
+- calls through compatible function-pointer objects, arrays, and struct fields
 - positional and designated array/struct/union initializer lists with zero-fill
 - chained designated initializer paths such as `.a.x`, `[1][2]`, and `.field[1][2]`
 - nested aggregate initializer lists
@@ -497,6 +508,7 @@ Supported:
 - 3+ argument stack calls
 - stack-backed local arrays
 - pointer arguments and pointer returns
+- function-pointer arguments and returns as ordinary 16-bit scalar values
 - one `void __interrupt isr(void)` handler
 - interrupt vector emission at `0x0004`
 - `retfie`
@@ -525,14 +537,20 @@ Partially supported / constrained:
 - local aggregate initializers and whole-aggregate copies remain rejected inside interrupt handlers
 - ROM objects are limited to file-scope 8-bit/16-bit integer arrays whose byte payload fits one 255-byte RETLW table page
 - multidimensional ROM arrays remain deferred; `__rom` currently stays one-dimensional only
+- function pointers lower through generated dispatch IDs plus per-signature dispatcher code; raw PIC16 computed calls remain intentionally deferred
+- supported indirect-call signatures are limited to zero or one integer argument with `void`, `char`, `unsigned char`, `int`, or `unsigned int` return values
+- function-pointer values are 16-bit dispatch IDs; null is `0`, and generated dispatch labels in `.map` / `.lst` show the assigned IDs
 - switch lowering uses linear compare chains; no jump tables are emitted in this phase
 - case/default labels must stay in the switch body flow or nested blocks; labels under unrelated control statements like `if`, `while`, or `for` are rejected in phase 9
 
 Unsupported:
 
-- source-level function pointers
 - anonymous nested struct/union/enum fields without declarators
 - signed bitfields
+- pointer-to-function-pointer object models
+- function-pointer arithmetic or relational comparisons
+- function-pointer calls inside interrupt handlers
+- ROM tables of function pointers / ROM function addresses
 - pointers to incomplete struct/union types
 - program-memory / code-space pointers
 - `float`
@@ -554,6 +572,9 @@ Current constraints:
 - implicit nested-pointer qualifier changes beyond `T *` to `const T *` are rejected conservatively
 - pointer subtraction is limited to compatible pointer types whose element size is 1 or 2 bytes
 - ROM reads use direct indexing plus `__rom_read8()` / `__rom_read16()` only; general ROM address values and ROM pointers are still unsupported
+- function pointers use generated compare-chain dispatchers; raw computed PIC16 indirect calls are not used
+- function-pointer calls and function-pointer table dispatch remain forbidden inside ISR code
+- pointer-to-function-pointer declarations remain rejected conservatively in this phase
 - multidimensional arrays are RAM-only in this phase; multidimensional `__rom` arrays are rejected explicitly
 - multidimensional arrays do not decay to pointers; direct indexing like `matrix[i][j]` is the supported access path
 - multidimensional array parameter types remain unsupported
@@ -570,21 +591,19 @@ Current constraints:
 
 ## Known Limitations (Historical Phase 14 Snapshot)
 
-- recursion is unsupported
-- no runtime software-stack overflow detection is implemented
-- ISR restrictions remain conservative: one ISR, no normal calls, no runtime-helper-requiring expressions
-- aggregate support is still intentionally constrained: no multidimensional arrays, no anonymous nested fields, no chained designators, and no incomplete-struct pointers
-- switch lowering stays intentionally simple: compare chains only, no jump tables, and labels nested under other control statements are rejected
-- automatic string literals used as pointers are still RAM-backed static data objects; there is no automatic ROM string pooling pass
-- only explicit `const __rom` arrays use program memory; there is still no general ROM pointer or code-space string-pointer model
-- implicit nested-pointer qualifier conversions stay conservative beyond one-level `T *` to `const T *`
-- enums stay fixed to 16-bit `int`; structs stay packed with no padding
-- `union` and `float` were still unsupported in that Phase 14 snapshot
-- source-level function pointers are unsupported
+- in that historical snapshot, recursion was still unsupported
+- in that historical snapshot, no runtime software-stack overflow detection was implemented
+- in that historical snapshot, ISR restrictions remained conservative: one ISR, no normal calls, no runtime-helper-requiring expressions
+- in that historical snapshot, aggregate support was still intentionally constrained: no multidimensional arrays, no anonymous nested fields, no chained designators, and no incomplete-struct pointers
+- in that historical snapshot, switch lowering stayed intentionally simple: compare chains only, no jump tables, and labels nested under other control statements were rejected
+- in that historical snapshot, automatic string literals used as pointers were still RAM-backed static data objects; there was no automatic ROM string pooling pass
+- in that historical snapshot, only explicit `const __rom` arrays used program memory; there was still no general ROM pointer or code-space string-pointer model
+- in that historical snapshot, implicit nested-pointer qualifier conversions stayed conservative beyond one-level `T *` to `const T *`
+- in that historical snapshot, enums stayed fixed to 16-bit `int`; structs stayed packed with no padding
+- in that historical snapshot, `union`, source-level function pointers, and multidimensional arrays were still unsupported
 - dynamic division/modulo by zero returns `0` (constant zero divisors are diagnostics)
 - pointers are data-space only; code pointers are unsupported
 - pointer subtraction is intentionally limited to 1-byte and 2-byte element types
-- multidimensional arrays are unsupported
 
 ## Build
 
@@ -755,6 +774,7 @@ picc --list-targets
 - [examples/pic16f628a/array_fill.c](examples/pic16f628a/array_fill.c)
 - [examples/pic16f628a/array_initializer.c](examples/pic16f628a/array_initializer.c)
 - [examples/pic16f628a/casts.c](examples/pic16f628a/casts.c)
+- [examples/pic16f628a/function_pointer_basic.c](examples/pic16f628a/function_pointer_basic.c)
 - [examples/pic16f628a/pointer_to_pointer.c](examples/pic16f628a/pointer_to_pointer.c)
 - [examples/pic16f628a/rom_index.c](examples/pic16f628a/rom_index.c)
 - [examples/pic16f628a/rom_table.c](examples/pic16f628a/rom_table.c)
@@ -774,6 +794,8 @@ picc --list-targets
 - [examples/pic16f877a/div16.c](examples/pic16f877a/div16.c)
 - [examples/pic16f877a/designated_init.c](examples/pic16f877a/designated_init.c)
 - [examples/pic16f877a/expression_test.c](examples/pic16f877a/expression_test.c)
+- [examples/pic16f877a/function_pointer_struct.c](examples/pic16f877a/function_pointer_struct.c)
+- [examples/pic16f877a/function_pointer_table.c](examples/pic16f877a/function_pointer_table.c)
 - [examples/pic16f877a/bitfield_flags.c](examples/pic16f877a/bitfield_flags.c)
 - [examples/pic16f877a/bitfield_register_like.c](examples/pic16f877a/bitfield_register_like.c)
 - [examples/pic16f877a/const_config.c](examples/pic16f877a/const_config.c)
@@ -790,6 +812,7 @@ picc --list-targets
 - [examples/pic16f877a/rom_string_index.c](examples/pic16f877a/rom_string_index.c)
 - [examples/pic16f877a/rom_table16.c](examples/pic16f877a/rom_table16.c)
 - [examples/pic16f877a/shift_mix.c](examples/pic16f877a/shift_mix.c)
+- [examples/pic16f877a/state_dispatch_fp.c](examples/pic16f877a/state_dispatch_fp.c)
 - [examples/pic16f877a/static_table.c](examples/pic16f877a/static_table.c)
 - [examples/pic16f877a/struct_copy.c](examples/pic16f877a/struct_copy.c)
 - [examples/pic16f877a/string_pointer.c](examples/pic16f877a/string_pointer.c)
@@ -816,6 +839,8 @@ picc --list-targets
 - [docs/backend/phase13-rom-data-layout.md](docs/backend/phase13-rom-data-layout.md)
 - [docs/backend/phase14-retlw-tables.md](docs/backend/phase14-retlw-tables.md)
 - [docs/backend/phase15-bitfield-codegen.md](docs/backend/phase15-bitfield-codegen.md)
+- [docs/backend/phase16-aggregate-layout.md](docs/backend/phase16-aggregate-layout.md)
+- [docs/backend/phase17-dispatcher.md](docs/backend/phase17-dispatcher.md)
 - [docs/backend/phase9-switch-codegen.md](docs/backend/phase9-switch-codegen.md)
 - [docs/ir/phase4-call-lowering.md](docs/ir/phase4-call-lowering.md)
 - [docs/backend/phase5-helper-calling.md](docs/backend/phase5-helper-calling.md)
@@ -826,6 +851,8 @@ picc --list-targets
 - [docs/ir/phase13-rom-lowering.md](docs/ir/phase13-rom-lowering.md)
 - [docs/ir/phase14-rom-read-lowering.md](docs/ir/phase14-rom-read-lowering.md)
 - [docs/ir/phase15-aggregate-lowering.md](docs/ir/phase15-aggregate-lowering.md)
+- [docs/ir/phase16-aggregate-index-lowering.md](docs/ir/phase16-aggregate-index-lowering.md)
+- [docs/ir/phase17-indirect-call-lowering.md](docs/ir/phase17-indirect-call-lowering.md)
 - [docs/ir/phase9-switch-lowering.md](docs/ir/phase9-switch-lowering.md)
 - [docs/frontend/phase10-string-literals.md](docs/frontend/phase10-string-literals.md)
 - [docs/frontend/phase11-aggregates.md](docs/frontend/phase11-aggregates.md)
@@ -833,6 +860,8 @@ picc --list-targets
 - [docs/frontend/phase13-rom-address-space.md](docs/frontend/phase13-rom-address-space.md)
 - [docs/frontend/phase14-rom-indexing.md](docs/frontend/phase14-rom-indexing.md)
 - [docs/frontend/phase15-union-bitfields.md](docs/frontend/phase15-union-bitfields.md)
+- [docs/frontend/phase16-multidimensional-arrays.md](docs/frontend/phase16-multidimensional-arrays.md)
+- [docs/frontend/phase17-function-pointers.md](docs/frontend/phase17-function-pointers.md)
 - [docs/frontend/phase9-switch.md](docs/frontend/phase9-switch.md)
 - [docs/runtime/phase5-arithmetic-helpers.md](docs/runtime/phase5-arithmetic-helpers.md)
 - [docs/migration/phase3-to-phase4-abi.md](docs/migration/phase3-to-phase4-abi.md)
@@ -847,4 +876,4 @@ picc --list-targets
 
 ## Current Limits
 
-Phase 16 adds row-major multidimensional RAM arrays and chained designators. Current hard limits remain: no general ROM pointer model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no function pointers, no `float`, and no recursion.
+Phase 17 adds controlled function pointers through generated dispatch IDs and per-signature dispatcher code. Current hard limits remain: no general ROM pointer model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no function-pointer calls inside ISR, no raw computed PIC16 indirect calls, no `float`, and no recursion.

@@ -6,15 +6,16 @@ pub type StructId = usize;
 pub type UnionId = usize;
 pub const MAX_POINTER_DEPTH: usize = 8;
 pub const MAX_ARRAY_DIMS: usize = 8;
+pub const MAX_FUNCTION_POINTER_PARAMS: usize = 4;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub enum AddressSpace {
     #[default]
     Data,
     Rom,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ScalarType {
     Void,
     I8,
@@ -23,7 +24,7 @@ pub enum ScalarType {
     U16,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Qualifiers {
     pub is_const: bool,
     pub is_volatile: bool,
@@ -44,13 +45,17 @@ pub enum StorageClass {
     Extern,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Type {
     pub scalar: ScalarType,
     pub address_space: AddressSpace,
     pub qualifiers: Qualifiers,
     pub pointer_depth: u8,
     pub pointer_qualifiers: [Qualifiers; MAX_POINTER_DEPTH],
+    pub function_pointer: bool,
+    pub function_return: ScalarType,
+    pub function_param_count: u8,
+    pub function_params: [ScalarType; MAX_FUNCTION_POINTER_PARAMS],
     pub array_rank: u8,
     pub array_dims: [usize; MAX_ARRAY_DIMS],
     pub struct_id: Option<StructId>,
@@ -74,6 +79,10 @@ impl Type {
                 is_const: false,
                 is_volatile: false,
             }; MAX_POINTER_DEPTH],
+            function_pointer: false,
+            function_return: ScalarType::Void,
+            function_param_count: 0,
+            function_params: [ScalarType::Void; MAX_FUNCTION_POINTER_PARAMS],
             array_rank: 0,
             array_dims: [0; MAX_ARRAY_DIMS],
             struct_id: None,
@@ -97,6 +106,10 @@ impl Type {
                 is_const: false,
                 is_volatile: false,
             }; MAX_POINTER_DEPTH],
+            function_pointer: false,
+            function_return: ScalarType::Void,
+            function_param_count: 0,
+            function_params: [ScalarType::Void; MAX_FUNCTION_POINTER_PARAMS],
             array_rank: 0,
             array_dims: [0; MAX_ARRAY_DIMS],
             struct_id: Some(struct_id),
@@ -120,6 +133,10 @@ impl Type {
                 is_const: false,
                 is_volatile: false,
             }; MAX_POINTER_DEPTH],
+            function_pointer: false,
+            function_return: ScalarType::Void,
+            function_param_count: 0,
+            function_params: [ScalarType::Void; MAX_FUNCTION_POINTER_PARAMS],
             array_rank: 0,
             array_dims: [0; MAX_ARRAY_DIMS],
             struct_id: None,
@@ -133,6 +150,18 @@ impl Type {
     pub const fn with_qualifiers(mut self, qualifiers: Qualifiers) -> Self {
         self.qualifiers = qualifiers;
         self
+    }
+
+    /// Creates one function-pointer object type with one inline fixed-signature descriptor.
+    pub fn function_pointer(return_scalar: ScalarType, params: &[ScalarType]) -> Self {
+        let mut ty = Self::new(ScalarType::Void);
+        ty.function_pointer = true;
+        ty.function_return = return_scalar;
+        ty.function_param_count = params.len().min(MAX_FUNCTION_POINTER_PARAMS) as u8;
+        for (index, param) in params.iter().take(MAX_FUNCTION_POINTER_PARAMS).enumerate() {
+            ty.function_params[index] = *param;
+        }
+        ty
     }
 
     /// Returns a copy of the type placed in the requested address space.
@@ -224,6 +253,7 @@ impl Type {
     /// Returns true when this type is plain `void`.
     pub fn is_void(self) -> bool {
         self.scalar == ScalarType::Void
+            && !self.function_pointer
             && self.struct_id.is_none()
             && self.union_id.is_none()
             && self.pointer_depth == 0
@@ -261,6 +291,15 @@ impl Type {
         self.is_struct() || self.is_union()
     }
 
+    /// Returns true when this type is a function-pointer object value.
+    pub fn is_function_pointer(self) -> bool {
+        self.function_pointer
+            && self.pointer_depth == 0
+            && self.array_rank == 0
+            && self.struct_id.is_none()
+            && self.union_id.is_none()
+    }
+
     /// Returns true when this type is a constrained Phase 3 data pointer.
     pub fn is_pointer(self) -> bool {
         self.pointer_depth > 0 && self.array_rank == 0
@@ -273,10 +312,7 @@ impl Type {
 
     /// Returns true when one array dimension is still incomplete.
     pub fn is_incomplete_array(self) -> bool {
-        self.array_rank > 0
-            && self.array_dims[..self.array_rank as usize]
-                .iter()
-                .any(|len| *len == 0)
+        self.array_rank > 0 && self.array_dims[..self.array_rank as usize].contains(&0)
     }
 
     /// Returns the current outermost array length when this type is an array.
@@ -301,6 +337,9 @@ impl Type {
         if self.is_pointer() {
             return self.element_type().is_supported_pointer_target();
         }
+        if self.is_function_pointer() {
+            return true;
+        }
         if self.has_struct_base() || self.has_union_base() {
             return false;
         }
@@ -317,6 +356,7 @@ impl Type {
     pub fn is_integer(self) -> bool {
         !self.is_void()
             && !self.is_pointer()
+            && !self.is_function_pointer()
             && !self.is_array()
             && !self.has_struct_base()
             && !self.has_union_base()
@@ -324,7 +364,7 @@ impl Type {
 
     /// Returns true when this type is a scalar value that fits in registers or temps.
     pub fn is_scalar_value(self) -> bool {
-        self.is_integer() || self.is_pointer()
+        self.is_integer() || self.is_pointer() || self.is_function_pointer()
     }
 
     /// Returns true when the scalar uses signed arithmetic semantics.
@@ -350,6 +390,7 @@ impl Type {
     /// Returns true when the type can live in a scalar value position in Phase 3.
     pub fn is_supported_value_type(self) -> bool {
         self.is_integer()
+            || self.is_function_pointer()
             || (self.is_pointer()
                 && self.element_type().is_supported_pointer_target())
     }
@@ -375,6 +416,9 @@ impl Type {
                 width *= *len;
             }
             return width;
+        }
+        if self.is_function_pointer() {
+            return 2;
         }
         if self.is_pointer() {
             return 2;
@@ -450,9 +494,35 @@ impl Type {
         self.is_pointer() && other.is_pointer() && self.unqualified() == other.unqualified()
     }
 
+    /// Returns true when both types carry the same function-pointer signature.
+    pub fn same_function_pointer_signature(self, other: Self) -> bool {
+        self.is_function_pointer()
+            && other.is_function_pointer()
+            && self.without_object_qualifiers() == other.without_object_qualifiers()
+    }
+
     /// Returns true when the declared object lives in program memory.
     pub fn is_rom(self) -> bool {
         self.address_space == AddressSpace::Rom
+    }
+
+    /// Returns the function-pointer return scalar when present.
+    pub fn function_return_scalar(self) -> Option<ScalarType> {
+        self.is_function_pointer().then_some(self.function_return)
+    }
+
+    /// Returns the number of function-pointer parameters described inline on the type.
+    pub fn function_param_len(self) -> Option<usize> {
+        self.is_function_pointer()
+            .then_some(self.function_param_count as usize)
+    }
+
+    /// Returns one function-pointer parameter scalar by index when present.
+    pub fn function_param_scalar(self, index: usize) -> Option<ScalarType> {
+        if !self.is_function_pointer() || index >= self.function_param_count as usize {
+            return None;
+        }
+        Some(self.function_params[index])
     }
 }
 
@@ -475,18 +545,26 @@ impl Display for Type {
         if self.address_space == AddressSpace::Rom {
             formatter.write_str("__rom ")?;
         }
-        let rendered_struct = if let Some(struct_id) = self.struct_id {
+        let rendered_struct = if self.function_pointer {
+            let mut rendered = format!("fnptr<{}(", scalar_name(self.function_return));
+            if self.function_param_count == 0 {
+                rendered.push_str("void");
+            } else {
+                for index in 0..self.function_param_count as usize {
+                    if index != 0 {
+                        rendered.push_str(", ");
+                    }
+                    rendered.push_str(scalar_name(self.function_params[index]));
+                }
+            }
+            rendered.push_str(")>");
+            rendered
+        } else if let Some(struct_id) = self.struct_id {
             format!("struct#{struct_id}")
         } else if let Some(union_id) = self.union_id {
             format!("union#{union_id}")
         } else {
-            match self.scalar {
-                ScalarType::Void => "void".to_string(),
-                ScalarType::I8 => "char".to_string(),
-                ScalarType::U8 => "unsigned char".to_string(),
-                ScalarType::I16 => "int".to_string(),
-                ScalarType::U16 => "unsigned int".to_string(),
-            }
+            scalar_name(self.scalar).to_string()
         };
         formatter.write_str(&rendered_struct)?;
         for level in 0..self.pointer_depth {
@@ -507,6 +585,16 @@ impl Display for Type {
             }
         }
         Ok(())
+    }
+}
+
+const fn scalar_name(scalar: ScalarType) -> &'static str {
+    match scalar {
+        ScalarType::Void => "void",
+        ScalarType::I8 => "char",
+        ScalarType::U8 => "unsigned char",
+        ScalarType::I16 => "int",
+        ScalarType::U16 => "unsigned int",
     }
 }
 

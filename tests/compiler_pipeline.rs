@@ -1466,39 +1466,320 @@ void main(void) {
 }
 
 #[test]
-/// Verifies function pointer declarators fail with an explicit Phase 3 diagnostic.
-fn reports_unsupported_function_pointer() {
-    let error = execute(CliOptions {
-        command: CliCommand::Compile(CompileCommand {
-            target: "pic16f628a".to_string(),
-            input: {
-                let input = temp_file("fnptr.c");
-                fs::write(
-                    &input,
-                    "\
+/// Verifies raw function-pointer declarators now compile and lower through the dispatcher path.
+fn compiles_phase17_raw_function_pointer_variable() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase17-raw-fnptr.c",
+        "\
 #include <pic16/pic16f628a.h>
+void off(void) {
+    PORTB = 0;
+}
+void on(void) {
+    PORTB = 1;
+}
+void (*handler)(void);
 void main(void) {
-    int (*fp)(void);
+    TRISB = 0x00;
+    handler = on;
+    handler();
+    handler = off;
+    handler();
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    let map = read_artifact(&output, "map");
+    assert_hex_is_programmable(&output);
+    assert!(asm.contains("__fp_dispatch_"));
+    assert!(map.contains("__fp_dispatch_"));
+}
+
+#[test]
+/// Verifies one typed function pointer may carry an 8-bit argument and return value.
+fn compiles_phase17_function_pointer_u8_signature() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase17-fnptr-u8.c",
+        "\
+#include <pic16/pic16f877a.h>
+typedef unsigned char (*Transform)(unsigned char);
+unsigned char plus_two(unsigned char value) {
+    return value + 2;
+}
+void main(void) {
+    Transform fn;
+    unsigned char result;
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    fn = plus_two;
+    result = fn(3);
+    PORTB = result;
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies one typed function pointer may carry a 16-bit argument and return value.
+fn compiles_phase17_function_pointer_u16_signature() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase17-fnptr-u16.c",
+        "\
+#include <pic16/pic16f877a.h>
+typedef unsigned int (*WordTransform)(unsigned int);
+unsigned int plus_word(unsigned int value) {
+    return value + 5;
+}
+void main(void) {
+    WordTransform fn;
+    unsigned int result;
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    fn = plus_word;
+    result = fn(1000);
+    PORTB = (unsigned char)result;
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies arrays of function pointers dispatch through indexed loads plus one generated dispatcher.
+fn compiles_phase17_function_pointer_table_dispatch() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase17-fnptr-table.c",
+        "\
+#include <pic16/pic16f877a.h>
+typedef void (*Handler)(void);
+void off(void) {
+    PORTB = 0;
+}
+void on(void) {
+    PORTB = 1;
+}
+Handler table[2] = {off, on};
+void main(void) {
+    unsigned char index;
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    index = 1;
+    table[index]();
+}
+",
+    );
+
+    let asm = read_artifact(&output, "asm");
+    let map = read_artifact(&output, "map");
+    assert_hex_is_programmable(&output);
+    assert!(asm.contains("__fp_dispatch_"));
+    assert!(asm.contains("dispatch id 1"));
+    assert!(map.contains("__fp_dispatch_"));
+    assert!(map.contains("__id_1_"));
+}
+
+#[test]
+/// Verifies function-pointer fields inside structs remain callable after aggregate field access.
+fn compiles_phase17_function_pointer_struct_field_dispatch() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase17-fnptr-struct.c",
+        "\
+#include <pic16/pic16f877a.h>
+typedef void (*Handler)(void);
+struct Device {
+    Handler handler;
+};
+void on(void) {
+    PORTB = 1;
+}
+void main(void) {
+    struct Device device;
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    device.handler = on;
+    device.handler();
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies dispatcher code is emitted only when one function pointer is actually used.
+fn phase17_dispatcher_generated_only_when_needed() {
+    let direct_only = compile_source(
+        "pic16f628a",
+        "phase17-direct-only.c",
+        "\
+#include <pic16/pic16f628a.h>
+void on(void) {
+    PORTB = 1;
+}
+void main(void) {
+    TRISB = 0x00;
+    on();
+}
+",
+    );
+    let indirect = compile_source(
+        "pic16f628a",
+        "phase17-indirect.c",
+        "\
+#include <pic16/pic16f628a.h>
+typedef void (*Handler)(void);
+void on(void) {
+    PORTB = 1;
+}
+Handler handler = on;
+void main(void) {
+    TRISB = 0x00;
+    handler();
+}
+",
+    );
+
+    assert!(!read_artifact(&direct_only, "asm").contains("__fp_dispatch_"));
+    assert!(read_artifact(&indirect, "asm").contains("__fp_dispatch_"));
+}
+
+#[test]
+/// Verifies incompatible signatures are rejected on function-pointer assignment.
+fn reports_phase17_incompatible_function_pointer_assignment() {
+    let error = compile_error(
+        "pic16f877a",
+        "phase17-incompatible-fnptr.c",
+        "\
+typedef void (*VoidHandler)(void);
+typedef unsigned char (*ByteHandler)(unsigned char);
+void off(void) {
+}
+ByteHandler handler;
+void main(void) {
+    handler = off;
+}
+",
+    );
+
+    assert!(error.contains("incompatible function pointer conversion"));
+}
+
+#[test]
+/// Verifies relational comparison of function pointers is rejected clearly.
+fn reports_phase17_function_pointer_relational_compare() {
+    let error = compile_error(
+        "pic16f877a",
+        "phase17-fnptr-rel.c",
+        "\
+typedef void (*Handler)(void);
+void off(void) {
+}
+void on(void) {
+}
+void main(void) {
+    Handler a = off;
+    Handler b = on;
+    if (a < b) {
+        PORTB = 1;
+    }
+}
+",
+    );
+
+    assert!(error.contains("relational comparison of function pointers"));
+}
+
+#[test]
+/// Verifies arithmetic on function pointers is rejected clearly.
+fn reports_phase17_function_pointer_arithmetic() {
+    let error = compile_error(
+        "pic16f877a",
+        "phase17-fnptr-arith.c",
+        "\
+typedef void (*Handler)(void);
+void off(void) {
+}
+void main(void) {
+    Handler h = off;
+    h = h + 1;
+}
+",
+    );
+
+    assert!(error.contains("function-pointer arithmetic"));
+}
+
+#[test]
+/// Verifies data pointers and function pointers do not silently mix.
+fn reports_phase17_data_pointer_function_pointer_mixing() {
+    let error = compile_error(
+        "pic16f877a",
+        "phase17-fnptr-mix.c",
+        "\
+typedef void (*Handler)(void);
+unsigned char value;
+unsigned char *ptr = &value;
+Handler handler;
+void main(void) {
+    handler = ptr;
+}
+",
+    );
+
+    assert!(error.contains("cannot convert data pointer"));
+}
+
+#[test]
+/// Verifies function-pointer calls remain forbidden inside interrupt handlers.
+fn reports_phase17_function_pointer_call_in_isr() {
+    let error = compile_error(
+        "pic16f877a",
+        "phase17-fnptr-isr.c",
+        "\
+#include <pic16/pic16f877a.h>
+typedef void (*Handler)(void);
+void on(void) {
+    PORTB = 1;
+}
+Handler handler = on;
+void __interrupt isr(void) {
+    handler();
+}
+void main(void) {
+    ADCON1 = 0x06;
     TRISB = 0x00;
 }
 ",
-                )
-                .expect("fixture");
-                input
-            },
-            output: temp_file("fnptr.hex"),
-            include_dirs: vec![repo("include")],
-            defines: BTreeMap::new(),
-            optimization: OptimizationLevel::O0,
-            artifacts: OutputArtifacts::default(),
-            verbose: false,
-            opt_report: false,
-            warning_profile: WarningProfile::default(),
-        }),
-    })
-    .expect_err("must fail");
+    );
 
-    assert!(format!("{error}").contains("function pointer declarators"));
+    assert!(error.contains("function-pointer calls are not supported inside interrupt handlers"));
+}
+
+#[test]
+/// Verifies checked-in Phase 17 examples compile cleanly through the `picc` CLI.
+fn phase17_examples_compile_via_picc() {
+    let examples = [
+        ("pic16f628a", "examples/pic16f628a/function_pointer_basic.c"),
+        ("pic16f877a", "examples/pic16f877a/function_pointer_table.c"),
+        ("pic16f877a", "examples/pic16f877a/function_pointer_struct.c"),
+        ("pic16f877a", "examples/pic16f877a/state_dispatch_fp.c"),
+    ];
+
+    for (target, example) in examples {
+        let output = compile_example_via_picc_cli(target, example);
+        assert_hex_is_programmable(&output);
+        assert!(output.with_extension("map").exists());
+        assert!(output.with_extension("lst").exists());
+    }
 }
 
 #[test]
@@ -2919,7 +3200,7 @@ void main(void) {
 ",
     );
 
-    assert!(error.contains("duplicate initializer for field"));
+    assert!(error.contains("duplicate initializer for designator"));
 }
 
 #[test]
@@ -2937,7 +3218,7 @@ void main(void) {
 ",
     );
 
-    assert!(error.contains("duplicate array initializer"));
+    assert!(error.contains("duplicate initializer for designator"));
 }
 
 #[test]
