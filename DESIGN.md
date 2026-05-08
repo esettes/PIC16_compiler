@@ -54,6 +54,11 @@ Output:
 - `src/linker/map.rs`
 - `src/hex/intel_hex.rs`
 
+Execution validation:
+
+- `src/sim/mod.rs`
+- `tests/execution_sim.rs`
+
 ## Current Technical Decisions
 
 ### Shared Backend + Descriptors
@@ -96,7 +101,26 @@ Software stack is real backend state:
 - `--stack-report` surfaces per-function frame/helper/call-depth data plus ISR context cost
 - stack depth is computed statically over the non-recursive call graph and expanded across known function-pointer dispatcher targets
 
-Recursion stays unsupported in Phase 18 even when runtime stack checks are enabled.
+Recursion stays unsupported in Phase 19 even when runtime stack checks are enabled.
+
+### Phase 19 Execution Validation
+
+Phase 19 adds a small internal emulator for the subset of PIC16 instructions currently emitted by the backend.
+
+Rules:
+
+- emulator is test-only in this phase; no required `picc --simulate` user CLI
+- tests compile real C inputs all the way to Intel HEX first
+- simulator loads generated HEX rather than IR or backend internals
+- tests stop at generated labels such as `__halt` with a hard instruction-step ceiling
+- unsupported opcodes fail explicitly so backend emission drift is visible
+
+Current scope:
+
+- core CPU state needed by generated code: `W`, `STATUS`, `PCLATH`, `FSR/INDF`, PC, return stack, and banked RAM
+- enough instruction decoding for current backend output
+- simple SFR/RAM modeling only; no peripheral timing model
+- `retfie` execution validation is supported, but full asynchronous interrupt timing remains deferred
 
 ### Phase 5 Arithmetic Runtime Helpers
 

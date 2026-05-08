@@ -83,6 +83,8 @@ struct HelperRegisters {
     return_high: u16,
     scratch0: u16,
     scratch1: u16,
+    flag_save: u16,
+    w_save: u16,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -94,6 +96,8 @@ struct InterruptContext {
     return_high: u16,
     scratch0: u16,
     scratch1: u16,
+    flag_save: u16,
+    w_save: u16,
     stack_ptr: RegisterPair,
     frame_ptr: RegisterPair,
 }
@@ -246,6 +250,14 @@ impl<'a> StorageAllocator<'a> {
             diagnostics.error("backend", None, "not enough RAM for ABI helper slots", None);
             return None;
         };
+        let Some(flag_save) = allocator.next_span(1) else {
+            diagnostics.error("backend", None, "not enough RAM for ABI helper slots", None);
+            return None;
+        };
+        let Some(w_save) = allocator.next_span(1) else {
+            diagnostics.error("backend", None, "not enough RAM for ABI helper slots", None);
+            return None;
+        };
 
         let helpers = HelperRegisters {
             stack_ptr: RegisterPair {
@@ -259,6 +271,8 @@ impl<'a> StorageAllocator<'a> {
             return_high,
             scratch0,
             scratch1,
+            flag_save,
+            w_save,
         };
 
         let interrupt = if ir_program.functions.iter().any(|function| function.is_interrupt) {
@@ -291,6 +305,14 @@ impl<'a> StorageAllocator<'a> {
                 diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
                 return None;
             };
+            let Some(flag_save_ctx) = shared.next_span(1) else {
+                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                return None;
+            };
+            let Some(w_save_ctx) = shared.next_span(1) else {
+                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                return None;
+            };
             let Some(stack_ptr_ctx_lo) = shared.next_span(2) else {
                 diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
                 return None;
@@ -308,6 +330,8 @@ impl<'a> StorageAllocator<'a> {
                 return_high: return_high_ctx,
                 scratch0: scratch0_ctx,
                 scratch1: scratch1_ctx,
+                flag_save: flag_save_ctx,
+                w_save: w_save_ctx,
                 stack_ptr: RegisterPair {
                     lo: stack_ptr_ctx_lo,
                     hi: stack_ptr_ctx_lo + 1,
@@ -962,12 +986,16 @@ impl<'a> CodegenContext<'a> {
         self.program.push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
         self.program.push(AsmLine::Instr(AsmInstr::Call(label)));
 
+        if dst.is_some() {
+            self.store_w_to_addr(self.layout.helpers.w_save);
+        }
         if arg_bytes != 0 {
             self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(arg_bytes));
         }
 
         if let Some(dst) = dst {
             let dst_ty = function.temp_types[dst];
+            self.load_addr_to_w(self.layout.helpers.w_save);
             self.store_w_to_temp_byte(function.symbol, dst, 0);
             if dst_ty.byte_width() == 2 {
                 self.load_addr_to_w(self.layout.helpers.return_high);
@@ -1046,12 +1074,16 @@ impl<'a> CodegenContext<'a> {
         self.program.push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
         self.program.push(AsmLine::Instr(AsmInstr::Call(label)));
 
+        if dst.is_some() {
+            self.store_w_to_addr(self.layout.helpers.w_save);
+        }
         if arg_bytes != 0 {
             self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(arg_bytes));
         }
 
         if let Some(dst) = dst {
             let dst_ty = function.temp_types[dst];
+            self.load_addr_to_w(self.layout.helpers.w_save);
             self.store_w_to_temp_byte(function.symbol, dst, 0);
             if dst_ty.byte_width() == 2 {
                 self.load_addr_to_w(self.layout.helpers.return_high);
@@ -1238,21 +1270,21 @@ impl<'a> CodegenContext<'a> {
 
         self.program.push(AsmLine::Label(read_label.clone()));
         self.load_operand_byte_to_w(function.symbol, index, index_ty, 0);
-        self.store_w_to_addr(self.layout.helpers.scratch0);
-        self.select_bank(self.layout.helpers.scratch0);
+        self.store_w_to_addr(self.layout.helpers.w_save);
+        self.select_bank(self.layout.helpers.w_save);
         self.program.push(AsmLine::Instr(AsmInstr::Addwf {
-            f: low7(self.layout.helpers.scratch0),
+            f: low7(self.layout.helpers.w_save),
             d: Dest::W,
         }));
-        self.store_w_to_addr(self.layout.helpers.scratch0);
-        self.load_addr_to_w(self.layout.helpers.scratch0);
+        self.store_w_to_addr(self.layout.helpers.w_save);
+        self.load_addr_to_w(self.layout.helpers.w_save);
         self.emit_dynamic_rom_byte_call_from_w(symbol);
         self.store_w_to_temp_byte(function.symbol, dst, 0);
 
-        self.load_addr_to_w(self.layout.helpers.scratch0);
+        self.load_addr_to_w(self.layout.helpers.w_save);
         self.program.push(AsmLine::Instr(AsmInstr::Addlw(1)));
-        self.store_w_to_addr(self.layout.helpers.scratch0);
-        self.load_addr_to_w(self.layout.helpers.scratch0);
+        self.store_w_to_addr(self.layout.helpers.w_save);
+        self.load_addr_to_w(self.layout.helpers.w_save);
         self.emit_dynamic_rom_byte_call_from_w(symbol);
         self.store_w_to_temp_byte(function.symbol, dst, 1);
         self.branch_to_label(&done_label);
@@ -1280,7 +1312,7 @@ impl<'a> CodegenContext<'a> {
     /// Emits one ROM RETLW-table call assuming the byte index already lives in `W`.
     fn emit_dynamic_rom_byte_call_from_w(&mut self, symbol: SymbolId) {
         let label = rom_object_label(symbol);
-        self.program.push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
+        self.program.push(AsmLine::Instr(AsmInstr::SetPclPage(label.clone())));
         self.program.push(AsmLine::Instr(AsmInstr::Call(label)));
     }
 
@@ -2104,11 +2136,13 @@ impl<'a> CodegenContext<'a> {
                     offset,
                 );
                 self.load_addr_to_w(self.layout.helpers.scratch0);
-                self.store_w_to_temp_byte(function_symbol, dst_temp, 0);
+                self.store_w_to_addr(self.layout.helpers.w_save);
                 if dst_ty.byte_width() == 2 {
                     self.load_addr_to_w(self.layout.helpers.scratch1);
                     self.store_w_to_temp_byte(function_symbol, dst_temp, 1);
                 }
+                self.load_addr_to_w(self.layout.helpers.w_save);
+                self.store_w_to_temp_byte(function_symbol, dst_temp, 0);
             }
         }
     }
@@ -2144,6 +2178,7 @@ impl<'a> CodegenContext<'a> {
     fn emit_epilogue(&mut self, function_symbol: SymbolId) {
         let saved_fp_offset = self.frame_layout(function_symbol).saved_fp_offset;
         let arg_bytes = self.frame_layout(function_symbol).arg_bytes;
+        self.store_w_to_addr(self.layout.helpers.w_save);
         self.load_frame_byte_to_w(function_symbol, saved_fp_offset);
         self.store_w_to_addr(self.layout.helpers.scratch0);
         self.load_frame_byte_to_w(function_symbol, saved_fp_offset + 1);
@@ -2157,6 +2192,7 @@ impl<'a> CodegenContext<'a> {
         self.store_w_to_addr(self.layout.helpers.frame_ptr.lo);
         self.load_addr_to_w(self.layout.helpers.scratch1);
         self.store_w_to_addr(self.layout.helpers.frame_ptr.hi);
+        self.load_addr_to_w(self.layout.helpers.w_save);
     }
 
     /// Emits the conservative Phase 6 ISR prologue before the shared frame logic runs.
@@ -2180,6 +2216,10 @@ impl<'a> CodegenContext<'a> {
         self.store_w_to_shared_addr(ctx.scratch0);
         self.load_addr_to_w(self.layout.helpers.scratch1);
         self.store_w_to_shared_addr(ctx.scratch1);
+        self.load_addr_to_w(self.layout.helpers.flag_save);
+        self.store_w_to_shared_addr(ctx.flag_save);
+        self.load_addr_to_w(self.layout.helpers.w_save);
+        self.store_w_to_shared_addr(ctx.w_save);
         self.load_addr_to_w(self.layout.helpers.stack_ptr.lo);
         self.store_w_to_shared_addr(ctx.stack_ptr.lo);
         self.load_addr_to_w(self.layout.helpers.stack_ptr.hi);
@@ -2208,6 +2248,10 @@ impl<'a> CodegenContext<'a> {
         self.store_w_to_addr(self.layout.helpers.scratch0);
         self.load_shared_addr_to_w(ctx.scratch1);
         self.store_w_to_addr(self.layout.helpers.scratch1);
+        self.load_shared_addr_to_w(ctx.flag_save);
+        self.store_w_to_addr(self.layout.helpers.flag_save);
+        self.load_shared_addr_to_w(ctx.w_save);
+        self.store_w_to_addr(self.layout.helpers.w_save);
         self.load_shared_addr_to_w(ctx.stack_ptr.lo);
         self.store_w_to_addr(self.layout.helpers.stack_ptr.lo);
         self.load_shared_addr_to_w(ctx.stack_ptr.hi);
@@ -2353,14 +2397,20 @@ impl<'a> CodegenContext<'a> {
 
     /// Loads one byte from the active frame at `FP + offset` into `W`.
     fn load_current_frame_byte_to_w(&mut self, offset: u16) {
+        self.save_carry_flag();
         self.prepare_pointer_from_pair(self.layout.helpers.frame_ptr, offset);
         self.load_indirect_to_w();
+        self.restore_carry_flag();
     }
 
     /// Stores `W` into one byte of the active frame at `FP + offset`.
     fn store_w_to_current_frame_byte(&mut self, offset: u16) {
+        self.store_w_to_addr(self.layout.helpers.scratch0);
+        self.save_status_flags();
         self.prepare_pointer_from_pair(self.layout.helpers.frame_ptr, offset);
+        self.load_addr_to_w(self.layout.helpers.scratch0);
         self.store_w_to_indirect();
+        self.restore_status_flags();
     }
 
     /// Sets one bit in the active frame through `INDF`.
@@ -2656,7 +2706,7 @@ impl<'a> CodegenContext<'a> {
         if byte_offset != 0 {
             self.program.push(AsmLine::Instr(AsmInstr::Addlw(byte_offset)));
         }
-        self.store_w_to_addr(FSR_ADDR);
+        self.store_w_to_addr(self.layout.helpers.w_save);
 
         self.load_operand_byte_to_w(function_symbol, ptr, ptr_ty, 1);
         if byte_offset != 0 {
@@ -2668,6 +2718,8 @@ impl<'a> CodegenContext<'a> {
         }
         self.store_w_to_addr(self.layout.helpers.scratch1);
         self.set_irp_from_addr(self.layout.helpers.scratch1);
+        self.load_addr_to_w(self.layout.helpers.w_save);
+        self.store_w_to_addr(FSR_ADDR);
     }
 
     /// Loads the byte addressed by the current `FSR/IRP` pair into `W`.
@@ -2683,6 +2735,102 @@ impl<'a> CodegenContext<'a> {
     fn store_w_to_indirect(&mut self) {
         self.select_bank(INDF_ADDR);
         self.program.push(AsmLine::Instr(AsmInstr::Movwf(low7(INDF_ADDR))));
+    }
+
+    /// Saves carry and zero into one dedicated helper byte without disturbing `W`.
+    fn save_status_flags(&mut self) {
+        let status = low7(STATUS_ADDR);
+        self.select_bank(self.layout.helpers.flag_save);
+        self.program.push(AsmLine::Instr(AsmInstr::Bcf {
+            f: low7(self.layout.helpers.flag_save),
+            b: STATUS_C_BIT,
+        }));
+        self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+            f: status,
+            b: STATUS_C_BIT,
+        }));
+        self.program.push(AsmLine::Instr(AsmInstr::Bsf {
+            f: low7(self.layout.helpers.flag_save),
+            b: STATUS_C_BIT,
+        }));
+        self.program.push(AsmLine::Instr(AsmInstr::Bcf {
+            f: low7(self.layout.helpers.flag_save),
+            b: STATUS_Z_BIT,
+        }));
+        self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+            f: status,
+            b: STATUS_Z_BIT,
+        }));
+        self.program.push(AsmLine::Instr(AsmInstr::Bsf {
+            f: low7(self.layout.helpers.flag_save),
+            b: STATUS_Z_BIT,
+        }));
+    }
+
+    /// Saves carry only, leaving later frame loads free to report their own zero state.
+    fn save_carry_flag(&mut self) {
+        let status = low7(STATUS_ADDR);
+        self.select_bank(self.layout.helpers.flag_save);
+        self.program.push(AsmLine::Instr(AsmInstr::Bcf {
+            f: low7(self.layout.helpers.flag_save),
+            b: STATUS_C_BIT,
+        }));
+        self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+            f: status,
+            b: STATUS_C_BIT,
+        }));
+        self.program.push(AsmLine::Instr(AsmInstr::Bsf {
+            f: low7(self.layout.helpers.flag_save),
+            b: STATUS_C_BIT,
+        }));
+    }
+
+    /// Restores carry and zero from the helper flag-save byte without disturbing `W`.
+    fn restore_status_flags(&mut self) {
+        let status = low7(STATUS_ADDR);
+        self.program.push(AsmLine::Instr(AsmInstr::Bcf {
+            f: status,
+            b: STATUS_C_BIT,
+        }));
+        self.program.push(AsmLine::Instr(AsmInstr::Bcf {
+            f: status,
+            b: STATUS_Z_BIT,
+        }));
+        self.select_bank(self.layout.helpers.flag_save);
+        self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+            f: low7(self.layout.helpers.flag_save),
+            b: STATUS_C_BIT,
+        }));
+        self.program.push(AsmLine::Instr(AsmInstr::Bsf {
+            f: status,
+            b: STATUS_C_BIT,
+        }));
+        self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+            f: low7(self.layout.helpers.flag_save),
+            b: STATUS_Z_BIT,
+        }));
+        self.program.push(AsmLine::Instr(AsmInstr::Bsf {
+            f: status,
+            b: STATUS_Z_BIT,
+        }));
+    }
+
+    /// Restores carry only, keeping `Z` from the most recent `movf`/test.
+    fn restore_carry_flag(&mut self) {
+        let status = low7(STATUS_ADDR);
+        self.program.push(AsmLine::Instr(AsmInstr::Bcf {
+            f: status,
+            b: STATUS_C_BIT,
+        }));
+        self.select_bank(self.layout.helpers.flag_save);
+        self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+            f: low7(self.layout.helpers.flag_save),
+            b: STATUS_C_BIT,
+        }));
+        self.program.push(AsmLine::Instr(AsmInstr::Bsf {
+            f: status,
+            b: STATUS_C_BIT,
+        }));
     }
 
     /// Updates the indirect-bank select bit from a scratch byte that holds the pointer high byte.
@@ -2842,8 +2990,14 @@ impl<'a> CodegenContext<'a> {
 
     /// Emits a page-safe unconditional branch to a label.
     fn branch_to_label(&mut self, label: &str) {
+        let stub_label = self.unique_label("branch_stub");
+        let after_label = self.unique_label("branch_after");
+        self.program.push(AsmLine::Instr(AsmInstr::Goto(stub_label.clone())));
+        self.program.push(AsmLine::Instr(AsmInstr::Goto(after_label.clone())));
+        self.program.push(AsmLine::Label(stub_label));
         self.program.push(AsmLine::Instr(AsmInstr::SetPage(label.to_string())));
         self.program.push(AsmLine::Instr(AsmInstr::Goto(label.to_string())));
+        self.program.push(AsmLine::Label(after_label));
     }
 
     /// Updates STATUS bank bits when an address lives outside the current bank.
@@ -4021,6 +4175,8 @@ fn build_map(
         ("__abi.return_high".to_string(), layout.helpers.return_high),
         ("__abi.scratch0".to_string(), layout.helpers.scratch0),
         ("__abi.scratch1".to_string(), layout.helpers.scratch1),
+        ("__abi.flag_save".to_string(), layout.helpers.flag_save),
+        ("__abi.w_save".to_string(), layout.helpers.w_save),
         ("__stack.base".to_string(), layout.stack_base),
         ("__stack_base".to_string(), layout.stack_base),
         ("__stack.end".to_string(), layout.stack_end),
@@ -4035,6 +4191,8 @@ fn build_map(
             ("__isr_ctx.return_high".to_string(), interrupt.return_high),
             ("__isr_ctx.scratch0".to_string(), interrupt.scratch0),
             ("__isr_ctx.scratch1".to_string(), interrupt.scratch1),
+            ("__isr_ctx.flag_save".to_string(), interrupt.flag_save),
+            ("__isr_ctx.w_save".to_string(), interrupt.w_save),
             ("__isr_ctx.stack_ptr.lo".to_string(), interrupt.stack_ptr.lo),
             ("__isr_ctx.stack_ptr.hi".to_string(), interrupt.stack_ptr.hi),
             ("__isr_ctx.frame_ptr.lo".to_string(), interrupt.frame_ptr.lo),

@@ -61,6 +61,7 @@ pub enum AsmInstr {
     Return,
     Retfie,
     SetPage(String),
+    SetPclPage(String),
 }
 
 impl AsmProgram {
@@ -191,6 +192,7 @@ impl AsmInstr {
     pub const fn word_len(&self) -> u16 {
         match self {
             Self::SetPage(_) => 4,
+            Self::SetPclPage(_) => 10,
             _ => 1,
         }
     }
@@ -227,6 +229,7 @@ pub fn render_instr(instr: &AsmInstr) -> String {
         AsmInstr::Return => "return".to_string(),
         AsmInstr::Retfie => "retfie".to_string(),
         AsmInstr::SetPage(label) => format!("; setpage {label}"),
+        AsmInstr::SetPclPage(label) => format!("; setpclpage {label}"),
     }
 }
 

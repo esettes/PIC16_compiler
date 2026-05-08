@@ -11,6 +11,7 @@ pub mod frontend;
 pub mod hex;
 pub mod ir;
 pub mod linker;
+pub mod sim;
 
 use std::collections::BTreeMap;
 use std::fs;

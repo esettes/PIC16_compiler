@@ -30,9 +30,17 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 18: stack safety, call-graph analysis, and stack-usage reporting on top of Phase 17 controlled function pointers and indirect dispatch, Phase 16 multidimensional arrays and aggregate-polish support, Phase 15 named `union` support and basic unsigned bitfields, Phase 14 richer program-memory data usability, Phase 13 explicit ROM objects, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 string/static-data cleanup, Phase 9 `switch` control flow, Phase 8 type-system work, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
+Current implementation is **Phase 19: emulator-based execution validation on top of Phase 18 stack safety, call-graph analysis, and stack-usage reporting, Phase 17 controlled function pointers and indirect dispatch, Phase 16 multidimensional arrays and aggregate-polish support, Phase 15 named `union` support and basic unsigned bitfields, Phase 14 richer program-memory data usability, Phase 13 explicit ROM objects, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 string/static-data cleanup, Phase 9 `switch` control flow, Phase 8 type-system work, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
 
-Phase 18 scope:
+Phase 19 scope:
+
+- internal test-only PIC16 core emulator for the subset of 14-bit instructions emitted by the current backend
+- execution tests that compile real C inputs to HEX, load them into the emulator, run to `__halt`, and assert final RAM/SFR results
+- runtime validation coverage for arithmetic, control flow, stack/calls, function-pointer dispatch, pointers, aggregates, bitfields, and ROM reads
+- explicit simulator errors for unsupported instructions or malformed HEX input
+- no required user-facing `--simulate` CLI in this phase; execution validation stays modular under `src/sim/` and `tests/execution_sim.rs`
+
+Phase 18 scope remains:
 
 - target-aware software-stack bounds with `__stack_base`, `__stack_limit`, `__stack_ptr`, and `__frame_ptr`
 - optional `--stack-check` runtime overflow guards on frame growth, helper calls, direct calls, and function-pointer dispatcher calls
@@ -146,6 +154,7 @@ What changed from Phase 3:
 - Phase 16 adds row-major multidimensional RAM arrays, chained designators, and multidimensional aggregate field access
 - Phase 17 adds controlled source-level function pointers, dispatch-ID lowering, and indirect-call diagnostics
 - Phase 18 adds target-aware stack bounds, opt-in runtime overflow checks, and stack reports without enabling recursion
+- Phase 19 adds emulator-based execution validation for generated PIC16 code without changing the supported C subset
 - active docs now describe stack-first behavior; old Phase 2/3 docs remain historical
 
 Historical milestone snapshots below describe what each phase introduced at the time. The current supported subset is summarized later under `Supported Subset`, `Current constraints`, and `Current Limits`.
@@ -634,6 +643,23 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
+Phase 19 execution tests live in `tests/execution_sim.rs` and use the internal emulator in `src/sim/mod.rs`.
+
+## Execution Validation
+
+Phase 19 adds a small internal PIC16 core emulator for compiler regression tests.
+
+- it is test-only in this phase; normal `picc` CLI behavior is unchanged
+- tests compile C to Intel HEX, load the HEX image, run until a generated stop label such as `__halt`, and then inspect RAM/SFR state
+- supported runtime coverage includes arithmetic, branches/loops, stack-first calls, helper calls, function-pointer dispatch, pointers, aggregates, bitfields, multidimensional arrays, and explicit `__rom` table reads
+- unsupported instruction words fail clearly in the simulator instead of silently executing bad behavior
+
+See:
+
+- [docs/testing/phase19-emulator.md](docs/testing/phase19-emulator.md)
+- [docs/sim/pic16-core-emulator.md](docs/sim/pic16-core-emulator.md)
+- [docs/developer-guide/testing.md](docs/developer-guide/testing.md)
+
 ## Installing picc
 
 ```bash
@@ -861,6 +887,7 @@ picc --list-targets
 - [docs/backend/phase17-dispatcher.md](docs/backend/phase17-dispatcher.md)
 - [docs/backend/phase18-stack-safety.md](docs/backend/phase18-stack-safety.md)
 - [docs/backend/phase9-switch-codegen.md](docs/backend/phase9-switch-codegen.md)
+- [docs/developer-guide/testing.md](docs/developer-guide/testing.md)
 - [docs/ir/phase4-call-lowering.md](docs/ir/phase4-call-lowering.md)
 - [docs/backend/phase5-helper-calling.md](docs/backend/phase5-helper-calling.md)
 - [docs/ir/phase5-arithmetic-lowering.md](docs/ir/phase5-arithmetic-lowering.md)
@@ -884,6 +911,8 @@ picc --list-targets
 - [docs/frontend/phase17-function-pointers.md](docs/frontend/phase17-function-pointers.md)
 - [docs/frontend/phase9-switch.md](docs/frontend/phase9-switch.md)
 - [docs/developer-guide/stack-report.md](docs/developer-guide/stack-report.md)
+- [docs/testing/phase19-emulator.md](docs/testing/phase19-emulator.md)
+- [docs/sim/pic16-core-emulator.md](docs/sim/pic16-core-emulator.md)
 - [docs/runtime/phase5-arithmetic-helpers.md](docs/runtime/phase5-arithmetic-helpers.md)
 - [docs/migration/phase3-to-phase4-abi.md](docs/migration/phase3-to-phase4-abi.md)
 - [docs/developer-guide/adding-device.md](docs/developer-guide/adding-device.md)
@@ -897,4 +926,4 @@ picc --list-targets
 
 ## Current Limits
 
-Phase 18 adds stack bounds visibility, opt-in runtime overflow checks, and stronger call-graph/stack reporting, but current hard limits remain: no general ROM pointer model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no function-pointer calls inside ISR, no raw computed PIC16 indirect calls, no `float`, and no recursion.
+Phase 19 adds execution validation through a small internal emulator, but current hard limits remain: no general ROM pointer model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no function-pointer calls inside ISR, no raw computed PIC16 indirect calls, no `float`, and no recursion. The emulator is intentionally core-only in this phase: no full peripheral timing model, no asynchronous interrupt scheduling, and no claim of complete PIC16 device emulation.

@@ -12,7 +12,7 @@ Shared backend responsibilities:
 - IR -> PIC16 asm lowering
 - 14-bit word encoding
 
-Current backend phase: **Phase 18 stack safety, call-graph analysis, and stack-usage reporting on top of Phase 17 controlled function pointers and indirect dispatch, Phase 16 multidimensional arrays and aggregate polish, Phase 15 named union support and basic unsigned bitfields, Phase 14 richer program-memory usability, Phase 13 explicit program-memory const/string/table lowering, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 static-data cleanup, Phase 9 control-flow coverage, Phase 8 aggregate/type-aware lowering, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**
+Current backend phase: **Phase 19 emulator-based execution validation on top of Phase 18 stack safety, call-graph analysis, and stack-usage reporting, Phase 17 controlled function pointers and indirect dispatch, Phase 16 multidimensional arrays and aggregate polish, Phase 15 named union support and basic unsigned bitfields, Phase 14 richer program-memory usability, Phase 13 explicit program-memory const/string/table lowering, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 static-data cleanup, Phase 9 control-flow coverage, Phase 8 aggregate/type-aware lowering, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**
 
 Backend owns:
 
@@ -46,9 +46,16 @@ Backend owns:
 - optional inline stack growth checks before frame growth and argument pushes
 - generated `__stack_overflow_trap` infinite-loop handler when stack checks are enabled
 - per-function stack report rendering with helper, ISR, and function-pointer target-set accounting
+- stable code shape consumed by the Phase 19 internal emulator for runtime regression tests
 - no backend jump tables and no backend-side recovery of labels nested under unrelated control statements in phase 9
 - no backend-side recovery for chained designators or incomplete-struct/union pointers; those stay frontend diagnostics
 - bank/page reuse tracking
+
+Phase 19 execution-validation relationship:
+
+- backend still emits assembly, machine words, HEX, map, and listing exactly as before
+- internal simulator consumes HEX after encoding; it does not bypass backend lowering
+- simulator failures on unsupported instructions are treated as backend/test coverage gaps, not as alternate compilation paths
 
 Current call contract:
 
@@ -137,6 +144,11 @@ Phase 11-18 backend docs:
 - [phase16-aggregate-layout.md](phase16-aggregate-layout.md)
 - [phase17-dispatcher.md](phase17-dispatcher.md)
 - [phase18-stack-safety.md](phase18-stack-safety.md)
+
+Phase 19 execution-validation docs:
+
+- [../testing/phase19-emulator.md](../testing/phase19-emulator.md)
+- [../sim/pic16-core-emulator.md](../sim/pic16-core-emulator.md)
 
 Historical docs:
 

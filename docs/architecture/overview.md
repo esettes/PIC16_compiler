@@ -12,7 +12,7 @@
 
 Target backend is classic 14-bit PIC16 mid-range family, not a generic 8-bit CPU model.
 
-Current Phase 18 keeps that split intact while extending:
+Current Phase 19 keeps that split intact while extending:
 
 - stack-first caller-pushed ABI
 - per-call frame storage for locals and IR temps
@@ -41,11 +41,27 @@ Current Phase 18 keeps that split intact while extending:
 - Phase 16 row-major multidimensional aggregate layout, indexing, and chained designator handling
 - Phase 17 controlled function-pointer typing plus dispatch-ID indirect-call lowering
 - Phase 18 target-aware stack bounds, optional runtime stack guards, and stronger call-graph/stack-report visibility
+- Phase 19 test-only execution validation through an internal PIC16 core emulator fed from generated Intel HEX output
 - PIC16 banking/paging without backend duplication per device
+
+Phase 19 keeps the compiler layering unchanged:
+
+- frontend still produces typed trees only
+- IR still stays target-aware but encoding-agnostic
+- backend still owns all real PIC16 code generation
+- emulator reads backend-produced HEX artifacts after compilation; it does not replace codegen
+
+Execution-validation layer:
+
+- `src/sim/mod.rs`: minimal PIC16 core emulator for the emitted instruction subset
+- `tests/execution_sim.rs`: compile -> HEX -> simulate -> assert runtime state regressions
+- simulator remains optional and test-focused; normal `picc` CLI flow is unchanged
 
 See:
 
 - [DESIGN.md](../../DESIGN.md)
 - [Backend Overview](../backend/overview.md)
 - [IR Overview](../ir/overview.md)
+- [Testing: Phase 19 Emulator](../testing/phase19-emulator.md)
+- [PIC16 Core Emulator](../sim/pic16-core-emulator.md)
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->

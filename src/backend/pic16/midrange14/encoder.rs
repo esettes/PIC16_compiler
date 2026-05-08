@@ -55,6 +55,37 @@ pub fn encode_program(program: &AsmProgram, diagnostics: &mut DiagnosticBag) -> 
                     );
                     pc += 4;
                 }
+                AsmInstr::SetPclPage(label) => {
+                    let Some(addr) = labels.get(label).copied() else {
+                        diagnostics.error(
+                            "assembler",
+                            None,
+                            format!("undefined label `{label}`"),
+                            None,
+                        );
+                        return None;
+                    };
+                    let page = ((addr >> 8) & 0x1F) as u8;
+                    for bit in 0..=4u8 {
+                        insert_word(
+                            &mut words,
+                            pc + u16::from(bit),
+                            encode_instr(&AsmInstr::Bcf { f: 0x0A, b: bit }),
+                        );
+                    }
+                    for bit in 0..=4u8 {
+                        insert_word(
+                            &mut words,
+                            pc + 5 + u16::from(bit),
+                            if (page & (1 << bit)) != 0 {
+                                encode_instr(&AsmInstr::Bsf { f: 0x0A, b: bit })
+                            } else {
+                                encode_instr(&AsmInstr::Nop)
+                            },
+                        );
+                    }
+                    pc += 10;
+                }
                 AsmInstr::Goto(label) => {
                     let Some(addr) = labels.get(label).copied() else {
                         diagnostics.error(
@@ -148,7 +179,10 @@ fn encode_instr(instr: &AsmInstr) -> u16 {
         AsmInstr::Retlw(value) => 0x3400 | u16::from(*value),
         AsmInstr::Return => 0x0008,
         AsmInstr::Retfie => 0x0009,
-        AsmInstr::Goto(_) | AsmInstr::Call(_) | AsmInstr::SetPage(_) => unreachable!("resolved elsewhere"),
+        AsmInstr::Goto(_)
+        | AsmInstr::Call(_)
+        | AsmInstr::SetPage(_)
+        | AsmInstr::SetPclPage(_) => unreachable!("resolved elsewhere"),
     }
 }
 
