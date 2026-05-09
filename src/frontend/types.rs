@@ -24,6 +24,10 @@ pub enum ScalarType {
     U16,
     I32,
     U32,
+    Q8_8,
+    UQ8_8,
+    Q16_16,
+    UQ16_16,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -366,32 +370,98 @@ impl Type {
                 | ScalarType::U16
                 | ScalarType::I32
                 | ScalarType::U32
+                | ScalarType::Q8_8
+                | ScalarType::UQ8_8
+                | ScalarType::Q16_16
+                | ScalarType::UQ16_16
         )
     }
 
     /// Returns true when this type is an integer scalar value.
     pub fn is_integer(self) -> bool {
-        !self.is_void()
-            && !self.is_pointer()
+        !self.is_pointer()
             && !self.is_function_pointer()
             && !self.is_array()
             && !self.has_struct_base()
             && !self.has_union_base()
+            && matches!(
+                self.scalar,
+                ScalarType::I8
+                    | ScalarType::U8
+                    | ScalarType::I16
+                    | ScalarType::U16
+                    | ScalarType::I32
+                    | ScalarType::U32
+            )
+    }
+
+    /// Returns true when this type is one Phase 22 fixed-point scalar value.
+    pub fn is_fixed(self) -> bool {
+        !self.is_pointer()
+            && !self.is_function_pointer()
+            && !self.is_array()
+            && !self.has_struct_base()
+            && !self.has_union_base()
+            && matches!(
+                self.scalar,
+                ScalarType::Q8_8 | ScalarType::UQ8_8 | ScalarType::Q16_16 | ScalarType::UQ16_16
+            )
+    }
+
+    /// Returns true when this type is an integer or fixed-point scalar.
+    pub fn is_numeric(self) -> bool {
+        self.is_integer() || self.is_fixed()
     }
 
     /// Returns true when this type is a scalar value that fits in registers or temps.
     pub fn is_scalar_value(self) -> bool {
-        self.is_integer() || self.is_pointer() || self.is_function_pointer()
+        self.is_numeric() || self.is_pointer() || self.is_function_pointer()
     }
 
     /// Returns true when the scalar uses signed arithmetic semantics.
     pub fn is_signed(self) -> bool {
-        self.is_integer() && matches!(self.scalar, ScalarType::I8 | ScalarType::I16 | ScalarType::I32)
+        (self.is_integer() || self.is_fixed())
+            && matches!(
+                self.scalar,
+                ScalarType::I8
+                    | ScalarType::I16
+                    | ScalarType::I32
+                    | ScalarType::Q8_8
+                    | ScalarType::Q16_16
+            )
     }
 
     /// Returns true when the scalar uses unsigned arithmetic semantics.
     pub fn is_unsigned(self) -> bool {
-        self.is_integer() && matches!(self.scalar, ScalarType::U8 | ScalarType::U16 | ScalarType::U32)
+        (self.is_integer() || self.is_fixed())
+            && matches!(
+                self.scalar,
+                ScalarType::U8
+                    | ScalarType::U16
+                    | ScalarType::U32
+                    | ScalarType::UQ8_8
+                    | ScalarType::UQ16_16
+            )
+    }
+
+    /// Returns the fixed-point fractional bit count for Phase 22 fixed scalars.
+    pub fn fixed_fraction_bits(self) -> Option<usize> {
+        match self.scalar {
+            ScalarType::Q8_8 | ScalarType::UQ8_8 => Some(8),
+            ScalarType::Q16_16 | ScalarType::UQ16_16 => Some(16),
+            _ => None,
+        }
+    }
+
+    /// Returns the raw integer storage type used for one fixed-point scalar.
+    pub fn fixed_raw_integer_type(self) -> Option<Self> {
+        Some(match self.scalar {
+            ScalarType::Q8_8 => Self::new(ScalarType::I16),
+            ScalarType::UQ8_8 => Self::new(ScalarType::U16),
+            ScalarType::Q16_16 => Self::new(ScalarType::I32),
+            ScalarType::UQ16_16 => Self::new(ScalarType::U32),
+            _ => return None,
+        })
     }
 
     /// Returns true when two pointer types can participate in the constrained Phase 3 model.
@@ -406,10 +476,9 @@ impl Type {
 
     /// Returns true when the type can live in a scalar value position in Phase 3.
     pub fn is_supported_value_type(self) -> bool {
-        self.is_integer()
+        self.is_numeric()
             || self.is_function_pointer()
-            || (self.is_pointer()
-                && self.element_type().is_supported_pointer_target())
+            || (self.is_pointer() && self.element_type().is_supported_pointer_target())
     }
 
     /// Returns true when the type can be declared as an addressable object in Phase 3.
@@ -449,8 +518,8 @@ impl Type {
         match self.scalar {
             ScalarType::Void => 0,
             ScalarType::I8 | ScalarType::U8 => 1,
-            ScalarType::I16 | ScalarType::U16 => 2,
-            ScalarType::I32 | ScalarType::U32 => 4,
+            ScalarType::I16 | ScalarType::U16 | ScalarType::Q8_8 | ScalarType::UQ8_8 => 2,
+            ScalarType::I32 | ScalarType::U32 | ScalarType::Q16_16 | ScalarType::UQ16_16 => 4,
         }
     }
 
@@ -616,6 +685,10 @@ const fn scalar_name(scalar: ScalarType) -> &'static str {
         ScalarType::U16 => "unsigned int",
         ScalarType::I32 => "long",
         ScalarType::U32 => "unsigned long",
+        ScalarType::Q8_8 => "__fixed8_8",
+        ScalarType::UQ8_8 => "__ufixed8_8",
+        ScalarType::Q16_16 => "__fixed16_16",
+        ScalarType::UQ16_16 => "__ufixed16_16",
     }
 }
 

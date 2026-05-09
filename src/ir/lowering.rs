@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use crate::diagnostics::DiagnosticBag;
 use crate::frontend::ast::{BinaryOp, UnaryOp};
 use crate::frontend::semantic::{
     SymbolId, TypedExpr, TypedExprKind, TypedFunction, TypedProgram, TypedStmt,
 };
 use crate::frontend::types::{CastKind, ScalarType, Type};
-use crate::diagnostics::DiagnosticBag;
 
 use super::model::{
     BlockId, IrBlock, IrCondition, IrFunction, IrInstr, IrProgram, IrTerminator, Operand, TempId,
@@ -83,7 +83,10 @@ impl FunctionBuilder {
     fn lower(&mut self, _diagnostics: &mut DiagnosticBag) -> IrFunction {
         let body = self.body.clone();
         self.lower_stmt(&body);
-        if matches!(self.blocks[self.current].terminator, IrTerminator::Unreachable) {
+        if matches!(
+            self.blocks[self.current].terminator,
+            IrTerminator::Unreachable
+        ) {
             self.blocks[self.current].terminator = if self.return_type.scalar == ScalarType::Void {
                 IrTerminator::Return(None)
             } else {
@@ -153,7 +156,11 @@ impl FunctionBuilder {
                 let then_block = self.new_block("if.then");
                 let else_block = self.new_block("if.else");
                 let join_block = self.new_block("if.end");
-                let else_target = if else_branch.is_some() { else_block } else { join_block };
+                let else_target = if else_branch.is_some() {
+                    else_block
+                } else {
+                    join_block
+                };
                 self.lower_condition(condition, then_block, else_target);
 
                 self.current = then_block;
@@ -190,9 +197,7 @@ impl FunctionBuilder {
                 self.current = end;
             }
             TypedStmt::DoWhile {
-                body,
-                condition,
-                ..
+                body, condition, ..
             } => {
                 let body_block = self.new_block("do.body");
                 let cond_block = self.new_block("do.cond");
@@ -409,11 +414,7 @@ impl FunctionBuilder {
                 }
                 let src = self.lower_expr(operand);
                 let dst = self.new_temp(expr.ty);
-                self.emit(IrInstr::Unary {
-                    dst,
-                    op: *op,
-                    src,
-                });
+                self.emit(IrInstr::Unary { dst, op: *op, src });
                 Operand::Temp(dst)
             }
             TypedExprKind::Deref(pointer) => {
@@ -474,7 +475,11 @@ impl FunctionBuilder {
                 }
                 value_operand
             }
-            TypedExprKind::StructAssign { target, value, size } => {
+            TypedExprKind::StructAssign {
+                target,
+                value,
+                size,
+            } => {
                 let dst_base = self.lower_lvalue_address(target);
                 let src_base = self.lower_lvalue_address(value);
                 let byte_ty = Type::new(ScalarType::U8);
@@ -515,7 +520,10 @@ impl FunctionBuilder {
                 Operand::Temp(dst)
             }
             TypedExprKind::Call { function, args } => {
-                let args = args.iter().map(|arg| self.lower_expr(arg)).collect::<Vec<_>>();
+                let args = args
+                    .iter()
+                    .map(|arg| self.lower_expr(arg))
+                    .collect::<Vec<_>>();
                 if expr.ty.is_void() {
                     self.emit(IrInstr::Call {
                         dst: None,
@@ -539,7 +547,10 @@ impl FunctionBuilder {
                 args,
             } => {
                 let callee = self.lower_expr(callee);
-                let args = args.iter().map(|arg| self.lower_expr(arg)).collect::<Vec<_>>();
+                let args = args
+                    .iter()
+                    .map(|arg| self.lower_expr(arg))
+                    .collect::<Vec<_>>();
                 if expr.ty.is_void() {
                     self.emit(IrInstr::IndirectCall {
                         dst: None,
@@ -785,10 +796,7 @@ impl FunctionBuilder {
             _ => {
                 let value = self.lower_expr(expr);
                 self.blocks[self.current].terminator = IrTerminator::Branch {
-                    condition: IrCondition::NonZero {
-                        value,
-                        ty: expr.ty,
-                    },
+                    condition: IrCondition::NonZero { value, ty: expr.ty },
                     then_block,
                     else_block,
                 };
@@ -822,7 +830,10 @@ impl FunctionBuilder {
 
     /// Inserts a jump only when the current block has no terminator yet.
     fn ensure_jump(&mut self, target: BlockId) {
-        if matches!(self.blocks[self.current].terminator, IrTerminator::Unreachable) {
+        if matches!(
+            self.blocks[self.current].terminator,
+            IrTerminator::Unreachable
+        ) {
             self.blocks[self.current].terminator = IrTerminator::Jump(target);
         }
     }

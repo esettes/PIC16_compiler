@@ -11,12 +11,16 @@ pub enum RuntimeHelper {
     MulI16,
     MulU32,
     MulI32,
+    MulQ8_8,
+    MulUQ8_8,
     DivU8,
     DivI8,
     DivU16,
     DivI16,
     DivU32,
     DivI32,
+    DivQ8_8,
+    DivUQ8_8,
     ModU8,
     ModI8,
     ModU16,
@@ -88,6 +92,20 @@ impl RuntimeHelper {
                 local_bytes: 6,
                 frame_bytes: 8,
             },
+            Self::MulQ8_8 => RuntimeHelperInfo {
+                label: "__rt_mul_q8_8",
+                operand_ty: Type::new(ScalarType::Q8_8),
+                arg_bytes: 4,
+                local_bytes: 14,
+                frame_bytes: 16,
+            },
+            Self::MulUQ8_8 => RuntimeHelperInfo {
+                label: "__rt_mul_uq8_8",
+                operand_ty: Type::new(ScalarType::UQ8_8),
+                arg_bytes: 4,
+                local_bytes: 14,
+                frame_bytes: 16,
+            },
             Self::DivU8 => RuntimeHelperInfo {
                 label: "__rt_div_u8",
                 operand_ty: Type::new(ScalarType::U8),
@@ -129,6 +147,20 @@ impl RuntimeHelper {
                 arg_bytes: 8,
                 local_bytes: 6,
                 frame_bytes: 8,
+            },
+            Self::DivQ8_8 => RuntimeHelperInfo {
+                label: "__rt_div_q8_8",
+                operand_ty: Type::new(ScalarType::Q8_8),
+                arg_bytes: 4,
+                local_bytes: 14,
+                frame_bytes: 16,
+            },
+            Self::DivUQ8_8 => RuntimeHelperInfo {
+                label: "__rt_div_uq8_8",
+                operand_ty: Type::new(ScalarType::UQ8_8),
+                arg_bytes: 4,
+                local_bytes: 14,
+                frame_bytes: 16,
             },
             Self::ModU8 => RuntimeHelperInfo {
                 label: "__rt_mod_u8",
@@ -244,7 +276,7 @@ impl RuntimeHelper {
 }
 
 pub fn binary_helper(op: BinaryOp, ty: Type) -> Option<RuntimeHelper> {
-    if !ty.is_integer() {
+    if !ty.is_integer() && !ty.is_fixed() {
         return None;
     }
 
@@ -255,12 +287,16 @@ pub fn binary_helper(op: BinaryOp, ty: Type) -> Option<RuntimeHelper> {
         (BinaryOp::Multiply, ScalarType::I16) => Some(RuntimeHelper::MulI16),
         (BinaryOp::Multiply, ScalarType::U32) => Some(RuntimeHelper::MulU32),
         (BinaryOp::Multiply, ScalarType::I32) => Some(RuntimeHelper::MulI32),
+        (BinaryOp::Multiply, ScalarType::Q8_8) => Some(RuntimeHelper::MulQ8_8),
+        (BinaryOp::Multiply, ScalarType::UQ8_8) => Some(RuntimeHelper::MulUQ8_8),
         (BinaryOp::Divide, ScalarType::U8) => Some(RuntimeHelper::DivU8),
         (BinaryOp::Divide, ScalarType::I8) => Some(RuntimeHelper::DivI8),
         (BinaryOp::Divide, ScalarType::U16) => Some(RuntimeHelper::DivU16),
         (BinaryOp::Divide, ScalarType::I16) => Some(RuntimeHelper::DivI16),
         (BinaryOp::Divide, ScalarType::U32) => Some(RuntimeHelper::DivU32),
         (BinaryOp::Divide, ScalarType::I32) => Some(RuntimeHelper::DivI32),
+        (BinaryOp::Divide, ScalarType::Q8_8) => Some(RuntimeHelper::DivQ8_8),
+        (BinaryOp::Divide, ScalarType::UQ8_8) => Some(RuntimeHelper::DivUQ8_8),
         (BinaryOp::Modulo, ScalarType::U8) => Some(RuntimeHelper::ModU8),
         (BinaryOp::Modulo, ScalarType::I8) => Some(RuntimeHelper::ModI8),
         (BinaryOp::Modulo, ScalarType::U16) => Some(RuntimeHelper::ModU16),
@@ -282,7 +318,7 @@ pub fn binary_helper(op: BinaryOp, ty: Type) -> Option<RuntimeHelper> {
 
 #[cfg(test)]
 mod tests {
-    use super::{binary_helper, RuntimeHelper};
+    use super::{RuntimeHelper, binary_helper};
     use crate::frontend::ast::BinaryOp;
     use crate::frontend::types::{ScalarType, Type};
 

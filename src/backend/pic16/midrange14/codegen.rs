@@ -19,7 +19,7 @@ use crate::linker::map::MapFile;
 
 use super::asm::{AsmInstr, AsmLine, AsmProgram, Dest, PeepholeStats};
 use super::encoder::encode_program;
-use super::runtime::{binary_helper, RuntimeHelper, RuntimeHelperInfo};
+use super::runtime::{RuntimeHelper, RuntimeHelperInfo, binary_helper};
 
 const STATUS_ADDR: u16 = 0x03;
 const STATUS_C_BIT: u8 = 0;
@@ -175,14 +175,22 @@ struct StackAnalysis {
 fn program_needs_32bit_return_slots(typed_program: &TypedProgram, ir_program: &IrProgram) -> bool {
     typed_program.symbols.iter().any(|symbol| {
         type_has_32bit_scalar(symbol.ty)
-            || symbol.parameter_types.iter().copied().any(type_has_32bit_scalar)
+            || symbol
+                .parameter_types
+                .iter()
+                .copied()
+                .any(type_has_32bit_scalar)
     }) || typed_program
         .functions
         .iter()
         .any(|function| type_has_32bit_scalar(function.return_type))
         || ir_program.functions.iter().any(|function| {
             type_has_32bit_scalar(function.return_type)
-                || function.temp_types.iter().copied().any(type_has_32bit_scalar)
+                || function
+                    .temp_types
+                    .iter()
+                    .copied()
+                    .any(type_has_32bit_scalar)
         })
 }
 
@@ -190,18 +198,22 @@ fn type_has_32bit_scalar(ty: Type) -> bool {
     if ty.is_function_pointer() {
         return matches!(
             ty.function_return_scalar(),
-            Some(ScalarType::I32 | ScalarType::U32)
+            Some(ScalarType::I32 | ScalarType::U32 | ScalarType::Q16_16 | ScalarType::UQ16_16)
         ) || (0..ty.function_param_len().unwrap_or(0)).any(|index| {
             matches!(
                 ty.function_param_scalar(index),
-                Some(ScalarType::I32 | ScalarType::U32)
+                Some(ScalarType::I32 | ScalarType::U32 | ScalarType::Q16_16 | ScalarType::UQ16_16)
             )
         });
     }
     if ty.is_array() {
         return type_has_32bit_scalar(ty.element_type());
     }
-    ty.pointer_depth == 0 && matches!(ty.scalar, ScalarType::I32 | ScalarType::U32)
+    ty.pointer_depth == 0
+        && matches!(
+            ty.scalar,
+            ScalarType::I32 | ScalarType::U32 | ScalarType::Q16_16 | ScalarType::UQ16_16
+        )
 }
 
 /// Lowers typed IR into assembly, encoded words, and a final linker map.
@@ -212,8 +224,11 @@ pub fn compile_program(
     options: &BackendOptions,
     diagnostics: &mut DiagnosticBag,
 ) -> Option<BackendOutput> {
-    let layout = StorageAllocator::new(target.allocatable_gpr, target.shared_gpr)
-        .layout(typed_program, ir_program, diagnostics)?;
+    let layout = StorageAllocator::new(target.allocatable_gpr, target.shared_gpr).layout(
+        typed_program,
+        ir_program,
+        diagnostics,
+    )?;
     let stack_analysis = analyze_stack(typed_program, ir_program, &layout, *options);
 
     let mut codegen = CodegenContext::new(target, typed_program, &layout, *options);
@@ -333,31 +348,65 @@ impl<'a> StorageAllocator<'a> {
             w_save,
         };
 
-        let interrupt = if ir_program.functions.iter().any(|function| function.is_interrupt) {
+        let interrupt = if ir_program
+            .functions
+            .iter()
+            .any(|function| function.is_interrupt)
+        {
             let mut shared = AddressAllocator::new(self.shared_ranges);
             let Some(w) = shared.next_span(1) else {
-                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                diagnostics.error(
+                    "backend",
+                    None,
+                    "not enough shared RAM for ISR context",
+                    None,
+                );
                 return None;
             };
             let Some(status) = shared.next_span(1) else {
-                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                diagnostics.error(
+                    "backend",
+                    None,
+                    "not enough shared RAM for ISR context",
+                    None,
+                );
                 return None;
             };
             let Some(pclath) = shared.next_span(1) else {
-                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                diagnostics.error(
+                    "backend",
+                    None,
+                    "not enough shared RAM for ISR context",
+                    None,
+                );
                 return None;
             };
             let Some(fsr) = shared.next_span(1) else {
-                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                diagnostics.error(
+                    "backend",
+                    None,
+                    "not enough shared RAM for ISR context",
+                    None,
+                );
                 return None;
             };
             let Some(return_high_ctx) = shared.next_span(1) else {
-                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                diagnostics.error(
+                    "backend",
+                    None,
+                    "not enough shared RAM for ISR context",
+                    None,
+                );
                 return None;
             };
             let return_upper0_ctx = if needs_32bit_return_slots {
                 let Some(slot) = shared.next_span(1) else {
-                    diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                    diagnostics.error(
+                        "backend",
+                        None,
+                        "not enough shared RAM for ISR context",
+                        None,
+                    );
                     return None;
                 };
                 slot
@@ -366,7 +415,12 @@ impl<'a> StorageAllocator<'a> {
             };
             let return_upper1_ctx = if needs_32bit_return_slots {
                 let Some(slot) = shared.next_span(1) else {
-                    diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                    diagnostics.error(
+                        "backend",
+                        None,
+                        "not enough shared RAM for ISR context",
+                        None,
+                    );
                     return None;
                 };
                 slot
@@ -374,27 +428,57 @@ impl<'a> StorageAllocator<'a> {
                 return_high_ctx
             };
             let Some(scratch0_ctx) = shared.next_span(1) else {
-                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                diagnostics.error(
+                    "backend",
+                    None,
+                    "not enough shared RAM for ISR context",
+                    None,
+                );
                 return None;
             };
             let Some(scratch1_ctx) = shared.next_span(1) else {
-                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                diagnostics.error(
+                    "backend",
+                    None,
+                    "not enough shared RAM for ISR context",
+                    None,
+                );
                 return None;
             };
             let Some(flag_save_ctx) = shared.next_span(1) else {
-                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                diagnostics.error(
+                    "backend",
+                    None,
+                    "not enough shared RAM for ISR context",
+                    None,
+                );
                 return None;
             };
             let Some(w_save_ctx) = shared.next_span(1) else {
-                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                diagnostics.error(
+                    "backend",
+                    None,
+                    "not enough shared RAM for ISR context",
+                    None,
+                );
                 return None;
             };
             let Some(stack_ptr_ctx_lo) = shared.next_span(2) else {
-                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                diagnostics.error(
+                    "backend",
+                    None,
+                    "not enough shared RAM for ISR context",
+                    None,
+                );
                 return None;
             };
             let Some(frame_ptr_ctx_lo) = shared.next_span(2) else {
-                diagnostics.error("backend", None, "not enough shared RAM for ISR context", None);
+                diagnostics.error(
+                    "backend",
+                    None,
+                    "not enough shared RAM for ISR context",
+                    None,
+                );
                 return None;
             };
 
@@ -431,7 +515,8 @@ impl<'a> StorageAllocator<'a> {
             }
             if symbol.kind == SymbolKind::Global
                 || symbol.kind == SymbolKind::StringLiteral
-                || (symbol.kind == SymbolKind::Local && symbol.storage_class == crate::frontend::types::StorageClass::Static)
+                || (symbol.kind == SymbolKind::Local
+                    && symbol.storage_class == crate::frontend::types::StorageClass::Static)
             {
                 if symbol.ty.is_rom() {
                     continue;
@@ -467,7 +552,9 @@ impl<'a> StorageAllocator<'a> {
             let mut local_cursor = arg_bytes + 2;
             for local in &function.locals {
                 let symbol = &typed_program.symbols[*local];
-                if symbol.kind != SymbolKind::Local || symbol.storage_class == crate::frontend::types::StorageClass::Static {
+                if symbol.kind != SymbolKind::Local
+                    || symbol.storage_class == crate::frontend::types::StorageClass::Static
+                {
                     continue;
                 }
                 symbol_storage.insert(*local, SymbolStorage::Frame(local_cursor));
@@ -506,11 +593,8 @@ impl<'a> StorageAllocator<'a> {
             return None;
         };
 
-        let max_stack_depth = compute_max_stack_depth_with_interrupts(
-            typed_program,
-            ir_program,
-            &frames,
-        );
+        let max_stack_depth =
+            compute_max_stack_depth_with_interrupts(typed_program, ir_program, &frames);
         if max_stack_depth > stack_capacity {
             diagnostics.error(
                 "backend",
@@ -655,25 +739,35 @@ impl<'a> CodegenContext<'a> {
             .find(|symbol| symbol.kind == SymbolKind::Function && symbol.is_interrupt)
             .map(|symbol| function_label(&symbol.name));
         self.program.push(AsmLine::Org(self.target.vectors.reset));
-        self.program.push(AsmLine::Label("__reset_vector".to_string()));
         self.program
-            .push(AsmLine::Instr(AsmInstr::Goto("__reset_dispatch".to_string())));
-        self.program.push(AsmLine::Org(self.target.vectors.interrupt));
-        self.program.push(AsmLine::Label("__interrupt_vector".to_string()));
+            .push(AsmLine::Label("__reset_vector".to_string()));
+        self.program.push(AsmLine::Instr(AsmInstr::Goto(
+            "__reset_dispatch".to_string(),
+        )));
+        self.program
+            .push(AsmLine::Org(self.target.vectors.interrupt));
+        self.program
+            .push(AsmLine::Label("__interrupt_vector".to_string()));
         if interrupt.is_some() {
-            self.program
-                .push(AsmLine::Instr(AsmInstr::Goto("__interrupt_dispatch".to_string())));
+            self.program.push(AsmLine::Instr(AsmInstr::Goto(
+                "__interrupt_dispatch".to_string(),
+            )));
         } else {
             self.program.push(AsmLine::Instr(AsmInstr::Retfie));
         }
-        self.program.push(AsmLine::Org(self.target.vectors.interrupt + 1));
-        self.program.push(AsmLine::Label("__reset_dispatch".to_string()));
-        self.program.push(AsmLine::Instr(AsmInstr::SetPage("__start".to_string())));
-        self.program.push(AsmLine::Instr(AsmInstr::Goto("__start".to_string())));
+        self.program
+            .push(AsmLine::Org(self.target.vectors.interrupt + 1));
+        self.program
+            .push(AsmLine::Label("__reset_dispatch".to_string()));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage("__start".to_string())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Goto("__start".to_string())));
         if let Some(interrupt) = interrupt {
             self.program
                 .push(AsmLine::Label("__interrupt_dispatch".to_string()));
-            self.program.push(AsmLine::Instr(AsmInstr::SetPage(interrupt.clone())));
+            self.program
+                .push(AsmLine::Instr(AsmInstr::SetPage(interrupt.clone())));
             self.program.push(AsmLine::Instr(AsmInstr::Goto(interrupt)));
         }
         self.program.push(AsmLine::Label("__start".to_string()));
@@ -737,7 +831,11 @@ impl<'a> CodegenContext<'a> {
                             "init {symbol_name} @0x{base:04X} (address of {} + {offset})",
                             format_data_symbol_name(&self.typed_program.symbols[*symbol])
                         )));
-                        self.store_const_value(base, Type::new(ScalarType::U16), i64::from(address));
+                        self.store_const_value(
+                            base,
+                            Type::new(ScalarType::U16),
+                            i64::from(address),
+                        );
                     }
                 }
             } else {
@@ -787,11 +885,14 @@ impl<'a> CodegenContext<'a> {
         }
 
         let label = function_label(self.symbol_name(main_symbol));
-        self.program.push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
         self.program.push(AsmLine::Instr(AsmInstr::Call(label)));
         self.program.push(AsmLine::Label("__halt".to_string()));
-        self.program.push(AsmLine::Instr(AsmInstr::SetPage("__halt".to_string())));
-        self.program.push(AsmLine::Instr(AsmInstr::Goto("__halt".to_string())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage("__halt".to_string())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Goto("__halt".to_string())));
     }
 
     /// Emits one function body and records the per-call frame layout in assembly comments.
@@ -823,7 +924,8 @@ impl<'a> CodegenContext<'a> {
             if !reachable.contains(&block.id) {
                 continue;
             }
-            self.program.push(AsmLine::Label(block_label(&name, block.id)));
+            self.program
+                .push(AsmLine::Label(block_label(&name, block.id)));
             for instr in &block.instructions {
                 self.emit_instr(function, instr, diagnostics);
             }
@@ -832,7 +934,12 @@ impl<'a> CodegenContext<'a> {
     }
 
     /// Lowers a single IR instruction into PIC16 assembly.
-    fn emit_instr(&mut self, function: &IrFunction, instr: &IrInstr, diagnostics: &mut DiagnosticBag) {
+    fn emit_instr(
+        &mut self,
+        function: &IrFunction,
+        instr: &IrInstr,
+        diagnostics: &mut DiagnosticBag,
+    ) {
         match instr {
             IrInstr::Copy { dst, src } => {
                 let ty = function.temp_types[*dst];
@@ -856,10 +963,16 @@ impl<'a> CodegenContext<'a> {
                 match op {
                     UnaryOp::Negate => self.emit_negate(function.symbol, *src, dst_ty, *dst),
                     UnaryOp::BitwiseNot => {
-                        self.emit_per_byte_unary(function.symbol, *src, dst_ty, *dst, |this, sym, operand, ty, byte| {
-                            this.load_operand_byte_to_w(sym, operand, ty, byte);
-                            this.program.push(AsmLine::Instr(AsmInstr::Xorlw(0xFF)));
-                        });
+                        self.emit_per_byte_unary(
+                            function.symbol,
+                            *src,
+                            dst_ty,
+                            *dst,
+                            |this, sym, operand, ty, byte| {
+                                this.load_operand_byte_to_w(sym, operand, ty, byte);
+                                this.program.push(AsmLine::Instr(AsmInstr::Xorlw(0xFF)));
+                            },
+                        );
                     }
                     UnaryOp::LogicalNot => {
                         diagnostics.error(
@@ -1066,7 +1179,8 @@ impl<'a> CodegenContext<'a> {
         }
 
         let label = function_label(self.symbol_name(callee));
-        self.program.push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
         self.program.push(AsmLine::Instr(AsmInstr::Call(label)));
 
         if dst.is_some() {
@@ -1154,7 +1268,8 @@ impl<'a> CodegenContext<'a> {
         self.store_w_to_addr(self.layout.helpers.scratch1);
 
         let label = function_pointer_dispatch_label(group_ty);
-        self.program.push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
         self.program.push(AsmLine::Instr(AsmInstr::Call(label)));
 
         if dst.is_some() {
@@ -1213,7 +1328,9 @@ impl<'a> CodegenContext<'a> {
             self.clear_temp(function.symbol, dst, function.temp_types[dst]);
             return;
         }
-        if let Some(index_value) = constant_operand_value(index, index_ty).map(|value| normalize_value(value, index_ty) as usize) {
+        if let Some(index_value) = constant_operand_value(index, index_ty)
+            .map(|value| normalize_value(value, index_ty) as usize)
+        {
             let byte = bytes.get(index_value).copied().unwrap_or(0);
             self.emit_const_to_w(byte);
             self.store_w_to_temp_byte(function.symbol, dst, 0);
@@ -1307,12 +1424,16 @@ impl<'a> CodegenContext<'a> {
                     len,
                     bytes.len()
                 ),
-                Some("keep each 16-bit ROM table within one 255-byte RETLW payload page".to_string()),
+                Some(
+                    "keep each 16-bit ROM table within one 255-byte RETLW payload page".to_string(),
+                ),
             );
             self.clear_temp(function.symbol, dst, function.temp_types[dst]);
             return;
         }
-        if let Some(index_value) = constant_operand_value(index, index_ty).map(|value| normalize_value(value, index_ty) as usize) {
+        if let Some(index_value) = constant_operand_value(index, index_ty)
+            .map(|value| normalize_value(value, index_ty) as usize)
+        {
             let byte_index = index_value.saturating_mul(2);
             let lo = bytes.get(byte_index).copied().unwrap_or(0);
             let hi = bytes.get(byte_index + 1).copied().unwrap_or(0);
@@ -1395,7 +1516,8 @@ impl<'a> CodegenContext<'a> {
     /// Emits one ROM RETLW-table call assuming the byte index already lives in `W`.
     fn emit_dynamic_rom_byte_call_from_w(&mut self, symbol: SymbolId) {
         let label = rom_object_label(symbol);
-        self.program.push(AsmLine::Instr(AsmInstr::SetPclPage(label.clone())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPclPage(label.clone())));
         self.program.push(AsmLine::Instr(AsmInstr::Call(label)));
     }
 
@@ -1470,22 +1592,12 @@ impl<'a> CodegenContext<'a> {
                 }
 
                 match op {
-                    BinaryOp::Equal => self.emit_equality_branch(
-                        function.symbol,
-                        *lhs,
-                        *rhs,
-                        *ty,
-                        false,
-                        targets,
-                    ),
-                    BinaryOp::NotEqual => self.emit_equality_branch(
-                        function.symbol,
-                        *lhs,
-                        *rhs,
-                        *ty,
-                        true,
-                        targets,
-                    ),
+                    BinaryOp::Equal => {
+                        self.emit_equality_branch(function.symbol, *lhs, *rhs, *ty, false, targets)
+                    }
+                    BinaryOp::NotEqual => {
+                        self.emit_equality_branch(function.symbol, *lhs, *rhs, *ty, true, targets)
+                    }
                     BinaryOp::Less
                     | BinaryOp::LessEqual
                     | BinaryOp::Greater
@@ -1744,7 +1856,14 @@ impl<'a> CodegenContext<'a> {
     }
 
     /// Emits addition with explicit carry propagation across every byte.
-    fn emit_add(&mut self, function_symbol: SymbolId, lhs: Operand, rhs: Operand, ty: Type, dst_temp: usize) {
+    fn emit_add(
+        &mut self,
+        function_symbol: SymbolId,
+        lhs: Operand,
+        rhs: Operand,
+        ty: Type,
+        dst_temp: usize,
+    ) {
         for byte in 0..ty.byte_width() {
             self.load_operand_byte_to_w(function_symbol, lhs, ty, byte);
             self.store_w_to_addr(self.layout.helpers.scratch0);
@@ -1788,7 +1907,14 @@ impl<'a> CodegenContext<'a> {
     }
 
     /// Emits subtraction with explicit borrow propagation across every byte.
-    fn emit_sub(&mut self, function_symbol: SymbolId, lhs: Operand, rhs: Operand, ty: Type, dst_temp: usize) {
+    fn emit_sub(
+        &mut self,
+        function_symbol: SymbolId,
+        lhs: Operand,
+        rhs: Operand,
+        ty: Type,
+        dst_temp: usize,
+    ) {
         for byte in 0..ty.byte_width() {
             self.load_operand_byte_to_w(function_symbol, lhs, ty, byte);
             self.store_w_to_addr(self.layout.helpers.scratch0);
@@ -1896,6 +2022,11 @@ impl<'a> CodegenContext<'a> {
         let lhs_const = constant_operand_value(lhs, ty);
         let rhs_const = constant_operand_value(rhs, ty);
 
+        if ty.is_fixed() {
+            self.emit_runtime_binary_call(function, op, lhs, rhs, ty, dst_temp, diagnostics);
+            return;
+        }
+
         match op {
             BinaryOp::Multiply => {
                 if lhs_const == Some(0) || rhs_const == Some(0) {
@@ -1964,7 +2095,14 @@ impl<'a> CodegenContext<'a> {
                         self.helper_calls_avoided += 1;
                         return;
                     }
-                    self.emit_constant_shift(function_symbol, lhs, ty, dst_temp, count, op == BinaryOp::ShiftRight);
+                    self.emit_constant_shift(
+                        function_symbol,
+                        lhs,
+                        ty,
+                        dst_temp,
+                        count,
+                        op == BinaryOp::ShiftRight,
+                    );
                     self.helper_calls_avoided += 1;
                     return;
                 }
@@ -2009,7 +2147,8 @@ impl<'a> CodegenContext<'a> {
             self.load_operand_byte_to_w(function_symbol, src, ty, byte);
             let mask_byte = value_byte(mask, ty, byte);
             if mask_byte != 0xFF {
-                self.program.push(AsmLine::Instr(AsmInstr::Andlw(mask_byte)));
+                self.program
+                    .push(AsmLine::Instr(AsmInstr::Andlw(mask_byte)));
             }
             self.store_w_to_temp_byte(function_symbol, dst_temp, byte);
         }
@@ -2044,7 +2183,10 @@ impl<'a> CodegenContext<'a> {
         let helper = binary_helper(op, ty).expect("phase five helper exists");
         let info = helper.info();
         self.used_helpers.insert(helper);
-        self.emit_stack_growth_check(info.arg_bytes, &format!("runtime helper {} arguments", info.label));
+        self.emit_stack_growth_check(
+            info.arg_bytes,
+            &format!("runtime helper {} arguments", info.label),
+        );
         self.push_operand(function_symbol, lhs, info.operand_ty);
         self.push_operand(function_symbol, rhs, info.operand_ty);
         self.program
@@ -2229,7 +2371,13 @@ impl<'a> CodegenContext<'a> {
     }
 
     /// Copies an operand into one frame-scoped temporary slot.
-    fn copy_operand_to_temp(&mut self, function_symbol: SymbolId, src: Operand, ty: Type, temp: usize) {
+    fn copy_operand_to_temp(
+        &mut self,
+        function_symbol: SymbolId,
+        src: Operand,
+        ty: Type,
+        temp: usize,
+    ) {
         for byte in 0..ty.byte_width() {
             self.load_operand_byte_to_w(function_symbol, src, ty, byte);
             self.store_w_to_temp_byte(function_symbol, temp, byte);
@@ -2245,7 +2393,9 @@ impl<'a> CodegenContext<'a> {
         symbol: SymbolId,
     ) {
         match self.symbol_storage(symbol) {
-            SymbolStorage::Absolute(base) => self.copy_operand_to_slot(function_symbol, src, ty, base),
+            SymbolStorage::Absolute(base) => {
+                self.copy_operand_to_slot(function_symbol, src, ty, base)
+            }
             SymbolStorage::Frame(offset) => {
                 for byte in 0..ty.byte_width() {
                     self.load_operand_byte_to_w(function_symbol, src, ty, byte);
@@ -2256,7 +2406,13 @@ impl<'a> CodegenContext<'a> {
     }
 
     /// Copies an operand into any RAM slot, respecting 8-bit or 16-bit width.
-    fn copy_operand_to_slot(&mut self, function_symbol: SymbolId, src: Operand, ty: Type, dst_base: u16) {
+    fn copy_operand_to_slot(
+        &mut self,
+        function_symbol: SymbolId,
+        src: Operand,
+        ty: Type,
+        dst_base: u16,
+    ) {
         for byte in 0..ty.byte_width() {
             self.load_operand_byte_to_w(function_symbol, src, ty, byte);
             self.store_w_to_addr(dst_base + byte as u16);
@@ -2519,15 +2675,13 @@ impl<'a> CodegenContext<'a> {
     }
 
     /// Copies one 16-bit helper pair into another while applying a signed constant offset.
-    fn copy_pair_with_signed_offset(
-        &mut self,
-        src: RegisterPair,
-        dst: RegisterPair,
-        delta: u16,
-    ) {
+    fn copy_pair_with_signed_offset(&mut self, src: RegisterPair, dst: RegisterPair, delta: u16) {
         let delta_ty = Type::new(ScalarType::U16);
         self.load_addr_to_w(src.lo);
-        self.program.push(AsmLine::Instr(AsmInstr::Addlw(low_byte(i64::from(delta), delta_ty))));
+        self.program.push(AsmLine::Instr(AsmInstr::Addlw(low_byte(
+            i64::from(delta),
+            delta_ty,
+        ))));
         self.store_w_to_addr(dst.lo);
         self.load_addr_to_w(src.hi);
         self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
@@ -2612,7 +2766,13 @@ impl<'a> CodegenContext<'a> {
     }
 
     /// Branches on whether one active-frame scalar value is zero or non-zero.
-    fn emit_current_frame_nonzero_branch(&mut self, offset: u16, ty: Type, then_label: &str, else_label: &str) {
+    fn emit_current_frame_nonzero_branch(
+        &mut self,
+        offset: u16,
+        ty: Type,
+        then_label: &str,
+        else_label: &str,
+    ) {
         for byte in 0..ty.byte_width() {
             self.load_current_frame_byte_to_w(offset + byte as u16);
             self.program.push(AsmLine::Instr(AsmInstr::Btfss {
@@ -2899,7 +3059,8 @@ impl<'a> CodegenContext<'a> {
         let ptr_ty = Type::new(ScalarType::U16);
         self.load_operand_byte_to_w(function_symbol, ptr, ptr_ty, 0);
         if byte_offset != 0 {
-            self.program.push(AsmLine::Instr(AsmInstr::Addlw(byte_offset)));
+            self.program
+                .push(AsmLine::Instr(AsmInstr::Addlw(byte_offset)));
         }
         self.store_w_to_addr(self.layout.helpers.w_save);
 
@@ -2929,7 +3090,8 @@ impl<'a> CodegenContext<'a> {
     /// Stores `W` into the byte addressed by the current `FSR/IRP` pair.
     fn store_w_to_indirect(&mut self) {
         self.select_bank(INDF_ADDR);
-        self.program.push(AsmLine::Instr(AsmInstr::Movwf(low7(INDF_ADDR))));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Movwf(low7(INDF_ADDR))));
     }
 
     /// Saves carry and zero into one dedicated helper byte without disturbing `W`.
@@ -3064,9 +3226,10 @@ impl<'a> CodegenContext<'a> {
                     self.load_frame_byte_to_w(function_symbol, offset + byte_index as u16)
                 }
             },
-            Operand::Temp(temp) => {
-                self.load_frame_byte_to_w(function_symbol, self.temp_offset(function_symbol, temp) + byte_index as u16)
-            }
+            Operand::Temp(temp) => self.load_frame_byte_to_w(
+                function_symbol,
+                self.temp_offset(function_symbol, temp) + byte_index as u16,
+            ),
         }
     }
 
@@ -3112,7 +3275,8 @@ impl<'a> CodegenContext<'a> {
     /// Stores the current `W` value into a banked RAM address.
     fn store_w_to_addr(&mut self, addr: u16) {
         self.select_bank(addr);
-        self.program.push(AsmLine::Instr(AsmInstr::Movwf(low7(addr))));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Movwf(low7(addr))));
         if addr == STATUS_ADDR {
             self.current_bank = UNKNOWN_BANK;
         }
@@ -3120,7 +3284,8 @@ impl<'a> CodegenContext<'a> {
 
     /// Stores the current `W` value into a mirrored/common address without bank selection.
     fn store_w_to_direct_addr(&mut self, addr: u16) {
-        self.program.push(AsmLine::Instr(AsmInstr::Movwf(low7(addr))));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Movwf(low7(addr))));
         if addr == STATUS_ADDR {
             self.current_bank = UNKNOWN_BANK;
         }
@@ -3134,7 +3299,8 @@ impl<'a> CodegenContext<'a> {
     /// Clears one banked RAM address to zero.
     fn clear_addr(&mut self, addr: u16) {
         self.select_bank(addr);
-        self.program.push(AsmLine::Instr(AsmInstr::Clrf(low7(addr))));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Clrf(low7(addr))));
     }
 
     /// Clears every byte that belongs to a value slot.
@@ -3162,11 +3328,15 @@ impl<'a> CodegenContext<'a> {
     fn branch_to_label(&mut self, label: &str) {
         let stub_label = self.unique_label("branch_stub");
         let after_label = self.unique_label("branch_after");
-        self.program.push(AsmLine::Instr(AsmInstr::Goto(stub_label.clone())));
-        self.program.push(AsmLine::Instr(AsmInstr::Goto(after_label.clone())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Goto(stub_label.clone())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Goto(after_label.clone())));
         self.program.push(AsmLine::Label(stub_label));
-        self.program.push(AsmLine::Instr(AsmInstr::SetPage(label.to_string())));
-        self.program.push(AsmLine::Instr(AsmInstr::Goto(label.to_string())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage(label.to_string())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Goto(label.to_string())));
         self.program.push(AsmLine::Label(after_label));
     }
 
@@ -3179,16 +3349,20 @@ impl<'a> CodegenContext<'a> {
         let status = low7(STATUS_ADDR);
         if self.current_bank == UNKNOWN_BANK || ((self.current_bank ^ bank) & 0x01) != 0 {
             if (bank & 0x01) == 0 {
-                self.program.push(AsmLine::Instr(AsmInstr::Bcf { f: status, b: 5 }));
+                self.program
+                    .push(AsmLine::Instr(AsmInstr::Bcf { f: status, b: 5 }));
             } else {
-                self.program.push(AsmLine::Instr(AsmInstr::Bsf { f: status, b: 5 }));
+                self.program
+                    .push(AsmLine::Instr(AsmInstr::Bsf { f: status, b: 5 }));
             }
         }
         if self.current_bank == UNKNOWN_BANK || ((self.current_bank ^ bank) & 0x02) != 0 {
             if (bank & 0x02) == 0 {
-                self.program.push(AsmLine::Instr(AsmInstr::Bcf { f: status, b: 6 }));
+                self.program
+                    .push(AsmLine::Instr(AsmInstr::Bcf { f: status, b: 6 }));
             } else {
-                self.program.push(AsmLine::Instr(AsmInstr::Bsf { f: status, b: 6 }));
+                self.program
+                    .push(AsmLine::Instr(AsmInstr::Bsf { f: status, b: 6 }));
             }
         }
         self.current_bank = bank;
@@ -3212,11 +3386,13 @@ impl<'a> CodegenContext<'a> {
         if !self.options.stack_check {
             return;
         }
-        self.program.push(AsmLine::Label("__stack_overflow_trap".to_string()));
+        self.program
+            .push(AsmLine::Label("__stack_overflow_trap".to_string()));
         self.program
             .push(AsmLine::Comment("phase18 stack overflow trap".to_string()));
-        self.program
-            .push(AsmLine::Instr(AsmInstr::Goto("__stack_overflow_trap".to_string())));
+        self.program.push(AsmLine::Instr(AsmInstr::Goto(
+            "__stack_overflow_trap".to_string(),
+        )));
     }
 
     /// Emits every Phase 14 ROM object as one callable RETLW table in program memory.
@@ -3236,11 +3412,21 @@ impl<'a> CodegenContext<'a> {
                 .iter()
                 .find(|global| global.symbol == placement.symbol)
             else {
-                diagnostics.error("backend", None, "missing ROM global metadata during emission", None);
+                diagnostics.error(
+                    "backend",
+                    None,
+                    "missing ROM global metadata during emission",
+                    None,
+                );
                 continue;
             };
             let symbol = &self.typed_program.symbols[placement.symbol];
-            let TypedGlobalInitializer::Bytes(bytes) = global.initializer.as_ref().cloned().unwrap_or(TypedGlobalInitializer::Bytes(Vec::new())) else {
+            let TypedGlobalInitializer::Bytes(bytes) = global
+                .initializer
+                .as_ref()
+                .cloned()
+                .unwrap_or(TypedGlobalInitializer::Bytes(Vec::new()))
+            else {
                 diagnostics.error(
                     "backend",
                     None,
@@ -3260,7 +3446,8 @@ impl<'a> CodegenContext<'a> {
                 symbol.ty.top_array_len().unwrap_or(0),
                 bytes.len()
             )));
-            self.program.push(AsmLine::Label(rom_object_label(symbol.id)));
+            self.program
+                .push(AsmLine::Label(rom_object_label(symbol.id)));
             self.program.push(AsmLine::Instr(AsmInstr::Addwf {
                 f: low7(self.target.sfr_address("PCL").unwrap_or(0x02)),
                 d: Dest::F,
@@ -3345,8 +3532,7 @@ impl<'a> CodegenContext<'a> {
                         None,
                         format!(
                             "ROM object `{}` would overlap generated code at 0x{:04X}",
-                            symbol.name,
-                            start
+                            symbol.name, start
                         ),
                         Some("reduce code size or shrink ROM data for this target".to_string()),
                     );
@@ -3404,11 +3590,24 @@ impl<'a> CodegenContext<'a> {
         self.emit_runtime_prologue(info);
 
         match helper {
+            RuntimeHelper::MulQ8_8 | RuntimeHelper::MulUQ8_8 => {
+                self.emit_fixed_q8_8_mul_helper(
+                    ty,
+                    local_base,
+                    matches!(helper, RuntimeHelper::MulQ8_8),
+                );
+            }
             RuntimeHelper::MulU8 | RuntimeHelper::MulU16 | RuntimeHelper::MulU32 => {
                 self.clear_current_frame_slot(work_offset, ty);
                 self.emit_const_to_w(ty.bit_width() as u8);
                 self.store_w_to_current_frame_byte(count_offset);
-                self.emit_unsigned_mul_core(arg0_offset, arg1_offset, work_offset, count_offset, ty);
+                self.emit_unsigned_mul_core(
+                    arg0_offset,
+                    arg1_offset,
+                    work_offset,
+                    count_offset,
+                    ty,
+                );
                 self.emit_return_current_frame_value(work_offset, ty);
             }
             RuntimeHelper::MulI8 | RuntimeHelper::MulI16 | RuntimeHelper::MulI32 => {
@@ -3418,7 +3617,13 @@ impl<'a> CodegenContext<'a> {
                 self.clear_current_frame_slot(work_offset, ty);
                 self.emit_const_to_w(ty.bit_width() as u8);
                 self.store_w_to_current_frame_byte(count_offset);
-                self.emit_unsigned_mul_core(arg0_offset, arg1_offset, work_offset, count_offset, ty);
+                self.emit_unsigned_mul_core(
+                    arg0_offset,
+                    arg1_offset,
+                    work_offset,
+                    count_offset,
+                    ty,
+                );
 
                 let negate_label = self.unique_label("rt_mul_neg");
                 let done_label = self.unique_label("rt_mul_done");
@@ -3427,6 +3632,13 @@ impl<'a> CodegenContext<'a> {
                 self.negate_current_frame_value(work_offset, ty);
                 self.program.push(AsmLine::Label(done_label));
                 self.emit_return_current_frame_value(work_offset, ty);
+            }
+            RuntimeHelper::DivQ8_8 | RuntimeHelper::DivUQ8_8 => {
+                self.emit_fixed_q8_8_div_helper(
+                    ty,
+                    local_base,
+                    matches!(helper, RuntimeHelper::DivQ8_8),
+                );
             }
             RuntimeHelper::DivU8
             | RuntimeHelper::DivU16
@@ -3560,6 +3772,113 @@ impl<'a> CodegenContext<'a> {
         self.program.push(AsmLine::Instr(AsmInstr::Return));
     }
 
+    /// Emits Q8.8 fixed multiply: `(raw_a * raw_b) >> 8`, returning the low 16 result bytes.
+    fn emit_fixed_q8_8_mul_helper(&mut self, ty: Type, local_base: u16, signed: bool) {
+        let wide_ty = Type::new(ScalarType::U32);
+        let arg0_offset = 0u16;
+        let arg1_offset = ty.byte_width() as u16;
+        let lhs32_offset = local_base;
+        let rhs32_offset = lhs32_offset + 4;
+        let work32_offset = rhs32_offset + 4;
+        let count_offset = work32_offset + 4;
+        let flag_offset = count_offset + 1;
+
+        if signed {
+            self.clear_current_frame_slot(flag_offset, Type::new(ScalarType::U8));
+            self.emit_runtime_negate_if_signed(arg0_offset, ty, flag_offset, 0x01);
+            self.emit_runtime_negate_if_signed(arg1_offset, ty, flag_offset, 0x01);
+        }
+        self.clear_current_frame_slot(lhs32_offset, wide_ty);
+        self.clear_current_frame_slot(rhs32_offset, wide_ty);
+        self.clear_current_frame_slot(work32_offset, wide_ty);
+        self.copy_current_frame_bytes(arg0_offset, lhs32_offset, ty.byte_width());
+        self.copy_current_frame_bytes(arg1_offset, rhs32_offset, ty.byte_width());
+        self.emit_const_to_w(wide_ty.bit_width() as u8);
+        self.store_w_to_current_frame_byte(count_offset);
+        self.emit_unsigned_mul_core(
+            lhs32_offset,
+            rhs32_offset,
+            work32_offset,
+            count_offset,
+            wide_ty,
+        );
+        for _ in 0..8 {
+            self.shift_current_frame_value_right(work32_offset, wide_ty, false);
+        }
+        if signed {
+            let negate_label = self.unique_label("rt_qmul_neg");
+            let done_label = self.unique_label("rt_qmul_done");
+            self.branch_on_current_frame_bit(flag_offset, 0, &negate_label, &done_label);
+            self.program.push(AsmLine::Label(negate_label));
+            self.negate_current_frame_value(work32_offset, ty);
+            self.program.push(AsmLine::Label(done_label));
+        }
+        self.emit_return_current_frame_value(work32_offset, ty);
+    }
+
+    /// Emits Q8.8 fixed divide: `(raw_a << 8) / raw_b`, returning the low 16 quotient bytes.
+    fn emit_fixed_q8_8_div_helper(&mut self, ty: Type, local_base: u16, signed: bool) {
+        let wide_ty = Type::new(ScalarType::U32);
+        let arg0_offset = 0u16;
+        let arg1_offset = ty.byte_width() as u16;
+        let dividend32_offset = local_base;
+        let divisor32_offset = dividend32_offset + 4;
+        let remainder32_offset = divisor32_offset + 4;
+        let count_offset = remainder32_offset + 4;
+        let flag_offset = count_offset + 1;
+        let core_label = self.unique_label("rt_qdiv_core");
+        let zero_label = self.unique_label("rt_qdiv_zero");
+        let finish_label = self.unique_label("rt_qdiv_finish");
+
+        if signed {
+            self.clear_current_frame_slot(flag_offset, Type::new(ScalarType::U8));
+            self.emit_runtime_negate_if_signed(arg0_offset, ty, flag_offset, 0x01);
+            self.emit_runtime_negate_if_signed(arg1_offset, ty, flag_offset, 0x01);
+        }
+        self.clear_current_frame_slot(dividend32_offset, wide_ty);
+        self.clear_current_frame_slot(divisor32_offset, wide_ty);
+        self.clear_current_frame_slot(remainder32_offset, wide_ty);
+        self.copy_current_frame_bytes(arg0_offset, dividend32_offset, ty.byte_width());
+        self.copy_current_frame_bytes(arg1_offset, divisor32_offset, ty.byte_width());
+        for _ in 0..8 {
+            self.shift_current_frame_value_left(dividend32_offset, wide_ty);
+        }
+        self.emit_const_to_w(wide_ty.bit_width() as u8);
+        self.store_w_to_current_frame_byte(count_offset);
+        self.emit_current_frame_nonzero_branch(divisor32_offset, wide_ty, &core_label, &zero_label);
+        self.program.push(AsmLine::Label(core_label));
+        self.emit_unsigned_divmod_core(
+            dividend32_offset,
+            divisor32_offset,
+            remainder32_offset,
+            count_offset,
+            wide_ty,
+            &finish_label,
+        );
+        self.program.push(AsmLine::Label(zero_label));
+        self.clear_current_frame_slot(dividend32_offset, wide_ty);
+        self.clear_current_frame_slot(remainder32_offset, wide_ty);
+        self.branch_to_label(&finish_label);
+        self.program.push(AsmLine::Label(finish_label));
+        if signed {
+            let negate_label = self.unique_label("rt_qdiv_neg");
+            let done_label = self.unique_label("rt_qdiv_done");
+            self.branch_on_current_frame_bit(flag_offset, 0, &negate_label, &done_label);
+            self.program.push(AsmLine::Label(negate_label));
+            self.negate_current_frame_value(dividend32_offset, ty);
+            self.program.push(AsmLine::Label(done_label));
+        }
+        self.emit_return_current_frame_value(dividend32_offset, ty);
+    }
+
+    /// Copies contiguous bytes inside the active helper frame.
+    fn copy_current_frame_bytes(&mut self, src_offset: u16, dst_offset: u16, width: usize) {
+        for byte in 0..width {
+            self.load_current_frame_byte_to_w(src_offset + byte as u16);
+            self.store_w_to_current_frame_byte(dst_offset + byte as u16);
+        }
+    }
+
     /// Emits the common stack-first runtime-helper prologue.
     fn emit_runtime_prologue(&mut self, info: RuntimeHelperInfo) {
         self.emit_stack_growth_check(
@@ -3618,7 +3937,12 @@ impl<'a> CodegenContext<'a> {
         let next_label = self.unique_label("rt_mul_next");
         let done_label = self.unique_label("rt_mul_done");
         self.program.push(AsmLine::Label(loop_label.clone()));
-        self.emit_current_frame_nonzero_branch(count_offset, Type::new(ScalarType::U8), &body_label, &done_label);
+        self.emit_current_frame_nonzero_branch(
+            count_offset,
+            Type::new(ScalarType::U8),
+            &body_label,
+            &done_label,
+        );
         self.program.push(AsmLine::Label(body_label));
         self.branch_on_current_frame_bit(multiplier_offset, 0, &add_label, &next_label);
         self.program.push(AsmLine::Label(add_label));
@@ -3644,7 +3968,12 @@ impl<'a> CodegenContext<'a> {
         let loop_label = self.unique_label("rt_div_loop");
         let body_label = self.unique_label("rt_div_body");
         self.program.push(AsmLine::Label(loop_label.clone()));
-        self.emit_current_frame_nonzero_branch(count_offset, Type::new(ScalarType::U8), &body_label, finish_label);
+        self.emit_current_frame_nonzero_branch(
+            count_offset,
+            Type::new(ScalarType::U8),
+            &body_label,
+            finish_label,
+        );
         self.program.push(AsmLine::Label(body_label));
         self.program.push(AsmLine::Instr(AsmInstr::Bcf {
             f: low7(STATUS_ADDR),
@@ -3670,7 +3999,13 @@ impl<'a> CodegenContext<'a> {
     }
 
     /// Negates a signed arg in place and toggles one helper flag when the sign bit was set.
-    fn emit_runtime_negate_if_signed(&mut self, offset: u16, ty: Type, flag_offset: u16, flag_mask: u8) {
+    fn emit_runtime_negate_if_signed(
+        &mut self,
+        offset: u16,
+        ty: Type,
+        flag_offset: u16,
+        flag_mask: u8,
+    ) {
         let negate_label = self.unique_label("rt_negate");
         let done_label = self.unique_label("rt_negate_done");
         self.branch_on_current_frame_bit(
@@ -3681,14 +4016,21 @@ impl<'a> CodegenContext<'a> {
         );
         self.program.push(AsmLine::Label(negate_label));
         self.load_current_frame_byte_to_w(flag_offset);
-        self.program.push(AsmLine::Instr(AsmInstr::Xorlw(flag_mask)));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Xorlw(flag_mask)));
         self.store_w_to_current_frame_byte(flag_offset);
         self.negate_current_frame_value(offset, ty);
         self.program.push(AsmLine::Label(done_label));
     }
 
     /// Sets one helper flag when a signed arg carries a negative sign bit.
-    fn emit_runtime_set_flag_if_signed(&mut self, offset: u16, ty: Type, flag_offset: u16, flag_mask: u8) {
+    fn emit_runtime_set_flag_if_signed(
+        &mut self,
+        offset: u16,
+        ty: Type,
+        flag_offset: u16,
+        flag_mask: u8,
+    ) {
         let set_label = self.unique_label("rt_setflag");
         let done_label = self.unique_label("rt_setflag_done");
         self.branch_on_current_frame_bit(
@@ -3699,7 +4041,8 @@ impl<'a> CodegenContext<'a> {
         );
         self.program.push(AsmLine::Label(set_label));
         self.load_current_frame_byte_to_w(flag_offset);
-        self.program.push(AsmLine::Instr(AsmInstr::Iorlw(flag_mask)));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Iorlw(flag_mask)));
         self.store_w_to_current_frame_byte(flag_offset);
         self.program.push(AsmLine::Label(done_label));
     }
@@ -3785,7 +4128,10 @@ impl<'a> CodegenContext<'a> {
     }
 
     /// Looks up one emitted Phase 17 dispatcher group by normalized function-pointer signature.
-    fn function_pointer_dispatch_group(&self, signature: Type) -> Option<&FunctionPointerDispatchGroup> {
+    fn function_pointer_dispatch_group(
+        &self,
+        signature: Type,
+    ) -> Option<&FunctionPointerDispatchGroup> {
         let signature = signature.without_object_qualifiers();
         self.typed_program
             .function_pointer_groups
@@ -3859,8 +4205,10 @@ impl<'a> CodegenContext<'a> {
                     target.id,
                     self.symbol_name(target.function)
                 )));
-                self.program.push(AsmLine::Instr(AsmInstr::SetPage(callee_label.clone())));
-                self.program.push(AsmLine::Instr(AsmInstr::Call(callee_label)));
+                self.program
+                    .push(AsmLine::Instr(AsmInstr::SetPage(callee_label.clone())));
+                self.program
+                    .push(AsmLine::Instr(AsmInstr::Call(callee_label)));
                 self.branch_to_label(&done_label);
                 self.program.push(AsmLine::Label(next_label));
             }
@@ -3894,15 +4242,24 @@ fn function_label(name: &str) -> String {
 /// Builds the assembly label used for one Phase 17 function-pointer dispatcher.
 fn function_pointer_dispatch_label(signature: Type) -> String {
     let mut key = String::new();
-    key.push_str(match signature.function_return_scalar().unwrap_or(ScalarType::Void) {
-        ScalarType::Void => "v",
-        ScalarType::I8 => "i8",
-        ScalarType::U8 => "u8",
-        ScalarType::I16 => "i16",
-        ScalarType::U16 => "u16",
-        ScalarType::I32 => "i32",
-        ScalarType::U32 => "u32",
-    });
+    key.push_str(
+        match signature
+            .function_return_scalar()
+            .unwrap_or(ScalarType::Void)
+        {
+            ScalarType::Void => "v",
+            ScalarType::I8 => "i8",
+            ScalarType::U8 => "u8",
+            ScalarType::I16 => "i16",
+            ScalarType::U16 => "u16",
+            ScalarType::I32 => "i32",
+            ScalarType::U32 => "u32",
+            ScalarType::Q8_8 => "q8_8",
+            ScalarType::UQ8_8 => "uq8_8",
+            ScalarType::Q16_16 => "q16_16",
+            ScalarType::UQ16_16 => "uq16_16",
+        },
+    );
     key.push_str("__");
     if signature.function_param_len().unwrap_or(0) == 0 {
         key.push_str("void");
@@ -3911,15 +4268,24 @@ fn function_pointer_dispatch_label(signature: Type) -> String {
             if index != 0 {
                 key.push('_');
             }
-            key.push_str(match signature.function_param_scalar(index).unwrap_or(ScalarType::Void) {
-                ScalarType::Void => "v",
-                ScalarType::I8 => "i8",
-                ScalarType::U8 => "u8",
-                ScalarType::I16 => "i16",
-                ScalarType::U16 => "u16",
-                ScalarType::I32 => "i32",
-                ScalarType::U32 => "u32",
-            });
+            key.push_str(
+                match signature
+                    .function_param_scalar(index)
+                    .unwrap_or(ScalarType::Void)
+                {
+                    ScalarType::Void => "v",
+                    ScalarType::I8 => "i8",
+                    ScalarType::U8 => "u8",
+                    ScalarType::I16 => "i16",
+                    ScalarType::U16 => "u16",
+                    ScalarType::I32 => "i32",
+                    ScalarType::U32 => "u32",
+                    ScalarType::Q8_8 => "q8_8",
+                    ScalarType::UQ8_8 => "uq8_8",
+                    ScalarType::Q16_16 => "q16_16",
+                    ScalarType::UQ16_16 => "uq16_16",
+                },
+            );
         }
     }
     format!("__fp_dispatch_{key}")
@@ -3947,7 +4313,9 @@ fn compute_max_stack_depth_with_interrupts(
         for block in &function.blocks {
             for instr in &block.instructions {
                 match instr {
-                    IrInstr::Call { function: callee, .. } => callees.push(*callee),
+                    IrInstr::Call {
+                        function: callee, ..
+                    } => callees.push(*callee),
                     IrInstr::IndirectCall { signature, .. } => {
                         if let Some(group) = typed_program
                             .function_pointer_groups
@@ -3991,7 +4359,11 @@ fn compute_max_stack_depth_with_interrupts(
         .functions
         .iter()
         .filter(|function| function.is_interrupt)
-        .map(|function| frames.get(&function.symbol).map_or(0, |frame| frame.frame_bytes))
+        .map(|function| {
+            frames
+                .get(&function.symbol)
+                .map_or(0, |frame| frame.frame_bytes)
+        })
         .max()
         .unwrap_or(0);
     normal_max + interrupt_extra
@@ -4016,7 +4388,9 @@ fn analyze_stack(
         for block in &function.blocks {
             for instr in &block.instructions {
                 match instr {
-                    IrInstr::Call { function: callee, .. } => callees.push(*callee),
+                    IrInstr::Call {
+                        function: callee, ..
+                    } => callees.push(*callee),
                     IrInstr::IndirectCall { signature, .. } => {
                         let target_set = if let Some(group) = typed_program
                             .function_pointer_groups
@@ -4098,7 +4472,12 @@ fn analyze_stack(
         .functions
         .iter()
         .filter(|function| function.is_interrupt)
-        .map(|function| layout.frames.get(&function.symbol).map_or(0, |frame| frame.frame_bytes))
+        .map(|function| {
+            layout
+                .frames
+                .get(&function.symbol)
+                .map_or(0, |frame| frame.frame_bytes)
+        })
         .max()
         .unwrap_or(0);
     let isr_context_bytes = layout.interrupt.map_or(0, |_| {
@@ -4135,7 +4514,10 @@ fn analyze_stack(
 
 #[cfg(test)]
 /// Compatibility wrapper for tests that do not model interrupts explicitly.
-fn compute_max_stack_depth(ir_program: &IrProgram, frames: &BTreeMap<SymbolId, FrameLayout>) -> u16 {
+fn compute_max_stack_depth(
+    ir_program: &IrProgram,
+    frames: &BTreeMap<SymbolId, FrameLayout>,
+) -> u16 {
     compute_max_stack_depth_with_interrupts(
         &TypedProgram {
             symbols: Vec::new(),
@@ -4172,14 +4554,7 @@ fn compute_function_stack_depth(
         .map(|callee| {
             let arg_bytes = frames.get(callee).map_or(0, |frame| frame.arg_bytes);
             arg_bytes
-                + compute_function_stack_depth(
-                    *callee,
-                    calls,
-                    helper_depths,
-                    frames,
-                    memo,
-                    active,
-                )
+                + compute_function_stack_depth(*callee, calls, helper_depths, frames, memo, active)
         })
         .max()
         .unwrap_or(0);
@@ -4212,7 +4587,8 @@ fn stack_bytes_for_function(
         .flatten()
         .map(|callee| {
             let arg_bytes = frames.get(callee).map_or(0, |frame| frame.arg_bytes);
-            arg_bytes + stack_bytes_for_function(*callee, calls, helper_depths, frames, memo, active)
+            arg_bytes
+                + stack_bytes_for_function(*callee, calls, helper_depths, frames, memo, active)
         })
         .max()
         .unwrap_or(0);
@@ -4270,10 +4646,22 @@ fn render_stack_report(
     let _ = writeln!(
         output,
         "runtime stack checks: {}",
-        if options.stack_check { "enabled" } else { "disabled" }
+        if options.stack_check {
+            "enabled"
+        } else {
+            "disabled"
+        }
     );
-    let _ = writeln!(output, "isr frame bytes: {}", analysis.summary.isr_frame_bytes);
-    let _ = writeln!(output, "isr context bytes: {}", analysis.summary.isr_context_bytes);
+    let _ = writeln!(
+        output,
+        "isr frame bytes: {}",
+        analysis.summary.isr_frame_bytes
+    );
+    let _ = writeln!(
+        output,
+        "isr context bytes: {}",
+        analysis.summary.isr_context_bytes
+    );
     let _ = writeln!(
         output,
         "function-pointer groups: {} targets={} unknown_target_sets={}",
@@ -4309,7 +4697,11 @@ fn render_stack_report(
         }
         for group in &info.indirect_groups {
             if group.unknown {
-                let _ = writeln!(output, "  indirect {} -> unknown target set", group.signature);
+                let _ = writeln!(
+                    output,
+                    "  indirect {} -> unknown target set",
+                    group.signature
+                );
             } else {
                 let names = group
                     .targets
@@ -4329,7 +4721,11 @@ fn render_stack_report(
     let _ = writeln!(
         output,
         "Trap: __stack_overflow_trap is infinite loop{}.",
-        if options.stack_check { " when enabled" } else { " (not emitted unless --stack-check)" }
+        if options.stack_check {
+            " when enabled"
+        } else {
+            " (not emitted unless --stack-check)"
+        }
     );
     output
 }
@@ -4357,18 +4753,32 @@ fn build_map(
         .symbols
         .iter()
         .filter(|symbol| symbol.kind != SymbolKind::Function)
-        .filter_map(|symbol| {
-            match layout.symbol_storage.get(&symbol.id).copied() {
-                Some(SymbolStorage::Absolute(addr)) => Some((format_data_symbol_name(symbol), addr)),
+        .filter_map(
+            |symbol| match layout.symbol_storage.get(&symbol.id).copied() {
+                Some(SymbolStorage::Absolute(addr)) => {
+                    Some((format_data_symbol_name(symbol), addr))
+                }
                 Some(SymbolStorage::Frame(_)) | None => None,
-            }
-        })
+            },
+        )
         .collect::<Vec<_>>();
     data_symbols.extend([
-        ("__abi.stack_ptr.lo".to_string(), layout.helpers.stack_ptr.lo),
-        ("__abi.stack_ptr.hi".to_string(), layout.helpers.stack_ptr.hi),
-        ("__abi.frame_ptr.lo".to_string(), layout.helpers.frame_ptr.lo),
-        ("__abi.frame_ptr.hi".to_string(), layout.helpers.frame_ptr.hi),
+        (
+            "__abi.stack_ptr.lo".to_string(),
+            layout.helpers.stack_ptr.lo,
+        ),
+        (
+            "__abi.stack_ptr.hi".to_string(),
+            layout.helpers.stack_ptr.hi,
+        ),
+        (
+            "__abi.frame_ptr.lo".to_string(),
+            layout.helpers.frame_ptr.lo,
+        ),
+        (
+            "__abi.frame_ptr.hi".to_string(),
+            layout.helpers.frame_ptr.hi,
+        ),
         ("__stack_ptr".to_string(), layout.helpers.stack_ptr.lo),
         ("__stack_ptr.lo".to_string(), layout.helpers.stack_ptr.lo),
         ("__stack_ptr.hi".to_string(), layout.helpers.stack_ptr.hi),
@@ -4376,8 +4786,14 @@ fn build_map(
         ("__frame_ptr.lo".to_string(), layout.helpers.frame_ptr.lo),
         ("__frame_ptr.hi".to_string(), layout.helpers.frame_ptr.hi),
         ("__abi.return_high".to_string(), layout.helpers.return_high),
-        ("__abi.return_upper0".to_string(), layout.helpers.return_upper0),
-        ("__abi.return_upper1".to_string(), layout.helpers.return_upper1),
+        (
+            "__abi.return_upper0".to_string(),
+            layout.helpers.return_upper0,
+        ),
+        (
+            "__abi.return_upper1".to_string(),
+            layout.helpers.return_upper1,
+        ),
         ("__abi.scratch0".to_string(), layout.helpers.scratch0),
         ("__abi.scratch1".to_string(), layout.helpers.scratch1),
         ("__abi.flag_save".to_string(), layout.helpers.flag_save),
@@ -4394,8 +4810,14 @@ fn build_map(
             ("__isr_ctx.pclath".to_string(), interrupt.pclath),
             ("__isr_ctx.fsr".to_string(), interrupt.fsr),
             ("__isr_ctx.return_high".to_string(), interrupt.return_high),
-            ("__isr_ctx.return_upper0".to_string(), interrupt.return_upper0),
-            ("__isr_ctx.return_upper1".to_string(), interrupt.return_upper1),
+            (
+                "__isr_ctx.return_upper0".to_string(),
+                interrupt.return_upper0,
+            ),
+            (
+                "__isr_ctx.return_upper1".to_string(),
+                interrupt.return_upper1,
+            ),
             ("__isr_ctx.scratch0".to_string(), interrupt.scratch0),
             ("__isr_ctx.scratch1".to_string(), interrupt.scratch1),
             ("__isr_ctx.flag_save".to_string(), interrupt.flag_save),
@@ -4471,10 +4893,16 @@ fn eval_const_expr(expr: &TypedExpr) -> i64 {
     let target_ty = expr.ty;
     match &expr.kind {
         TypedExprKind::IntLiteral(value) => *value,
-        TypedExprKind::Unary { op, expr } => eval_unary(*op, eval_const_expr(expr), expr.ty, target_ty),
-        TypedExprKind::Binary { op, lhs, rhs } => {
-            eval_binary(*op, eval_const_expr(lhs), eval_const_expr(rhs), lhs.ty, target_ty)
+        TypedExprKind::Unary { op, expr } => {
+            eval_unary(*op, eval_const_expr(expr), expr.ty, target_ty)
         }
+        TypedExprKind::Binary { op, lhs, rhs } => eval_binary(
+            *op,
+            eval_const_expr(lhs),
+            eval_const_expr(rhs),
+            lhs.ty,
+            target_ty,
+        ),
         TypedExprKind::Cast {
             kind,
             expr: value_expr,
@@ -4484,7 +4912,9 @@ fn eval_const_expr(expr: &TypedExpr) -> i64 {
                 CastKind::ZeroExtend | CastKind::Truncate | CastKind::Bitcast => {
                     normalize_value(value, target_ty)
                 }
-                CastKind::SignExtend => normalize_value(signed_value(value, value_expr.ty), target_ty),
+                CastKind::SignExtend => {
+                    normalize_value(signed_value(value, value_expr.ty), target_ty)
+                }
             }
         }
         TypedExprKind::Assign { .. }
@@ -4544,17 +4974,17 @@ const fn negate_u16(value: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::{
-        compile_program, compute_max_stack_depth, low7, BackendOptions, CodegenContext, FrameLayout,
-        StorageAllocator,
+        BackendOptions, CodegenContext, FrameLayout, StorageAllocator, compile_program,
+        compute_max_stack_depth, low7,
     };
-    use crate::backend::pic16::midrange14::asm::{AsmInstr, AsmLine};
     use crate::backend::pic16::devices::DeviceRegistry;
-    use crate::frontend::ast::BinaryOp;
+    use crate::backend::pic16::midrange14::asm::{AsmInstr, AsmLine};
+    use crate::common::source::Span;
     use crate::diagnostics::{DiagnosticBag, WarningProfile};
+    use crate::frontend::ast::BinaryOp;
     use crate::frontend::semantic::{Symbol, SymbolKind, TypedFunction, TypedGlobal, TypedProgram};
     use crate::frontend::types::{ScalarType, StorageClass, Type};
     use crate::ir::model::{IrBlock, IrFunction, IrInstr, IrProgram, IrTerminator, Operand};
-    use crate::common::source::Span;
     use std::collections::BTreeMap;
 
     #[test]
@@ -4649,7 +5079,11 @@ mod tests {
                         instructions: vec![IrInstr::Call {
                             dst: None,
                             function: 2,
-                            args: vec![Operand::Constant(1), Operand::Constant(2), Operand::Constant(3)],
+                            args: vec![
+                                Operand::Constant(1),
+                                Operand::Constant(2),
+                                Operand::Constant(3),
+                            ],
                         }],
                         terminator: IrTerminator::Return(None),
                     }],
@@ -4751,7 +5185,11 @@ mod tests {
                         instructions: vec![IrInstr::Call {
                             dst: Some(0),
                             function: 1,
-                            args: vec![Operand::Constant(1), Operand::Constant(2), Operand::Constant(3)],
+                            args: vec![
+                                Operand::Constant(1),
+                                Operand::Constant(2),
+                                Operand::Constant(3),
+                            ],
                         }],
                         terminator: IrTerminator::Return(None),
                     }],
@@ -4787,8 +5225,20 @@ mod tests {
         let asm = output.program.render();
         assert!(asm.contains("stack base="));
         assert!(asm.contains("call fn_sum3"));
-        assert!(output.map.data_symbols.iter().any(|(name, _)| name == "__abi.stack_ptr.lo"));
-        assert!(output.map.data_symbols.iter().any(|(name, _)| name == "__stack.base"));
+        assert!(
+            output
+                .map
+                .data_symbols
+                .iter()
+                .any(|(name, _)| name == "__abi.stack_ptr.lo")
+        );
+        assert!(
+            output
+                .map
+                .data_symbols
+                .iter()
+                .any(|(name, _)| name == "__stack.base")
+        );
     }
 
     #[test]
@@ -5023,7 +5473,12 @@ mod tests {
         let target = registry.device("pic16f628a").expect("device");
         let u16_ty = Type::new(ScalarType::U16);
         let program = TypedProgram {
-            symbols: vec![symbol(0, "main", Type::new(ScalarType::Void), SymbolKind::Function)],
+            symbols: vec![symbol(
+                0,
+                "main",
+                Type::new(ScalarType::Void),
+                SymbolKind::Function,
+            )],
             globals: Vec::new(),
             functions: vec![TypedFunction {
                 symbol: 0,
@@ -5072,7 +5527,13 @@ mod tests {
         let asm = output.program.render();
         assert!(asm.contains("call __rt_mul_u16"));
         assert!(asm.contains("__rt_mul_u16:"));
-        assert!(output.map.code_symbols.iter().any(|(name, _)| name == "__rt_mul_u16"));
+        assert!(
+            output
+                .map
+                .code_symbols
+                .iter()
+                .any(|(name, _)| name == "__rt_mul_u16")
+        );
     }
 
     #[test]
@@ -5082,7 +5543,12 @@ mod tests {
         let target = registry.device("pic16f628a").expect("device");
         let u16_ty = Type::new(ScalarType::U16);
         let program = TypedProgram {
-            symbols: vec![symbol(0, "main", Type::new(ScalarType::Void), SymbolKind::Function)],
+            symbols: vec![symbol(
+                0,
+                "main",
+                Type::new(ScalarType::Void),
+                SymbolKind::Function,
+            )],
             globals: Vec::new(),
             functions: vec![TypedFunction {
                 symbol: 0,
@@ -5139,7 +5605,12 @@ mod tests {
         let registry = DeviceRegistry::new();
         let target = registry.device("pic16f628a").expect("device");
         let program = TypedProgram {
-            symbols: vec![symbol(0, "main", Type::new(ScalarType::Void), SymbolKind::Function)],
+            symbols: vec![symbol(
+                0,
+                "main",
+                Type::new(ScalarType::Void),
+                SymbolKind::Function,
+            )],
             globals: Vec::new(),
             functions: vec![TypedFunction {
                 symbol: 0,
@@ -5276,21 +5747,28 @@ mod tests {
             .find(|(name, _)| name == "__interrupt_dispatch")
             .expect("interrupt dispatch")
             .1;
-        assert_eq!(output.words[&target.vectors.reset], 0x2800 | (reset_dispatch & 0x07FF));
+        assert_eq!(
+            output.words[&target.vectors.reset],
+            0x2800 | (reset_dispatch & 0x07FF)
+        );
         assert_eq!(
             output.words[&target.vectors.interrupt],
             0x2800 | (interrupt_dispatch & 0x07FF)
         );
-        assert!(output
-            .map
-            .data_symbols
-            .iter()
-            .any(|(name, _)| name == "__isr_ctx.w"));
-        assert!(output
-            .map
-            .data_symbols
-            .iter()
-            .any(|(name, _)| name == "__isr_ctx.stack_ptr.lo"));
+        assert!(
+            output
+                .map
+                .data_symbols
+                .iter()
+                .any(|(name, _)| name == "__isr_ctx.w")
+        );
+        assert!(
+            output
+                .map
+                .data_symbols
+                .iter()
+                .any(|(name, _)| name == "__isr_ctx.stack_ptr.lo")
+        );
         assert!(output.program.render().contains("retfie"));
     }
 

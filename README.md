@@ -33,7 +33,21 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 21: controlled 32-bit integer support (`long` and `unsigned long`) on top of Phase 20 simulator CLI/debugging workflow, Phase 19 emulator-based execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier frontend/backend phases**.
+Current implementation is **Phase 22: fixed-point arithmetic support on top of Phase 21 controlled 32-bit integers, Phase 20 simulator CLI/debugging workflow, Phase 19 emulator-based execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier frontend/backend phases**.
+
+Phase 22 scope:
+
+- fixed-point scalar keywords `__fixed8_8`, `__ufixed8_8`, `__fixed16_16`, and `__ufixed16_16`
+- little-endian raw storage: Q8.8/UQ8.8 are 2 bytes; Q16.16/UQ16.16 are 4 bytes
+- raw fixed constructors `__q8_8(raw)`, `__uq8_8(raw)`, `__q16_16(raw)`, and `__uq16_16(raw)`
+- fixed globals, statics, locals, parameters, returns, arrays, structs, unions, and data pointers
+- Q8.8/UQ8.8 add, subtract, compare, multiply, divide, unary negate, and integer/fixed casts
+- Q16.16/UQ16.16 add, subtract, compare, casts, storage, and ABI support
+- Q16.16/UQ16.16 multiply/divide intentionally deferred because correct lowering needs a wider intermediate
+- fixed multiply/divide lower through proven Phase 21 32-bit helper paths; ISR helper restrictions still apply
+- simulator execution tests for casts, Q8.8 arithmetic, calls, aggregates, arrays, UQ8.8 arithmetic, and Q16.16 add/sub/compare
+- conservative diagnostics for unsupported bitwise fixed ops, fixed ROM objects, Q16.16 helper ops, fixed division by constant zero, and unsafe implicit fixed conversions
+- no IEEE float, recursion, or advanced optimization work
 
 Phase 21 scope:
 
@@ -182,6 +196,9 @@ What changed from Phase 3:
 - Phase 17 adds controlled source-level function pointers, dispatch-ID lowering, and indirect-call diagnostics
 - Phase 18 adds target-aware stack bounds, opt-in runtime overflow checks, and stack reports without enabling recursion
 - Phase 19 adds emulator-based execution validation for generated PIC16 code without changing the supported C subset
+- Phase 20 adds optional `pic16-sim` CLI debugging over generated HEX plus map-symbol inspection and tracing
+- Phase 21 adds controlled 32-bit `long` / `unsigned long` storage, ABI, arithmetic, helpers, and simulator validation
+- Phase 22 adds explicit fixed-point scalar types and simulator-validated Q8.8 arithmetic without enabling IEEE float
 - active docs now describe stack-first behavior; old Phase 2/3 docs remain historical
 
 Historical milestone snapshots below describe what each phase introduced at the time. The current supported subset is summarized later under `Supported Subset`, `Current constraints`, and `Current Limits`.

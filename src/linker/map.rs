@@ -13,12 +13,9 @@ pub struct MapFile {
 pub fn render_map(map: &MapFile) -> String {
     let mut output = String::new();
     render_section(&mut output, "Code Symbols", &map.code_symbols);
-    render_grouped(
-        &mut output,
-        "  User Code",
-        &map.code_symbols,
-        |name| !name.starts_with("__rt_") && !name.starts_with("__"),
-    );
+    render_grouped(&mut output, "  User Code", &map.code_symbols, |name| {
+        !name.starts_with("__rt_") && !name.starts_with("__")
+    });
     render_grouped(
         &mut output,
         "  Runtime Helpers",
@@ -33,43 +30,27 @@ pub fn render_map(map: &MapFile) -> String {
     );
     let _ = writeln!(output);
     render_section(&mut output, "Data Symbols", &map.data_symbols);
-    render_grouped(
-        &mut output,
-        "  User Data",
-        &map.data_symbols,
-        |name| !name.starts_with("__"),
-    );
+    render_grouped(&mut output, "  User Data", &map.data_symbols, |name| {
+        !name.starts_with("__")
+    });
     render_grouped(
         &mut output,
         "  String Literals",
         &map.data_symbols,
         |name| name.starts_with("__strlit"),
     );
-    render_grouped(
-        &mut output,
-        "  ABI / Stack",
-        &map.data_symbols,
-        |name| {
-            name.starts_with("__abi.")
-                || name.starts_with("__stack.")
-                || name.starts_with("__stack_")
-                || name.starts_with("__frame_ptr")
-        },
-    );
-    render_grouped(
-        &mut output,
-        "  ISR Context",
-        &map.data_symbols,
-        |name| name.starts_with("__isr_ctx."),
-    );
+    render_grouped(&mut output, "  ABI / Stack", &map.data_symbols, |name| {
+        name.starts_with("__abi.")
+            || name.starts_with("__stack.")
+            || name.starts_with("__stack_")
+            || name.starts_with("__frame_ptr")
+    });
+    render_grouped(&mut output, "  ISR Context", &map.data_symbols, |name| {
+        name.starts_with("__isr_ctx.")
+    });
     let _ = writeln!(output);
     render_section(&mut output, "ROM Symbols", &map.rom_symbols);
-    render_grouped(
-        &mut output,
-        "  User ROM",
-        &map.rom_symbols,
-        |_| true,
-    );
+    render_grouped(&mut output, "  User ROM", &map.rom_symbols, |_| true);
     output
 }
 

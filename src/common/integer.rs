@@ -84,6 +84,10 @@ pub fn eval_unary(op: UnaryOp, value: i64, operand_ty: Type, result_ty: Type) ->
 
 /// Evaluates an integer binary operation with PIC16-compatible width truncation.
 pub fn eval_binary(op: BinaryOp, lhs: i64, rhs: i64, operand_ty: Type, result_ty: Type) -> i64 {
+    if operand_ty.is_fixed() {
+        return eval_fixed_binary(op, lhs, rhs, operand_ty, result_ty);
+    }
+
     let lhs_unsigned = normalize_value(lhs, operand_ty);
     let rhs_unsigned = normalize_value(rhs, operand_ty);
     let lhs_signed = signed_value(lhs, operand_ty);
@@ -131,6 +135,58 @@ pub fn eval_binary(op: BinaryOp, lhs: i64, rhs: i64, operand_ty: Type, result_ty
         BinaryOp::LessEqual => i128::from(u8::from(compare_rel(op, lhs, rhs, operand_ty))),
         BinaryOp::Greater => i128::from(u8::from(compare_rel(op, lhs, rhs, operand_ty))),
         BinaryOp::GreaterEqual => i128::from(u8::from(compare_rel(op, lhs, rhs, operand_ty))),
+    };
+
+    normalize_i128(value, result_ty)
+}
+
+/// Evaluates fixed-point binary operations over raw little-endian integer storage.
+pub fn eval_fixed_binary(
+    op: BinaryOp,
+    lhs: i64,
+    rhs: i64,
+    operand_ty: Type,
+    result_ty: Type,
+) -> i64 {
+    let lhs_unsigned = normalize_value(lhs, operand_ty);
+    let rhs_unsigned = normalize_value(rhs, operand_ty);
+    let lhs_signed = signed_value(lhs, operand_ty);
+    let rhs_signed = signed_value(rhs, operand_ty);
+    let frac = operand_ty.fixed_fraction_bits().unwrap_or(0);
+
+    let value = match op {
+        BinaryOp::Add => i128::from(lhs_unsigned) + i128::from(rhs_unsigned),
+        BinaryOp::Sub => i128::from(lhs_unsigned) - i128::from(rhs_unsigned),
+        BinaryOp::Multiply => {
+            if operand_ty.is_signed() {
+                (i128::from(lhs_signed) * i128::from(rhs_signed)) >> frac
+            } else {
+                (i128::from(lhs_unsigned) * i128::from(rhs_unsigned)) >> frac
+            }
+        }
+        BinaryOp::Divide => {
+            if rhs_unsigned == 0 {
+                0
+            } else if operand_ty.is_signed() {
+                (i128::from(lhs_signed) << frac) / i128::from(rhs_signed)
+            } else {
+                (i128::from(lhs_unsigned) << frac) / i128::from(rhs_unsigned)
+            }
+        }
+        BinaryOp::Equal => i128::from(u8::from(lhs_unsigned == rhs_unsigned)),
+        BinaryOp::NotEqual => i128::from(u8::from(lhs_unsigned != rhs_unsigned)),
+        BinaryOp::Less => i128::from(u8::from(compare_rel(op, lhs, rhs, operand_ty))),
+        BinaryOp::LessEqual => i128::from(u8::from(compare_rel(op, lhs, rhs, operand_ty))),
+        BinaryOp::Greater => i128::from(u8::from(compare_rel(op, lhs, rhs, operand_ty))),
+        BinaryOp::GreaterEqual => i128::from(u8::from(compare_rel(op, lhs, rhs, operand_ty))),
+        BinaryOp::LogicalAnd => i128::from(u8::from(lhs_unsigned != 0 && rhs_unsigned != 0)),
+        BinaryOp::LogicalOr => i128::from(u8::from(lhs_unsigned != 0 || rhs_unsigned != 0)),
+        BinaryOp::Modulo
+        | BinaryOp::ShiftLeft
+        | BinaryOp::ShiftRight
+        | BinaryOp::BitAnd
+        | BinaryOp::BitOr
+        | BinaryOp::BitXor => 0,
     };
 
     normalize_i128(value, result_ty)
@@ -199,7 +255,10 @@ mod tests {
         assert_eq!(infer_integer_literal_type(32_767).scalar, ScalarType::I16);
         assert_eq!(infer_integer_literal_type(32_768).scalar, ScalarType::U16);
         assert_eq!(infer_integer_literal_type(70_000).scalar, ScalarType::I32);
-        assert_eq!(infer_integer_literal_type(3_000_000_000).scalar, ScalarType::U32);
+        assert_eq!(
+            infer_integer_literal_type(3_000_000_000).scalar,
+            ScalarType::U32
+        );
     }
 
     #[test]
@@ -223,10 +282,25 @@ mod tests {
         assert_eq!(eval_binary(BinaryOp::Add, 0xFFFF, 1, u16_ty, u16_ty), 0);
         assert_eq!(eval_binary(BinaryOp::Sub, 0, 1, u16_ty, u16_ty), 0xFFFF);
         assert_eq!(eval_binary(BinaryOp::ShiftLeft, 1, 3, u16_ty, u16_ty), 8);
-        assert_eq!(eval_binary(BinaryOp::ShiftRight, 0x8000, 15, u16_ty, u16_ty), 1);
-        assert_eq!(eval_unary(UnaryOp::BitwiseNot, 0x00FF, u16_ty, u16_ty), 0xFF00);
-        assert_eq!(signed_value(eval_unary(UnaryOp::Negate, 2, i16_ty, i16_ty), i16_ty), -2);
-        assert_eq!(signed_value(eval_binary(BinaryOp::ShiftRight, -2, 1, i16_ty, i16_ty), i16_ty), -1);
+        assert_eq!(
+            eval_binary(BinaryOp::ShiftRight, 0x8000, 15, u16_ty, u16_ty),
+            1
+        );
+        assert_eq!(
+            eval_unary(UnaryOp::BitwiseNot, 0x00FF, u16_ty, u16_ty),
+            0xFF00
+        );
+        assert_eq!(
+            signed_value(eval_unary(UnaryOp::Negate, 2, i16_ty, i16_ty), i16_ty),
+            -2
+        );
+        assert_eq!(
+            signed_value(
+                eval_binary(BinaryOp::ShiftRight, -2, 1, i16_ty, i16_ty),
+                i16_ty
+            ),
+            -1
+        );
     }
 }
 // SPDX-License-Identifier: GPL-3.0-or-later

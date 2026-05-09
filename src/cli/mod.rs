@@ -78,9 +78,21 @@ impl CliOptions {
 
         while let Some(argument) = iter.next() {
             match argument.as_str() {
-                "--help" | "-h" => return Ok(Self { command: CliCommand::Help }),
-                "--version" => return Ok(Self { command: CliCommand::Version }),
-                "--list-targets" => return Ok(Self { command: CliCommand::ListTargets }),
+                "--help" | "-h" => {
+                    return Ok(Self {
+                        command: CliCommand::Help,
+                    });
+                }
+                "--version" => {
+                    return Ok(Self {
+                        command: CliCommand::Version,
+                    });
+                }
+                "--list-targets" => {
+                    return Ok(Self {
+                        command: CliCommand::ListTargets,
+                    });
+                }
                 "--emit-tokens" => artifacts.emit_tokens = true,
                 "--emit-ast" => artifacts.emit_ast = true,
                 "--emit-ir" => artifacts.emit_ir = true,

@@ -12,7 +12,10 @@ pub struct EncoderOutput {
 }
 
 /// Resolves labels and encodes the assembly program into 14-bit PIC16 words.
-pub fn encode_program(program: &AsmProgram, diagnostics: &mut DiagnosticBag) -> Option<EncoderOutput> {
+pub fn encode_program(
+    program: &AsmProgram,
+    diagnostics: &mut DiagnosticBag,
+) -> Option<EncoderOutput> {
     let labels = collect_labels(program, diagnostics)?;
     let mut words = BTreeMap::new();
     let mut pc = 0u16;
@@ -33,8 +36,16 @@ pub fn encode_program(program: &AsmProgram, diagnostics: &mut DiagnosticBag) -> 
                         return None;
                     };
                     let page = ((addr >> 11) & 0x03) as u8;
-                    insert_word(&mut words, pc, encode_instr(&AsmInstr::Bcf { f: 0x0A, b: 3 }));
-                    insert_word(&mut words, pc + 1, encode_instr(&AsmInstr::Bcf { f: 0x0A, b: 4 }));
+                    insert_word(
+                        &mut words,
+                        pc,
+                        encode_instr(&AsmInstr::Bcf { f: 0x0A, b: 3 }),
+                    );
+                    insert_word(
+                        &mut words,
+                        pc + 1,
+                        encode_instr(&AsmInstr::Bcf { f: 0x0A, b: 4 }),
+                    );
                     insert_word(
                         &mut words,
                         pc + 2,
@@ -179,10 +190,9 @@ fn encode_instr(instr: &AsmInstr) -> u16 {
         AsmInstr::Retlw(value) => 0x3400 | u16::from(*value),
         AsmInstr::Return => 0x0008,
         AsmInstr::Retfie => 0x0009,
-        AsmInstr::Goto(_)
-        | AsmInstr::Call(_)
-        | AsmInstr::SetPage(_)
-        | AsmInstr::SetPclPage(_) => unreachable!("resolved elsewhere"),
+        AsmInstr::Goto(_) | AsmInstr::Call(_) | AsmInstr::SetPage(_) | AsmInstr::SetPclPage(_) => {
+            unreachable!("resolved elsewhere")
+        }
     }
 }
 
@@ -213,7 +223,13 @@ mod tests {
     #[test]
     /// Verifies `swapf` uses the expected file-register opcode family.
     fn encodes_swapf() {
-        assert_eq!(encode_instr(&AsmInstr::Swapf { f: 0x70, d: Dest::W }), 0x0E70);
+        assert_eq!(
+            encode_instr(&AsmInstr::Swapf {
+                f: 0x70,
+                d: Dest::W
+            }),
+            0x0E70
+        );
     }
 
     #[test]

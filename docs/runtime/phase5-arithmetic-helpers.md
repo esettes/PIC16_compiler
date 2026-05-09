@@ -2,12 +2,15 @@
 
 # Phase 5 Arithmetic Helpers
 
+Phase 22 fixed-point Q8.8 multiply/divide uses raw 32-bit intermediate lowering through the Phase 21 helper model; see `docs/runtime/phase22-fixed-helpers.md`.
+
 Phase 21 adds 32-bit helper variants for `long` and `unsigned long`; see `docs/runtime/phase21-long-helpers.md`. Existing 8-bit and 16-bit helper names and calling behavior remain compatible.
 
 Phase status:
 
 - 8-bit and 16-bit helper behavior is frozen under the Phase 6 stabilization baseline
 - Phase 21 extends the same helper model to 32-bit integer types
+- Phase 22 reuses 32-bit helpers for Q8.8 fixed-point multiply/divide
 
 Phase 5 adds compiler-generated PIC16 runtime helpers for:
 
@@ -25,6 +28,7 @@ Supported scalar types:
 - `unsigned int`
 - `long`
 - `unsigned long`
+- `__fixed8_8` / `__ufixed8_8` through raw 32-bit lowering for multiply/divide
 
 ## Helper Families
 
@@ -100,6 +104,7 @@ Helpers use same repaired stack-first ABI as normal functions:
 - helper restores `SP` / caller `FP` before `return`
 - 8-bit result returns in `W`
 - 16-bit result returns low byte in `W`, high byte in `return_high`
+- 32-bit helper results return through `W`, `return_high`, `return_upper0`, and `return_upper1`
 
 Helpers may mutate their own arg slots as working storage. This is ABI-safe because caller pops helper args after return.
 

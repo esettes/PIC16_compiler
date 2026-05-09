@@ -20,10 +20,8 @@ use std::path::{Path, PathBuf};
 
 use assembler::listing::render_listing;
 use backend::pic16::devices::{DeviceRegistry, TargetDevice};
-use backend::pic16::midrange14::codegen::{
-    compile_program, BackendOptions, StackReportSummary,
-};
-use cli::{CliCommand, CliOptions, OptimizationLevel, CLI_NAME};
+use backend::pic16::midrange14::codegen::{BackendOptions, StackReportSummary, compile_program};
+use cli::{CLI_NAME, CliCommand, CliOptions, OptimizationLevel};
 use common::source::SourceManager;
 use diagnostics::{DiagnosticBag, DiagnosticEmitter, Severity, StageResult};
 use frontend::ast::TranslationUnit;
@@ -106,7 +104,10 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
         DiagnosticBag::single(
             Severity::Error,
             "cli",
-            format!("failed to resolve input `{}`: {error}", command.input.display()),
+            format!(
+                "failed to resolve input `{}`: {error}",
+                command.input.display()
+            ),
         )
     })?;
 
@@ -197,15 +198,24 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
         write_artifact(&command.output, "asm", &assembled.program.render())?;
     }
 
-    let listing_path = command.artifacts.list_file.then(|| change_extension(&command.output, "lst"));
-    let map_path = command.artifacts.map.then(|| change_extension(&command.output, "map"));
+    let listing_path = command
+        .artifacts
+        .list_file
+        .then(|| change_extension(&command.output, "lst"));
+    let map_path = command
+        .artifacts
+        .map
+        .then(|| change_extension(&command.output, "map"));
 
     if let Some(parent) = command.output.parent() {
         fs::create_dir_all(parent).map_err(|error| {
             DiagnosticBag::single(
                 Severity::Error,
                 "io",
-                format!("failed to create output directory `{}`: {error}", parent.display()),
+                format!(
+                    "failed to create output directory `{}`: {error}",
+                    parent.display()
+                ),
             )
         })?;
     }
@@ -236,7 +246,10 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
                 DiagnosticBag::single(
                     Severity::Error,
                     "io",
-                    format!("failed to create stack report directory `{}`: {error}", parent.display()),
+                    format!(
+                        "failed to create stack report directory `{}`: {error}",
+                        parent.display()
+                    ),
                 )
             })?;
         }
@@ -249,12 +262,16 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
         })?;
     }
 
-    let hex_records = IntelHexWriter::new(target).emit(&assembled.words, target.default_config_word);
+    let hex_records =
+        IntelHexWriter::new(target).emit(&assembled.words, target.default_config_word);
     fs::write(&command.output, hex_records).map_err(|error| {
         DiagnosticBag::single(
             Severity::Error,
             "io",
-            format!("failed to write hex `{}`: {error}", command.output.display()),
+            format!(
+                "failed to write hex `{}`: {error}",
+                command.output.display()
+            ),
         )
     })?;
 
@@ -298,7 +315,10 @@ fn write_artifact(output: &Path, extension: &str, contents: &str) -> StageResult
             DiagnosticBag::single(
                 Severity::Error,
                 "io",
-                format!("failed to create artifact directory `{}`: {error}", parent.display()),
+                format!(
+                    "failed to create artifact directory `{}`: {error}",
+                    parent.display()
+                ),
             )
         })?;
     }
@@ -328,8 +348,7 @@ fn print_optimization_report(level: OptimizationLevel, report: &OptimizationRepo
     );
     println!(
         "  IR dead code elimination: removed_instructions={} cleared_unreachable_blocks={}",
-        report.dead_code.instructions_removed,
-        report.dead_code.unreachable_blocks_cleared
+        report.dead_code.instructions_removed, report.dead_code.unreachable_blocks_cleared
     );
     println!(
         "  Temp compaction: removed_temp_slots={}",

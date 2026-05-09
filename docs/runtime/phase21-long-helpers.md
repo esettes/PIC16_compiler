@@ -14,3 +14,5 @@ Unsigned multiplication uses shift-add. Division and modulo use restoring divisi
 Helpers follow the Stack-first ABI. Two 32-bit operands consume eight argument bytes. 32-bit returns use `W`, `return_high`, `return_upper0`, and `return_upper1`.
 
 ISR code may use inline-safe 32-bit loads, stores, simple comparisons, and constant shifts. Operations requiring helper calls remain rejected inside interrupt handlers.
+
+Phase 22 fixed-point Q8.8 multiply/divide reuses these 32-bit helper paths by widening raw Q8.8 operands to 32-bit, applying the fixed-point scale shift, and truncating back to 16-bit raw storage. Q16.16 multiply/divide are not lowered through these helpers because a correct result needs a wider intermediate.

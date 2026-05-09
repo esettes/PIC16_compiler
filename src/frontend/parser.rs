@@ -4,15 +4,14 @@ use crate::common::source::{PreprocessedSource, Span};
 use crate::diagnostics::DiagnosticBag;
 
 use super::ast::{
-    BinaryOp, Designator, DesignatorPath, EnumConstant, Expr, ExprKind, FunctionDecl,
-    Initializer, InitializerEntry, Item, Stmt, StructDef, StructField, TranslationUnit, UnaryOp,
-    UnionDef,
+    BinaryOp, Designator, DesignatorPath, EnumConstant, Expr, ExprKind, FunctionDecl, Initializer,
+    InitializerEntry, Item, Stmt, StructDef, StructField, TranslationUnit, UnaryOp, UnionDef,
     VarDecl,
 };
 use super::lexer::{Keyword, Symbol, Token, TokenKind};
 use super::types::{
-    AddressSpace, IntegerSuffix, MAX_POINTER_DEPTH, Qualifiers, ScalarType, StorageClass,
-    StructId, Type, UnionId,
+    AddressSpace, IntegerSuffix, MAX_POINTER_DEPTH, Qualifiers, ScalarType, StorageClass, StructId,
+    Type, UnionId,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -170,7 +169,9 @@ impl<'a> Parser<'a> {
                     "parser",
                     Some(Span::new(start, name_span.end)),
                     "`__interrupt` is only valid on function declarations",
-                    Some("declare the interrupt handler as `void __interrupt isr(void)`".to_string()),
+                    Some(
+                        "declare the interrupt handler as `void __interrupt isr(void)`".to_string(),
+                    ),
                 );
             }
             let initializer = if self.match_symbol(Symbol::Assign) {
@@ -511,7 +512,10 @@ impl<'a> Parser<'a> {
         self.expect_symbol(Symbol::Assign);
         Some(DesignatorPath {
             items,
-            span: Span::new(start.unwrap_or(self.current_span().start), end.unwrap_or(self.current_span().end)),
+            span: Span::new(
+                start.unwrap_or(self.current_span().start),
+                end.unwrap_or(self.current_span().end),
+            ),
         })
     }
 
@@ -534,12 +538,18 @@ impl<'a> Parser<'a> {
 
     /// Parses `||` expressions with left associativity.
     fn parse_logical_or(&mut self) -> Expr {
-        self.parse_left_assoc(Self::parse_logical_and, &[(Symbol::OrOr, BinaryOp::LogicalOr)])
+        self.parse_left_assoc(
+            Self::parse_logical_and,
+            &[(Symbol::OrOr, BinaryOp::LogicalOr)],
+        )
     }
 
     /// Parses `&&` expressions with left associativity.
     fn parse_logical_and(&mut self) -> Expr {
-        self.parse_left_assoc(Self::parse_bit_or, &[(Symbol::AndAnd, BinaryOp::LogicalAnd)])
+        self.parse_left_assoc(
+            Self::parse_bit_or,
+            &[(Symbol::AndAnd, BinaryOp::LogicalAnd)],
+        )
     }
 
     /// Parses bitwise OR expressions with left associativity.
@@ -554,7 +564,10 @@ impl<'a> Parser<'a> {
 
     /// Parses bitwise AND expressions with left associativity.
     fn parse_bit_and(&mut self) -> Expr {
-        self.parse_left_assoc(Self::parse_equality, &[(Symbol::Ampersand, BinaryOp::BitAnd)])
+        self.parse_left_assoc(
+            Self::parse_equality,
+            &[(Symbol::Ampersand, BinaryOp::BitAnd)],
+        )
     }
 
     /// Parses equality and inequality comparisons.
@@ -596,7 +609,10 @@ impl<'a> Parser<'a> {
     fn parse_additive(&mut self) -> Expr {
         self.parse_left_assoc(
             Self::parse_multiplicative,
-            &[(Symbol::Plus, BinaryOp::Add), (Symbol::Minus, BinaryOp::Sub)],
+            &[
+                (Symbol::Plus, BinaryOp::Add),
+                (Symbol::Minus, BinaryOp::Sub),
+            ],
         )
     }
 
@@ -929,6 +945,34 @@ impl<'a> Parser<'a> {
                     saw_long = true;
                     self.advance();
                 }
+                TokenKind::Keyword(
+                    Keyword::Fixed8_8
+                    | Keyword::Ufixed8_8
+                    | Keyword::Fixed16_16
+                    | Keyword::Ufixed16_16,
+                ) => {
+                    if scalar.is_some()
+                        || explicit_type.is_some()
+                        || saw_long
+                        || saw_signed
+                        || saw_unsigned
+                    {
+                        self.diagnostics.error(
+                            "parser",
+                            Some(self.current_span()),
+                            "fixed-point types cannot be combined with other type specifiers",
+                            None,
+                        );
+                    }
+                    scalar = Some(match current_kind {
+                        TokenKind::Keyword(Keyword::Fixed8_8) => ScalarType::Q8_8,
+                        TokenKind::Keyword(Keyword::Ufixed8_8) => ScalarType::UQ8_8,
+                        TokenKind::Keyword(Keyword::Fixed16_16) => ScalarType::Q16_16,
+                        TokenKind::Keyword(Keyword::Ufixed16_16) => ScalarType::UQ16_16,
+                        _ => unreachable!("fixed keyword"),
+                    });
+                    self.advance();
+                }
                 TokenKind::Keyword(Keyword::Struct) => {
                     if scalar.is_some() || explicit_type.is_some() {
                         self.diagnostics.error(
@@ -989,7 +1033,11 @@ impl<'a> Parser<'a> {
                             None,
                         );
                     }
-                    scalar = Some(if saw_unsigned { ScalarType::U8 } else { ScalarType::I8 });
+                    scalar = Some(if saw_unsigned {
+                        ScalarType::U8
+                    } else {
+                        ScalarType::I8
+                    });
                     self.advance();
                 }
                 TokenKind::Keyword(Keyword::Int) => {
@@ -1005,7 +1053,11 @@ impl<'a> Parser<'a> {
                             None,
                         );
                     }
-                    scalar = Some(if saw_unsigned { ScalarType::U16 } else { ScalarType::I16 });
+                    scalar = Some(if saw_unsigned {
+                        ScalarType::U16
+                    } else {
+                        ScalarType::I16
+                    });
                     self.advance();
                 }
                 TokenKind::Identifier(name) if self.typedefs.contains_key(&name) => {
@@ -1528,7 +1580,9 @@ impl<'a> Parser<'a> {
 
             self.expect_symbol(Symbol::RBrace);
 
-            if let Some(tag_name) = tag.as_ref() && !self.enum_tags.insert(tag_name.clone()) {
+            if let Some(tag_name) = tag.as_ref()
+                && !self.enum_tags.insert(tag_name.clone())
+            {
                 self.diagnostics.error(
                     "parser",
                     Some(Span::new(start, self.previous_span().end)),
@@ -1711,7 +1765,11 @@ impl<'a> Parser<'a> {
         self.expect_symbol(Symbol::LParen);
         let params = self.parse_function_pointer_param_types();
 
-        let mut ty = self.build_function_pointer_type(return_ty, &params, Span::new(start, self.previous_span().end));
+        let mut ty = self.build_function_pointer_type(
+            return_ty,
+            &params,
+            Span::new(start, self.previous_span().end),
+        );
         if let Some(qualifiers) = pointer_qualifiers.first().copied() {
             ty = ty.with_object_qualifiers(qualifiers);
         }
@@ -1774,7 +1832,11 @@ impl<'a> Parser<'a> {
                 TokenKind::Keyword(Keyword::Void)
                 | TokenKind::Keyword(Keyword::Char)
                 | TokenKind::Keyword(Keyword::Int)
-                | TokenKind::Keyword(Keyword::Long) => {
+                | TokenKind::Keyword(Keyword::Long)
+                | TokenKind::Keyword(Keyword::Fixed8_8)
+                | TokenKind::Keyword(Keyword::Ufixed8_8)
+                | TokenKind::Keyword(Keyword::Fixed16_16)
+                | TokenKind::Keyword(Keyword::Ufixed16_16) => {
                     saw_type = true;
                     cursor += 1;
                 }
@@ -1974,7 +2036,10 @@ impl<'a> Parser<'a> {
         }
 
         let mut param_scalars = Vec::new();
-        for param in params.iter().take(crate::frontend::types::MAX_FUNCTION_POINTER_PARAMS) {
+        for param in params
+            .iter()
+            .take(crate::frontend::types::MAX_FUNCTION_POINTER_PARAMS)
+        {
             if !param.is_integer() {
                 self.diagnostics.error(
                     "parser",
@@ -2008,12 +2073,8 @@ impl<'a> Parser<'a> {
         };
         self.advance();
         if value <= 0 {
-            self.diagnostics.error(
-                "parser",
-                Some(span),
-                "array length must be positive",
-                None,
-            );
+            self.diagnostics
+                .error("parser", Some(span), "array length must be positive", None);
             return 1;
         }
         value as usize
@@ -2035,6 +2096,10 @@ impl<'a> Parser<'a> {
                 | TokenKind::Keyword(Keyword::Char)
                 | TokenKind::Keyword(Keyword::Int)
                 | TokenKind::Keyword(Keyword::Long)
+                | TokenKind::Keyword(Keyword::Fixed8_8)
+                | TokenKind::Keyword(Keyword::Ufixed8_8)
+                | TokenKind::Keyword(Keyword::Fixed16_16)
+                | TokenKind::Keyword(Keyword::Ufixed16_16)
                 | TokenKind::Keyword(Keyword::Enum)
                 | TokenKind::Keyword(Keyword::Struct)
                 | TokenKind::Keyword(Keyword::Union)
@@ -2049,7 +2114,8 @@ impl<'a> Parser<'a> {
             self.advance();
             return (name, span);
         }
-        self.diagnostics.error("parser", Some(span), "expected identifier", None);
+        self.diagnostics
+            .error("parser", Some(span), "expected identifier", None);
         ("__error".to_string(), span)
     }
 
@@ -2109,9 +2175,9 @@ impl<'a> Parser<'a> {
 
     /// Peeks ahead for a symbol without consuming any tokens.
     fn peek_symbol(&self, offset: usize, symbol: Symbol) -> bool {
-        self.tokens
-            .get(self.index + offset)
-            .is_some_and(|token| matches!(token.kind, TokenKind::Symbol(current) if current == symbol))
+        self.tokens.get(self.index + offset).is_some_and(
+            |token| matches!(token.kind, TokenKind::Symbol(current) if current == symbol),
+        )
     }
 
     /// Returns the current token, clamping safely at EOF.

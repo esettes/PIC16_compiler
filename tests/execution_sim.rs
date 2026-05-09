@@ -787,3 +787,199 @@ void main(void) {
 
     assert_eq!(symbol_u32(&core, &map, "result"), 30);
 }
+
+#[test]
+fn executes_phase22_q8_8_integer_cast_to_fixed() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase22-q8-cast-in.c",
+        r#"
+__fixed8_8 result;
+
+void main(void) {
+    result = (__fixed8_8)3;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u16(&core, &map, "result"), 0x0300);
+}
+
+#[test]
+fn executes_phase22_q8_8_fixed_cast_to_integer() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase22-q8-cast-out.c",
+        r#"
+__fixed8_8 value = __q8_8(0x0380);
+int result;
+
+void main(void) {
+    result = (int)value;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u16(&core, &map, "result"), 3);
+}
+
+#[test]
+fn executes_phase22_q8_8_add_sub_compare() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase22-q8-add-sub.c",
+        r#"
+__fixed8_8 a = __q8_8(0x0180);
+__fixed8_8 b = __q8_8(0x0240);
+__fixed8_8 result;
+unsigned char fixed_flag;
+
+void main(void) {
+    result = a + b - __q8_8(0x0100);
+    if (result > a) {
+        fixed_flag = 1;
+    } else {
+        fixed_flag = 0;
+    }
+}
+"#,
+    );
+
+    assert_eq!(symbol_u16(&core, &map, "result"), 0x02C0);
+    assert_eq!(symbol_u8(&core, &map, "fixed_flag"), 1);
+}
+
+#[test]
+fn executes_phase22_q8_8_multiply_helper() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase22-q8-mul.c",
+        r#"
+__fixed8_8 a = __q8_8(0x0180);
+__fixed8_8 b = __q8_8(0x0200);
+__fixed8_8 result;
+
+void main(void) {
+    result = a * b;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u16(&core, &map, "result"), 0x0300);
+}
+
+#[test]
+fn executes_phase22_q8_8_divide_helper() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase22-q8-div.c",
+        r#"
+__fixed8_8 a = __q8_8(0x0300);
+__fixed8_8 b = __q8_8(0x0200);
+__fixed8_8 result;
+
+void main(void) {
+    result = a / b;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u16(&core, &map, "result"), 0x0180);
+}
+
+#[test]
+fn executes_phase22_q8_8_argument_and_return() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase22-q8-call.c",
+        r#"
+__fixed8_8 result;
+
+__fixed8_8 twice(__fixed8_8 value) {
+    return value + value;
+}
+
+void main(void) {
+    result = twice(__q8_8(0x0140));
+}
+"#,
+    );
+
+    assert_eq!(symbol_u16(&core, &map, "result"), 0x0280);
+}
+
+#[test]
+fn executes_phase22_q8_8_struct_and_array_storage() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase22-q8-aggregate.c",
+        r#"
+struct Sensor {
+    __fixed8_8 temperature;
+    __ufixed8_8 gain;
+};
+
+struct Sensor sensor;
+__fixed8_8 table[2];
+__fixed8_8 result;
+
+void main(void) {
+    sensor.temperature = __q8_8(0x0180);
+    sensor.gain = __uq8_8(0x0200);
+    table[0] = sensor.temperature;
+    table[1] = (__fixed8_8)sensor.gain;
+    result = table[0] + table[1];
+}
+"#,
+    );
+
+    assert_eq!(symbol_u16(&core, &map, "result"), 0x0380);
+}
+
+#[test]
+fn executes_phase22_uq8_8_arithmetic() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase22-uq8-arith.c",
+        r#"
+__ufixed8_8 a = __uq8_8(0x0300);
+__ufixed8_8 b = __uq8_8(0x0200);
+__ufixed8_8 sum;
+__ufixed8_8 quotient;
+
+void main(void) {
+    sum = a + b;
+    quotient = a / b;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u16(&core, &map, "sum"), 0x0500);
+    assert_eq!(symbol_u16(&core, &map, "quotient"), 0x0180);
+}
+
+#[test]
+fn executes_phase22_q16_16_add_sub_compare() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase22-q16-add-sub.c",
+        r#"
+__fixed16_16 a = __q16_16(0x00018000);
+__fixed16_16 b = __q16_16(0x00004000);
+__fixed16_16 result;
+unsigned char fixed_flag;
+
+void main(void) {
+    result = a + b - b;
+    if (result == a) {
+        fixed_flag = 1;
+    } else {
+        fixed_flag = 0;
+    }
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0x0001_8000);
+    assert_eq!(symbol_u8(&core, &map, "fixed_flag"), 1);
+}

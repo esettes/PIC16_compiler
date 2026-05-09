@@ -10,8 +10,8 @@ use crate::common::source::Span;
 use crate::diagnostics::DiagnosticBag;
 
 use super::ast::{
-    BinaryOp, Designator, Expr, ExprKind, FunctionDecl, Initializer, InitializerEntry, Item,
-    Stmt, StructDef, TranslationUnit, UnaryOp, UnionDef, VarDecl,
+    BinaryOp, Designator, Expr, ExprKind, FunctionDecl, Initializer, InitializerEntry, Item, Stmt,
+    StructDef, TranslationUnit, UnaryOp, UnionDef, VarDecl,
 };
 use super::types::{
     AddressSpace, CastKind, IntegerSuffix, Qualifiers, ScalarType, StorageClass, StructId, Type,
@@ -383,7 +383,8 @@ impl<'a> SemanticAnalyzer<'a> {
                 parameter_types: Vec::new(),
                 enum_const_value: None,
             });
-            self.globals_by_name.insert(register.name.to_string(), symbol);
+            self.globals_by_name
+                .insert(register.name.to_string(), symbol);
         }
     }
 
@@ -470,7 +471,7 @@ impl<'a> SemanticAnalyzer<'a> {
             is_defined: global.initializer.is_none(),
             is_referenced: false,
             parameter_types: Vec::new(),
-                enum_const_value: None,
+            enum_const_value: None,
         });
         self.globals_by_name.insert(global.name.clone(), symbol);
     }
@@ -487,7 +488,10 @@ impl<'a> SemanticAnalyzer<'a> {
                 diagnostics.error(
                     "semantic",
                     Some(function.span),
-                    format!("symbol `{}` already declared as non-function", function.name),
+                    format!(
+                        "symbol `{}` already declared as non-function",
+                        function.name
+                    ),
                     None,
                 );
             } else if existing_symbol.is_interrupt != function.is_interrupt {
@@ -498,13 +502,21 @@ impl<'a> SemanticAnalyzer<'a> {
                         "function `{}` changes interrupt qualifier between declarations",
                         function.name
                     ),
-                    Some("declare the ISR consistently on every prototype and definition".to_string()),
+                    Some(
+                        "declare the ISR consistently on every prototype and definition"
+                            .to_string(),
+                    ),
                 );
             }
             return;
         }
 
-        self.validate_return_type(function.return_type, function.span, &function.name, diagnostics);
+        self.validate_return_type(
+            function.return_type,
+            function.span,
+            &function.name,
+            diagnostics,
+        );
         self.validate_interrupt_signature(function, diagnostics);
 
         let parameter_types = function
@@ -701,13 +713,15 @@ impl<'a> SemanticAnalyzer<'a> {
                         TypedStmt::VarDecl(symbol, Some(expr), decl.span)
                     }
                     Some(AnalyzedInitializer::Aggregate(plan)) => {
-                        let mut statements =
-                            Vec::with_capacity(plan.size.saturating_add(plan.assignments.len()) + 1);
+                        let mut statements = Vec::with_capacity(
+                            plan.size.saturating_add(plan.assignments.len()) + 1,
+                        );
                         statements.push(TypedStmt::VarDecl(symbol, None, decl.span));
                         let byte_ty = Type::new(ScalarType::U8);
                         for offset in 0..plan.size {
-                            let target =
-                                self.build_symbol_offset_lvalue(symbol, decl_ty, offset, byte_ty, decl.span);
+                            let target = self.build_symbol_offset_lvalue(
+                                symbol, decl_ty, offset, byte_ty, decl.span,
+                            );
                             let expr = TypedExpr {
                                 kind: TypedExprKind::Assign {
                                     target: Box::new(target),
@@ -813,7 +827,10 @@ impl<'a> SemanticAnalyzer<'a> {
                         "semantic",
                         Some(*span),
                         "case labels nested inside control statements are not supported in phase 9",
-                        Some("move the case label to the surrounding switch block or nested block".to_string()),
+                        Some(
+                            "move the case label to the surrounding switch block or nested block"
+                                .to_string(),
+                        ),
                     );
                     return self.analyze_stmt(body, diagnostics);
                 }
@@ -834,7 +851,12 @@ impl<'a> SemanticAnalyzer<'a> {
             }
             Stmt::Default { body, span } => {
                 if self.switch_stack.is_empty() {
-                    diagnostics.error("semantic", Some(*span), "`default` label outside switch", None);
+                    diagnostics.error(
+                        "semantic",
+                        Some(*span),
+                        "`default` label outside switch",
+                        None,
+                    );
                     return self.analyze_stmt(body, diagnostics);
                 }
                 if !self.current_switch_labels_allowed() {
@@ -851,7 +873,10 @@ impl<'a> SemanticAnalyzer<'a> {
                         "semantic",
                         Some(*span),
                         "multiple `default` labels in one switch are not allowed",
-                        Some(format!("previous default label starts at byte {}", previous.start)),
+                        Some(format!(
+                            "previous default label starts at byte {}",
+                            previous.start
+                        )),
                     );
                 } else if let Some(context) = self.switch_stack.last_mut() {
                     context.default_span = Some(*span);
@@ -873,11 +898,9 @@ impl<'a> SemanticAnalyzer<'a> {
                 then_branch: Box::new(
                     self.analyze_stmt_with_case_labels_disabled(then_branch, diagnostics),
                 ),
-                else_branch: else_branch
-                    .as_ref()
-                    .map(|branch| {
-                        Box::new(self.analyze_stmt_with_case_labels_disabled(branch, diagnostics))
-                    }),
+                else_branch: else_branch.as_ref().map(|branch| {
+                    Box::new(self.analyze_stmt_with_case_labels_disabled(branch, diagnostics))
+                }),
                 span: *span,
             },
             Stmt::While {
@@ -890,9 +913,7 @@ impl<'a> SemanticAnalyzer<'a> {
                     condition: self
                         .analyze_expr(condition, diagnostics)
                         .unwrap_or_else(|| zero_expr(*span)),
-                    body: Box::new(
-                        self.analyze_stmt_with_case_labels_disabled(body, diagnostics),
-                    ),
+                    body: Box::new(self.analyze_stmt_with_case_labels_disabled(body, diagnostics)),
                     span: *span,
                 };
                 self.loop_depth -= 1;
@@ -905,9 +926,7 @@ impl<'a> SemanticAnalyzer<'a> {
             } => {
                 self.loop_depth += 1;
                 let typed = TypedStmt::DoWhile {
-                    body: Box::new(
-                        self.analyze_stmt_with_case_labels_disabled(body, diagnostics),
-                    ),
+                    body: Box::new(self.analyze_stmt_with_case_labels_disabled(body, diagnostics)),
                     condition: self
                         .analyze_expr(condition, diagnostics)
                         .unwrap_or_else(|| zero_expr(*span)),
@@ -934,16 +953,16 @@ impl<'a> SemanticAnalyzer<'a> {
                     step: step
                         .as_ref()
                         .and_then(|expr| self.analyze_expr(expr, diagnostics)),
-                    body: Box::new(
-                        self.analyze_stmt_with_case_labels_disabled(body, diagnostics),
-                    ),
+                    body: Box::new(self.analyze_stmt_with_case_labels_disabled(body, diagnostics)),
                     span: *span,
                 };
                 self.loop_depth -= 1;
                 typed
             }
             Stmt::Return(expr, span) => {
-                let typed = expr.as_ref().and_then(|value| self.analyze_expr(value, diagnostics));
+                let typed = expr
+                    .as_ref()
+                    .and_then(|value| self.analyze_expr(value, diagnostics));
                 let typed = if let Some(current_function) = self.current_function {
                     let return_type = self.symbols[current_function].ty;
                     if return_type.is_void() && typed.is_some() {
@@ -1060,7 +1079,9 @@ impl<'a> SemanticAnalyzer<'a> {
             ExprKind::PointerMember { base, field } => {
                 self.analyze_member_expr(base, field, true, expr.span, diagnostics)?
             }
-            ExprKind::SizeOfExpr(value) => self.analyze_sizeof_expr(value, expr.span, diagnostics)?,
+            ExprKind::SizeOfExpr(value) => {
+                self.analyze_sizeof_expr(value, expr.span, diagnostics)?
+            }
             ExprKind::SizeOfType(ty) => self.analyze_sizeof_type(*ty, expr.span, diagnostics)?,
         };
 
@@ -1070,7 +1091,10 @@ impl<'a> SemanticAnalyzer<'a> {
                     "semantic",
                     Some(expr.span),
                     "program-memory arrays do not decay to data-space pointers in phase 14",
-                    Some("read ROM arrays with `table[index]`, `__rom_read8()`, or `__rom_read16()`".to_string()),
+                    Some(
+                        "read ROM arrays with `table[index]`, `__rom_read8()`, or `__rom_read16()`"
+                            .to_string(),
+                    ),
                 );
                 return Some(typed);
             }
@@ -1112,7 +1136,9 @@ impl<'a> SemanticAnalyzer<'a> {
                     IntegerSuffix::Unsigned | IntegerSuffix::UnsignedLong => {
                         "integer literal does not fit unsigned long"
                     }
-                    IntegerSuffix::None => "integer literal is too large for 32-bit integer support",
+                    IntegerSuffix::None => {
+                        "integer literal is too large for 32-bit integer support"
+                    }
                 },
                 Some("use a value in the supported 32-bit integer range".to_string()),
             );
@@ -1263,17 +1289,19 @@ impl<'a> SemanticAnalyzer<'a> {
         diagnostics: &mut DiagnosticBag,
     ) -> Option<u16> {
         let key = ty.without_object_qualifiers();
-        let group_index = if let Some(existing) = self.function_pointer_group_by_type.get(&key).copied() {
-            existing
-        } else {
-            let index = self.function_pointer_groups.len();
-            self.function_pointer_groups.push(FunctionPointerDispatchGroup {
-                ty: key,
-                targets: Vec::new(),
-            });
-            self.function_pointer_group_by_type.insert(key, index);
-            index
-        };
+        let group_index =
+            if let Some(existing) = self.function_pointer_group_by_type.get(&key).copied() {
+                existing
+            } else {
+                let index = self.function_pointer_groups.len();
+                self.function_pointer_groups
+                    .push(FunctionPointerDispatchGroup {
+                        ty: key,
+                        targets: Vec::new(),
+                    });
+                self.function_pointer_group_by_type.insert(key, index);
+                index
+            };
 
         if let Some(id) = self
             .function_pointer_target_ids
@@ -1296,7 +1324,10 @@ impl<'a> SemanticAnalyzer<'a> {
                     "too many function-pointer targets share signature `{}` in phase 17",
                     key
                 ),
-                Some("keep each indirect-dispatch signature under 65535 target functions".to_string()),
+                Some(
+                    "keep each indirect-dispatch signature under 65535 target functions"
+                        .to_string(),
+                ),
             );
             return None;
         };
@@ -1339,13 +1370,33 @@ impl<'a> SemanticAnalyzer<'a> {
                     value_category: ValueCategory::RValue,
                 })
             }
-            UnaryOp::Negate | UnaryOp::BitwiseNot => {
+            UnaryOp::Negate => {
+                if !value.ty.is_integer() && !value.ty.is_fixed() {
+                    diagnostics.error(
+                        "semantic",
+                        Some(span),
+                        "unary negate requires an integer or fixed-point operand",
+                        None,
+                    );
+                    return None;
+                }
+                Some(TypedExpr {
+                    kind: TypedExprKind::Unary {
+                        op,
+                        expr: Box::new(value.clone()),
+                    },
+                    ty: value.ty,
+                    span,
+                    value_category: ValueCategory::RValue,
+                })
+            }
+            UnaryOp::BitwiseNot => {
                 if !value.ty.is_integer() {
                     diagnostics.error(
                         "semantic",
                         Some(span),
-                        "unary operator requires an integer operand",
-                        None,
+                        "bitwise not requires an integer operand",
+                        Some("cast fixed-point values to a raw integer type before bitwise operations".to_string()),
                     );
                     return None;
                 }
@@ -1378,12 +1429,18 @@ impl<'a> SemanticAnalyzer<'a> {
             return self.analyze_function_pointer_value(symbol, span, diagnostics);
         }
         let value = self.analyze_expr_with_decay(expr, diagnostics, false)?;
-        if matches!(value.kind, TypedExprKind::RomRead8 { .. } | TypedExprKind::RomRead16 { .. }) {
+        if matches!(
+            value.kind,
+            TypedExprKind::RomRead8 { .. } | TypedExprKind::RomRead16 { .. }
+        ) {
             diagnostics.error(
                 "semantic",
                 Some(span),
                 "taking the address of a program-memory array element is not supported in phase 14",
-                Some("ROM pointers are still unsupported; read the element value directly instead".to_string()),
+                Some(
+                    "ROM pointers are still unsupported; read the element value directly instead"
+                        .to_string(),
+                ),
             );
             return None;
         }
@@ -1463,7 +1520,10 @@ impl<'a> SemanticAnalyzer<'a> {
             diagnostics.error(
                 "semantic",
                 Some(span),
-                format!("pointer target `{}` is not supported in phase 3", element_ty),
+                format!(
+                    "pointer target `{}` is not supported in phase 3",
+                    element_ty
+                ),
                 None,
             );
             return None;
@@ -1503,14 +1563,14 @@ impl<'a> SemanticAnalyzer<'a> {
             return Some(value);
         }
 
+        if (value.ty.is_fixed() || target_ty.is_fixed())
+            && (value.ty.is_integer() || value.ty.is_fixed())
+        {
+            return Some(self.coerce_expr(value, target_ty, diagnostics, "explicit cast", false));
+        }
+
         if value.ty.is_integer() && target_ty.is_integer() {
-            return Some(self.coerce_expr(
-                value,
-                target_ty,
-                diagnostics,
-                "explicit cast",
-                false,
-            ));
+            return Some(self.coerce_expr(value, target_ty, diagnostics, "explicit cast", false));
         }
 
         if value.ty.is_pointer() && target_ty.is_pointer() {
@@ -1567,7 +1627,10 @@ impl<'a> SemanticAnalyzer<'a> {
         diagnostics.error(
             "semantic",
             Some(span),
-            format!("unsupported explicit cast from `{}` to `{}`", value.ty, target_ty),
+            format!(
+                "unsupported explicit cast from `{}` to `{}`",
+                value.ty, target_ty
+            ),
             None,
         );
         None
@@ -1636,11 +1699,13 @@ impl<'a> SemanticAnalyzer<'a> {
         let aggregate_object_qualifiers = aggregate_ty.object_qualifiers();
         let field_ty = field_def.ty.with_object_qualifiers(Qualifiers {
             is_const: field_object_qualifiers.is_const || aggregate_object_qualifiers.is_const,
-            is_volatile: field_object_qualifiers.is_volatile || aggregate_object_qualifiers.is_volatile,
+            is_volatile: field_object_qualifiers.is_volatile
+                || aggregate_object_qualifiers.is_volatile,
         });
 
         if let Some(bit_width) = field_def.bit_width {
-            let storage = self.build_member_lvalue(base, through_pointer, field_def.offset, field_ty, span);
+            let storage =
+                self.build_member_lvalue(base, through_pointer, field_def.offset, field_ty, span);
             return Some(TypedExpr {
                 kind: TypedExprKind::BitField {
                     storage: Box::new(storage),
@@ -1787,15 +1852,20 @@ impl<'a> SemanticAnalyzer<'a> {
                         "semantic",
                         Some(span),
                         "relational comparison of function pointers is not supported in phase 17",
-                        Some("compare function pointers only with `==`, `!=`, or literal zero".to_string()),
+                        Some(
+                            "compare function pointers only with `==`, `!=`, or literal zero"
+                                .to_string(),
+                        ),
                     );
                     return None;
                 }
                 if lhs.ty.is_pointer() || rhs.ty.is_pointer() {
                     return self.analyze_pointer_relational_expr(op, lhs, rhs, span, diagnostics);
                 }
-                let (lhs, rhs, _) =
-                    self.balance_integer_operands(op, lhs, rhs, diagnostics, span);
+                if lhs.ty.is_fixed() || rhs.ty.is_fixed() {
+                    return self.analyze_fixed_binary_expr(op, lhs, rhs, span, diagnostics);
+                }
+                let (lhs, rhs, _) = self.balance_integer_operands(op, lhs, rhs, diagnostics, span);
                 Some(TypedExpr {
                     kind: TypedExprKind::Binary {
                         op,
@@ -1819,6 +1889,9 @@ impl<'a> SemanticAnalyzer<'a> {
                     );
                     return None;
                 }
+                if lhs.ty.is_fixed() || rhs.ty.is_fixed() {
+                    return self.analyze_fixed_binary_expr(op, lhs, rhs, span, diagnostics);
+                }
                 self.analyze_add_sub_expr(op, lhs, rhs, span, diagnostics)
             }
             BinaryOp::ShiftLeft | BinaryOp::ShiftRight => {
@@ -1834,6 +1907,9 @@ impl<'a> SemanticAnalyzer<'a> {
             | BinaryOp::Modulo => {
                 let lhs = self.analyze_expr(lhs, diagnostics)?;
                 let rhs = self.analyze_expr(rhs, diagnostics)?;
+                if lhs.ty.is_fixed() || rhs.ty.is_fixed() {
+                    return self.analyze_fixed_binary_expr(op, lhs, rhs, span, diagnostics);
+                }
                 let (lhs, rhs, result_ty) =
                     self.balance_integer_operands(op, lhs, rhs, diagnostics, span);
                 self.diagnose_division_rhs(op, &rhs, span, diagnostics);
@@ -1872,6 +1948,10 @@ impl<'a> SemanticAnalyzer<'a> {
                 span,
                 value_category: ValueCategory::RValue,
             });
+        }
+
+        if lhs.ty.is_fixed() || rhs.ty.is_fixed() {
+            return self.analyze_fixed_binary_expr(op, lhs, rhs, span, diagnostics);
         }
 
         let (lhs, rhs, _) = self.balance_integer_operands(op, lhs, rhs, diagnostics, span);
@@ -1964,15 +2044,33 @@ impl<'a> SemanticAnalyzer<'a> {
             match op {
                 BinaryOp::Add => {
                     if lhs.ty.is_pointer() && rhs.ty.is_integer() {
-                        return Some(self.build_pointer_offset_expr(op, lhs, rhs, span, diagnostics));
+                        return Some(self.build_pointer_offset_expr(
+                            op,
+                            lhs,
+                            rhs,
+                            span,
+                            diagnostics,
+                        ));
                     }
                     if lhs.ty.is_integer() && rhs.ty.is_pointer() {
-                        return Some(self.build_pointer_offset_expr(op, rhs, lhs, span, diagnostics));
+                        return Some(self.build_pointer_offset_expr(
+                            op,
+                            rhs,
+                            lhs,
+                            span,
+                            diagnostics,
+                        ));
                     }
                 }
                 BinaryOp::Sub => {
                     if lhs.ty.is_pointer() && rhs.ty.is_integer() {
-                        return Some(self.build_pointer_offset_expr(op, lhs, rhs, span, diagnostics));
+                        return Some(self.build_pointer_offset_expr(
+                            op,
+                            lhs,
+                            rhs,
+                            span,
+                            diagnostics,
+                        ));
                     }
                     if lhs.ty.is_pointer() && rhs.ty.is_pointer() {
                         return self.build_pointer_difference_expr(lhs, rhs, span, diagnostics);
@@ -1989,6 +2087,10 @@ impl<'a> SemanticAnalyzer<'a> {
             return None;
         }
 
+        if lhs.ty.is_fixed() || rhs.ty.is_fixed() {
+            return self.analyze_fixed_binary_expr(op, lhs, rhs, span, diagnostics);
+        }
+
         let (lhs, rhs, result_ty) = self.balance_integer_operands(op, lhs, rhs, diagnostics, span);
         Some(TypedExpr {
             kind: TypedExprKind::Binary {
@@ -2000,6 +2102,136 @@ impl<'a> SemanticAnalyzer<'a> {
             span,
             value_category: ValueCategory::RValue,
         })
+    }
+
+    /// Analyzes Phase 22 fixed-point arithmetic over explicit matching formats.
+    fn analyze_fixed_binary_expr(
+        &mut self,
+        op: BinaryOp,
+        lhs: TypedExpr,
+        rhs: TypedExpr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        if !lhs.ty.is_fixed() || !rhs.ty.is_fixed() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("`{op:?}` requires matching fixed-point operands"),
+                Some(
+                    "cast integer values to a fixed-point type explicitly before mixed arithmetic"
+                        .to_string(),
+                ),
+            );
+            return None;
+        }
+
+        let lhs_ty = lhs.ty.unqualified();
+        let rhs_ty = rhs.ty.unqualified();
+        if lhs_ty != rhs_ty {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!(
+                    "fixed-point operands for `{op:?}` must use the same format, got `{}` and `{}`",
+                    lhs.ty, rhs.ty
+                ),
+                Some("cast one operand explicitly to the desired fixed-point format".to_string()),
+            );
+            return None;
+        }
+
+        match op {
+            BinaryOp::Add | BinaryOp::Sub => Some(TypedExpr {
+                kind: TypedExprKind::Binary {
+                    op,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+                ty: lhs_ty,
+                span,
+                value_category: ValueCategory::RValue,
+            }),
+            BinaryOp::Equal
+            | BinaryOp::NotEqual
+            | BinaryOp::Less
+            | BinaryOp::LessEqual
+            | BinaryOp::Greater
+            | BinaryOp::GreaterEqual => Some(TypedExpr {
+                kind: TypedExprKind::Binary {
+                    op,
+                    lhs: Box::new(
+                        self.build_bitcast_expr(
+                            lhs,
+                            lhs_ty
+                                .fixed_raw_integer_type()
+                                .expect("fixed comparison has raw integer type"),
+                        ),
+                    ),
+                    rhs: Box::new(
+                        self.build_bitcast_expr(
+                            rhs,
+                            lhs_ty
+                                .fixed_raw_integer_type()
+                                .expect("fixed comparison has raw integer type"),
+                        ),
+                    ),
+                },
+                ty: Type::new(ScalarType::U8),
+                span,
+                value_category: ValueCategory::RValue,
+            }),
+            BinaryOp::Multiply | BinaryOp::Divide => {
+                self.diagnose_division_rhs(op, &rhs, span, diagnostics);
+                if matches!(lhs_ty.scalar, ScalarType::Q16_16 | ScalarType::UQ16_16) {
+                    diagnostics.error(
+                        "semantic",
+                        Some(span),
+                        format!(
+                            "`{op:?}` for `{}` is deferred in phase 22 because it needs a wider intermediate",
+                            lhs_ty
+                        ),
+                        Some("use Q8.8 multiplication/division or keep Q16.16 to add/sub/compare/casts".to_string()),
+                    );
+                    return None;
+                }
+                Some(self.build_fixed_q8_helper_expr(op, lhs, rhs, lhs_ty, span, diagnostics))
+            }
+            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Modulo => {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    format!("`{op:?}` is not supported for fixed-point operands in phase 22"),
+                    Some(
+                        "cast to a raw integer type first if byte-level operations are intentional"
+                            .to_string(),
+                    ),
+                );
+                None
+            }
+            BinaryOp::ShiftLeft | BinaryOp::ShiftRight => {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    "fixed-point shifts are not implicit in phase 22",
+                    Some(
+                        "cast to a raw integer type before shifting fixed-point storage"
+                            .to_string(),
+                    ),
+                );
+                None
+            }
+            BinaryOp::LogicalAnd | BinaryOp::LogicalOr => Some(TypedExpr {
+                kind: TypedExprKind::Binary {
+                    op,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+                ty: Type::new(ScalarType::U8),
+                span,
+                value_category: ValueCategory::RValue,
+            }),
+        }
     }
 
     /// Lowers one indexing expression into pointer arithmetic followed by dereference.
@@ -2044,7 +2276,10 @@ impl<'a> SemanticAnalyzer<'a> {
             diagnostics.error(
                 "semantic",
                 Some(span),
-                format!("indexed element type `{}` is not supported in phase 16", element_ty),
+                format!(
+                    "indexed element type `{}` is not supported in phase 16",
+                    element_ty
+                ),
                 None,
             );
             return None;
@@ -2108,7 +2343,10 @@ impl<'a> SemanticAnalyzer<'a> {
             diagnostics.error(
                 "semantic",
                 Some(span),
-                format!("indexed element type `{}` is not supported in phase 3", element_ty),
+                format!(
+                    "indexed element type `{}` is not supported in phase 3",
+                    element_ty
+                ),
                 None,
             );
             return None;
@@ -2173,7 +2411,13 @@ impl<'a> SemanticAnalyzer<'a> {
         let result_ty = Type::new(element_ty.scalar)
             .with_qualifiers(Qualifiers::default())
             .with_address_space(AddressSpace::Data);
-        let index = self.coerce_expr(index, Type::new(ScalarType::U16), diagnostics, "ROM index", true);
+        let index = self.coerce_expr(
+            index,
+            Type::new(ScalarType::U16),
+            diagnostics,
+            "ROM index",
+            true,
+        );
 
         match element_ty.scalar {
             ScalarType::I8 | ScalarType::U8 => Some(TypedExpr {
@@ -2205,6 +2449,15 @@ impl<'a> SemanticAnalyzer<'a> {
                 );
                 None
             }
+            ScalarType::Q8_8 | ScalarType::UQ8_8 | ScalarType::Q16_16 | ScalarType::UQ16_16 => {
+                diagnostics.error(
+                    "semantic",
+                    Some(base.span),
+                    format!("direct ROM indexing does not support fixed-point ROM element type `{element_ty}` in phase 22"),
+                    Some("keep fixed-point calibration tables in data memory; ROM fixed arrays are deferred".to_string()),
+                );
+                None
+            }
             ScalarType::Void => {
                 diagnostics.error(
                     "semantic",
@@ -2229,12 +2482,18 @@ impl<'a> SemanticAnalyzer<'a> {
         diagnostics: &mut DiagnosticBag,
     ) -> Option<TypedExpr> {
         let target = self.analyze_expr_with_decay(target, diagnostics, false)?;
-        if matches!(target.kind, TypedExprKind::RomRead8 { .. } | TypedExprKind::RomRead16 { .. }) {
+        if matches!(
+            target.kind,
+            TypedExprKind::RomRead8 { .. } | TypedExprKind::RomRead16 { .. }
+        ) {
             diagnostics.error(
                 "semantic",
                 Some(target.span),
                 "writing to a program-memory array element is not allowed in phase 14",
-                Some("ROM data is read-only; copy into RAM first if you need writable storage".to_string()),
+                Some(
+                    "ROM data is read-only; copy into RAM first if you need writable storage"
+                        .to_string(),
+                ),
             );
             return None;
         }
@@ -2270,7 +2529,10 @@ impl<'a> SemanticAnalyzer<'a> {
                 diagnostics.warning(
                     "semantic",
                     Some(value.span),
-                    format!("assignment value for {}-bit bitfield truncates to fit", bit_width),
+                    format!(
+                        "assignment value for {}-bit bitfield truncates to fit",
+                        bit_width
+                    ),
                     "W1501",
                 );
             }
@@ -2288,7 +2550,11 @@ impl<'a> SemanticAnalyzer<'a> {
             if value.ty.unqualified() != target_ty.unqualified()
                 || (!value.ty.is_struct() && !value.ty.is_union())
             {
-                let aggregate_kind = if target_ty.is_union() { "union" } else { "struct" };
+                let aggregate_kind = if target_ty.is_union() {
+                    "union"
+                } else {
+                    "struct"
+                };
                 diagnostics.error(
                     "semantic",
                     Some(value.span),
@@ -2296,7 +2562,9 @@ impl<'a> SemanticAnalyzer<'a> {
                         "cannot assign incompatible {aggregate_kind} type `{}` to `{}`",
                         value.ty, target_ty
                     ),
-                    Some(format!("assign only between the same named {aggregate_kind} type")),
+                    Some(format!(
+                        "assign only between the same named {aggregate_kind} type"
+                    )),
                 );
                 return None;
             }
@@ -2338,6 +2606,15 @@ impl<'a> SemanticAnalyzer<'a> {
             if name == "__rom_read16" {
                 return self.analyze_rom_read16_expr(args, span, diagnostics);
             }
+            if let Some(fixed_ty) = Self::fixed_raw_builtin_type(name) {
+                return self.analyze_fixed_raw_builtin_expr(
+                    name,
+                    fixed_ty,
+                    args,
+                    span,
+                    diagnostics,
+                );
+            }
             if let Some(function) = self.globals_by_name.get(name).copied()
                 && self.symbols[function].kind == SymbolKind::Function
             {
@@ -2360,7 +2637,10 @@ impl<'a> SemanticAnalyzer<'a> {
                 "semantic",
                 Some(span),
                 "function-pointer calls are not supported inside interrupt handlers in phase 17",
-                Some("keep ISR control flow inline and call function pointers from normal code only".to_string()),
+                Some(
+                    "keep ISR control flow inline and call function pointers from normal code only"
+                        .to_string(),
+                ),
             );
             return None;
         }
@@ -2388,6 +2668,61 @@ impl<'a> SemanticAnalyzer<'a> {
                 args: typed_args,
             },
             ty: self.function_pointer_return_type(callee.ty),
+            span,
+            value_category: ValueCategory::RValue,
+        })
+    }
+
+    /// Maps Phase 22 raw fixed-point constructor builtins to their fixed scalar type.
+    fn fixed_raw_builtin_type(name: &str) -> Option<Type> {
+        Some(Type::new(match name {
+            "__q8_8" => ScalarType::Q8_8,
+            "__uq8_8" => ScalarType::UQ8_8,
+            "__q16_16" => ScalarType::Q16_16,
+            "__uq16_16" => ScalarType::UQ16_16,
+            _ => return None,
+        }))
+    }
+
+    /// Analyzes raw fixed-point constructor builtins such as `__q8_8(384)`.
+    fn analyze_fixed_raw_builtin_expr(
+        &mut self,
+        builtin: &str,
+        fixed_ty: Type,
+        args: &[Expr],
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        if args.len() != 1 {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("`{builtin}` expects 1 argument, got {}", args.len()),
+                Some(format!("use `{builtin}(raw_integer_value)`")),
+            );
+            return None;
+        }
+
+        let raw_ty = fixed_ty
+            .fixed_raw_integer_type()
+            .expect("fixed builtin has raw integer type");
+        let raw = self.analyze_expr(&args[0], diagnostics)?;
+        if !raw.ty.is_integer() {
+            diagnostics.error(
+                "semantic",
+                Some(raw.span),
+                format!("`{builtin}` raw value must be an integer expression"),
+                None,
+            );
+            return None;
+        }
+        let raw = self.coerce_expr(raw, raw_ty, diagnostics, "fixed raw constructor", true);
+        Some(TypedExpr {
+            kind: TypedExprKind::Cast {
+                kind: CastKind::Bitcast,
+                expr: Box::new(raw),
+            },
+            ty: fixed_ty,
             span,
             value_category: ValueCategory::RValue,
         })
@@ -2528,8 +2863,7 @@ impl<'a> SemanticAnalyzer<'a> {
         if !matches!(
             (element_width, element_ty.scalar),
             (1, ScalarType::I8 | ScalarType::U8) | (2, ScalarType::I16 | ScalarType::U16)
-        )
-            || element_ty.pointer_depth != 0
+        ) || element_ty.pointer_depth != 0
             || element_ty.struct_id.is_some()
         {
             diagnostics.error(
@@ -2603,15 +2937,20 @@ impl<'a> SemanticAnalyzer<'a> {
         diagnostics: &mut DiagnosticBag,
     ) -> Option<AnalyzedInitializer> {
         if target_ty.is_array() || target_ty.is_struct() || target_ty.is_union() {
-            let assignments =
-                self.analyze_recursive_aggregate_initializer(target_ty, initializer, context, diagnostics)?;
+            let assignments = self.analyze_recursive_aggregate_initializer(
+                target_ty,
+                initializer,
+                context,
+                diagnostics,
+            )?;
             return Some(AnalyzedInitializer::Aggregate(AggregateInitPlan {
                 size: target_ty.byte_width(),
                 assignments,
             }));
         }
 
-        let value = self.analyze_scalar_initializer_expr(initializer, target_ty, context, diagnostics)?;
+        let value =
+            self.analyze_scalar_initializer_expr(initializer, target_ty, context, diagnostics)?;
         Some(AnalyzedInitializer::Scalar(value))
     }
 
@@ -2647,7 +2986,12 @@ impl<'a> SemanticAnalyzer<'a> {
                     );
                     return None;
                 }
-                self.analyze_scalar_initializer_expr(&items[0].initializer, target_ty, context, diagnostics)
+                self.analyze_scalar_initializer_expr(
+                    &items[0].initializer,
+                    target_ty,
+                    context,
+                    diagnostics,
+                )
             }
         }
     }
@@ -2660,7 +3004,12 @@ impl<'a> SemanticAnalyzer<'a> {
         span: Span,
         diagnostics: &mut DiagnosticBag,
     ) -> Option<TypedGlobalInitializer> {
-        match self.analyze_initializer_value(target_ty, initializer, "global initializer", diagnostics)? {
+        match self.analyze_initializer_value(
+            target_ty,
+            initializer,
+            "global initializer",
+            diagnostics,
+        )? {
             AnalyzedInitializer::Scalar(expr) => {
                 if target_ty.is_pointer() {
                     if self.is_null_pointer_constant(&expr) {
@@ -2702,7 +3051,9 @@ impl<'a> SemanticAnalyzer<'a> {
                         valid = false;
                         continue;
                     };
-                    if let (Some(bit_offset), Some(bit_width)) = (assignment.bit_offset, assignment.bit_width) {
+                    if let (Some(bit_offset), Some(bit_width)) =
+                        (assignment.bit_offset, assignment.bit_width)
+                    {
                         let unit_bytes = assignment.ty.byte_width();
                         if assignment.offset + unit_bytes > bytes.len() {
                             diagnostics.error(
@@ -2728,7 +3079,8 @@ impl<'a> SemanticAnalyzer<'a> {
                             (normalize_value(value, assignment.ty) as u64 & raw_mask) << bit_offset;
                         current = (current & !shifted_mask) | field_value;
                         for byte in 0..unit_bytes {
-                            bytes[assignment.offset + byte] = ((current >> (8 * byte)) & 0xFF) as u8;
+                            bytes[assignment.offset + byte] =
+                                ((current >> (8 * byte)) & 0xFF) as u8;
                         }
                         continue;
                     }
@@ -2903,7 +3255,10 @@ impl<'a> SemanticAnalyzer<'a> {
                 init_context.diagnostics.error(
                     "semantic",
                     Some(initializer_span(initializer)),
-                    format!("{} for struct type requires a brace initializer list", init_context.mode),
+                    format!(
+                        "{} for struct type requires a brace initializer list",
+                        init_context.mode
+                    ),
                     None,
                 );
                 return false;
@@ -2922,7 +3277,10 @@ impl<'a> SemanticAnalyzer<'a> {
                 init_context.diagnostics.error(
                     "semantic",
                     Some(initializer_span(initializer)),
-                    format!("{} for union type requires a brace initializer list", init_context.mode),
+                    format!(
+                        "{} for union type requires a brace initializer list",
+                        init_context.mode
+                    ),
                     None,
                 );
                 return false;
@@ -3007,17 +3365,17 @@ impl<'a> SemanticAnalyzer<'a> {
                     init_context.diagnostics.error(
                         "semantic",
                         Some(initializer_entry_span(entry)),
-                        format!("duplicate initializer for designator {}", render_designator_path(path)),
+                        format!(
+                            "duplicate initializer for designator {}",
+                            render_designator_path(path)
+                        ),
                         None,
                     );
                     valid = false;
                     continue;
                 }
-                valid &= self.apply_resolved_designator_target(
-                    target,
-                    &entry.initializer,
-                    init_context,
-                );
+                valid &=
+                    self.apply_resolved_designator_target(target, &entry.initializer, init_context);
                 continue;
             }
 
@@ -3090,7 +3448,9 @@ impl<'a> SemanticAnalyzer<'a> {
 
         for entry in items {
             if let Some(path) = &entry.designator {
-                let Some((field_index, _)) = self.first_struct_designator(&fields, path, init_context.diagnostics) else {
+                let Some((field_index, _)) =
+                    self.first_struct_designator(&fields, path, init_context.diagnostics)
+                else {
                     valid = false;
                     continue;
                 };
@@ -3109,17 +3469,17 @@ impl<'a> SemanticAnalyzer<'a> {
                     init_context.diagnostics.error(
                         "semantic",
                         Some(initializer_entry_span(entry)),
-                        format!("duplicate initializer for designator {}", render_designator_path(path)),
+                        format!(
+                            "duplicate initializer for designator {}",
+                            render_designator_path(path)
+                        ),
                         None,
                     );
                     valid = false;
                     continue;
                 }
-                valid &= self.apply_resolved_designator_target(
-                    target,
-                    &entry.initializer,
-                    init_context,
-                );
+                valid &=
+                    self.apply_resolved_designator_target(target, &entry.initializer, init_context);
                 continue;
             }
 
@@ -3212,7 +3572,8 @@ impl<'a> SemanticAnalyzer<'a> {
 
         let entry = &items[0];
         if let Some(path) = &entry.designator {
-            let Some(_) = self.first_union_designator(&fields, path, init_context.diagnostics) else {
+            let Some(_) = self.first_union_designator(&fields, path, init_context.diagnostics)
+            else {
                 return false;
             };
             let Some(target) = self.resolve_designator_target(
@@ -3325,14 +3686,16 @@ impl<'a> SemanticAnalyzer<'a> {
                     diagnostics.error(
                         "semantic",
                         Some(*span),
-                        format!("initializer path cannot index non-array type `{}`", target_ty),
+                        format!(
+                            "initializer path cannot index non-array type `{}`",
+                            target_ty
+                        ),
                         None,
                     );
                     return None;
                 }
                 let len = target_ty.top_array_len().unwrap_or(0);
-                let index =
-                    self.evaluate_array_designator_index(expr, len, *span, diagnostics)?;
+                let index = self.evaluate_array_designator_index(expr, len, *span, diagnostics)?;
                 let element_ty = target_ty.element_type();
                 self.resolve_designator_target(
                     element_ty,
@@ -3353,7 +3716,9 @@ impl<'a> SemanticAnalyzer<'a> {
                         diagnostics.error(
                             "semantic",
                             Some(*span),
-                            format!("designator path cannot continue through bitfield `.{field_name}`"),
+                            format!(
+                                "designator path cannot continue through bitfield `.{field_name}`"
+                            ),
                             None,
                         );
                         return None;
@@ -3441,17 +3806,17 @@ impl<'a> SemanticAnalyzer<'a> {
         diagnostics.error(
             "semantic",
             Some(span),
-            format!("initializer path cannot select field `.{field_name}` from non-aggregate type `{}`", target_ty),
+            format!(
+                "initializer path cannot select field `.{field_name}` from non-aggregate type `{}`",
+                target_ty
+            ),
             None,
         );
         None
     }
 
     /// Returns the top-level array designator component required by one array initializer entry.
-    fn first_array_designator(
-        &self,
-        path: &super::ast::DesignatorPath,
-    ) -> Option<(Expr, Span)> {
+    fn first_array_designator(&self, path: &super::ast::DesignatorPath) -> Option<(Expr, Span)> {
         match path.items.first() {
             Some(Designator::Index(expr, span)) => Some((expr.clone(), *span)),
             _ => None,
@@ -3606,9 +3971,12 @@ impl<'a> SemanticAnalyzer<'a> {
                         );
                         continue;
                     };
-                    let Some(index) =
-                        self.evaluate_array_designator_index(&expr, usize::MAX, designator_span, diagnostics)
-                    else {
+                    let Some(index) = self.evaluate_array_designator_index(
+                        &expr,
+                        usize::MAX,
+                        designator_span,
+                        diagnostics,
+                    ) else {
                         continue;
                     };
                     next_index = index.saturating_add(1);
@@ -3628,7 +3996,10 @@ impl<'a> SemanticAnalyzer<'a> {
                 "semantic",
                 Some(span),
                 "cannot infer an array size from an empty initializer",
-                Some("spell an explicit array length or provide at least one initializer element".to_string()),
+                Some(
+                    "spell an explicit array length or provide at least one initializer element"
+                        .to_string(),
+                ),
             );
             1
         } else {
@@ -3806,7 +4177,9 @@ impl<'a> SemanticAnalyzer<'a> {
                     BinaryOp::Sub => (base_offset as i64).checked_sub(delta)?,
                     _ => return None,
                 };
-                usize::try_from(adjusted).ok().map(|offset| (symbol, offset))
+                usize::try_from(adjusted)
+                    .ok()
+                    .map(|offset| (symbol, offset))
             }
             _ => None,
         }
@@ -3904,7 +4277,9 @@ impl<'a> SemanticAnalyzer<'a> {
 
     /// Returns the first default-label span already registered for the active switch.
     fn current_switch_default_span(&self) -> Option<Span> {
-        self.switch_stack.last().and_then(|context| context.default_span)
+        self.switch_stack
+            .last()
+            .and_then(|context| context.default_span)
     }
 
     /// Analyzes one nested statement while temporarily forbidding case/default labels here.
@@ -3975,7 +4350,10 @@ impl<'a> SemanticAnalyzer<'a> {
                 "semantic",
                 Some(span),
                 format!("duplicate case value `{canonical}` in one switch"),
-                Some(format!("previous matching case label starts at byte {}", previous.start)),
+                Some(format!(
+                    "previous matching case label starts at byte {}",
+                    previous.start
+                )),
             );
         }
         Some(normalized)
@@ -4022,12 +4400,16 @@ impl<'a> SemanticAnalyzer<'a> {
         span: Span,
         diagnostics: &mut DiagnosticBag,
     ) -> Option<TypedExpr> {
-        let supported = ty.is_supported_object_type() || ty.is_supported_value_type() || ty.is_rom();
+        let supported =
+            ty.is_supported_object_type() || ty.is_supported_value_type() || ty.is_rom();
         if !ty.has_size() || !supported {
             diagnostics.error(
                 "semantic",
                 Some(span),
-                format!("`sizeof` does not support incomplete or unsupported type `{}`", ty),
+                format!(
+                    "`sizeof` does not support incomplete or unsupported type `{}`",
+                    ty
+                ),
                 None,
             );
             return None;
@@ -4407,7 +4789,10 @@ impl<'a> SemanticAnalyzer<'a> {
                     "pointer subtraction for element type `{}` is not supported in phase 12",
                     element_ty
                 ),
-                Some("use element sizes of 1, 2, or 4 bytes only for pointer subtraction".to_string()),
+                Some(
+                    "use element sizes of 1, 2, or 4 bytes only for pointer subtraction"
+                        .to_string(),
+                ),
             );
             return None;
         }
@@ -4547,7 +4932,9 @@ impl<'a> SemanticAnalyzer<'a> {
                         "incompatible function pointer conversion from `{}` to `{}` in {context}",
                         expr.ty, target_ty
                     ),
-                    Some("use matching return and parameter types for function pointers".to_string()),
+                    Some(
+                        "use matching return and parameter types for function pointers".to_string(),
+                    ),
                 );
                 return TypedExpr {
                     kind: expr.kind,
@@ -4572,7 +4959,10 @@ impl<'a> SemanticAnalyzer<'a> {
                         "cannot convert data pointer `{}` to function pointer `{}` in {context}",
                         expr.ty, target_ty
                     ),
-                    Some("keep data pointers and function pointers in separate storage and APIs".to_string()),
+                    Some(
+                        "keep data pointers and function pointers in separate storage and APIs"
+                            .to_string(),
+                    ),
                 );
                 return TypedExpr {
                     kind: expr.kind,
@@ -4584,8 +4974,14 @@ impl<'a> SemanticAnalyzer<'a> {
             diagnostics.error(
                 "semantic",
                 Some(span),
-                format!("cannot coerce `{}` to `{}` in {context}", expr.ty, target_ty),
-                Some("use a compatible function name, function pointer value, or literal zero".to_string()),
+                format!(
+                    "cannot coerce `{}` to `{}` in {context}",
+                    expr.ty, target_ty
+                ),
+                Some(
+                    "use a compatible function name, function pointer value, or literal zero"
+                        .to_string(),
+                ),
             );
             return TypedExpr {
                 kind: expr.kind,
@@ -4598,8 +4994,14 @@ impl<'a> SemanticAnalyzer<'a> {
             diagnostics.error(
                 "semantic",
                 Some(expr.span),
-                format!("cannot coerce `{}` to `{}` in {context}", expr.ty, target_ty),
-                Some("do not mix function pointers with integers or data pointers in phase 17".to_string()),
+                format!(
+                    "cannot coerce `{}` to `{}` in {context}",
+                    expr.ty, target_ty
+                ),
+                Some(
+                    "do not mix function pointers with integers or data pointers in phase 17"
+                        .to_string(),
+                ),
             );
             return expr;
         }
@@ -4696,7 +5098,10 @@ impl<'a> SemanticAnalyzer<'a> {
             diagnostics.error(
                 "semantic",
                 Some(expr.span),
-                format!("cannot coerce `{}` to `{}` in {context}", expr.ty, target_ty),
+                format!(
+                    "cannot coerce `{}` to `{}` in {context}",
+                    expr.ty, target_ty
+                ),
                 Some("use matching data-space pointer types or literal zero".to_string()),
             );
             return expr;
@@ -4705,16 +5110,27 @@ impl<'a> SemanticAnalyzer<'a> {
             diagnostics.error(
                 "semantic",
                 Some(expr.span),
-                format!("string literal is incompatible with target type `{}` in {context}", target_ty),
-                Some("initialize a matching data-space pointer or a char array instead".to_string()),
+                format!(
+                    "string literal is incompatible with target type `{}` in {context}",
+                    target_ty
+                ),
+                Some(
+                    "initialize a matching data-space pointer or a char array instead".to_string(),
+                ),
             );
             return expr;
+        }
+        if expr.ty.is_fixed() || target_ty.is_fixed() {
+            return self.coerce_fixed_expr(expr, target_ty, diagnostics, context, warn_on_truncate);
         }
         if !expr.ty.is_integer() || !target_ty.is_integer() {
             diagnostics.error(
                 "semantic",
                 Some(expr.span),
-                format!("cannot coerce `{}` to `{}` in {context}", expr.ty, target_ty),
+                format!(
+                    "cannot coerce `{}` to `{}` in {context}",
+                    expr.ty, target_ty
+                ),
                 None,
             );
             return expr;
@@ -4765,6 +5181,327 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
+    /// Inserts Phase 22 fixed-point casts with explicit raw scaling.
+    fn coerce_fixed_expr(
+        &mut self,
+        expr: TypedExpr,
+        target_ty: Type,
+        diagnostics: &mut DiagnosticBag,
+        context: &str,
+        warn_on_truncate: bool,
+    ) -> TypedExpr {
+        let span = expr.span;
+        if !expr.ty.is_fixed() && !target_ty.is_fixed() {
+            return expr;
+        }
+        if !(expr.ty.is_integer() || expr.ty.is_fixed())
+            || !(target_ty.is_integer() || target_ty.is_fixed())
+        {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!(
+                    "cannot coerce `{}` to `{}` in {context}",
+                    expr.ty, target_ty
+                ),
+                Some(
+                    "fixed-point conversions require integer or fixed-point scalar types"
+                        .to_string(),
+                ),
+            );
+            return expr;
+        }
+
+        if warn_on_truncate {
+            if expr.ty.is_fixed() && target_ty.is_fixed() {
+                if expr.ty.bit_width() > target_ty.bit_width()
+                    || expr.ty.fixed_fraction_bits() > target_ty.fixed_fraction_bits()
+                {
+                    diagnostics.warning(
+                        "semantic",
+                        Some(span),
+                        format!(
+                            "conversion from `{}` to `{}` narrows fixed-point precision",
+                            expr.ty, target_ty
+                        ),
+                        "W2201",
+                    );
+                }
+                if expr.ty.is_signed() != target_ty.is_signed() {
+                    diagnostics.warning(
+                        "semantic",
+                        Some(span),
+                        format!(
+                            "conversion from `{}` to `{}` changes fixed-point signedness",
+                            expr.ty, target_ty
+                        ),
+                        "W2202",
+                    );
+                }
+            } else {
+                diagnostics.warning(
+                    "semantic",
+                    Some(span),
+                    format!(
+                        "implicit conversion from `{}` to `{}` uses fixed-point scaling",
+                        expr.ty, target_ty
+                    ),
+                    "W2201",
+                );
+            }
+        }
+
+        if let Some(value) = eval_integer_constant_expr(&expr) {
+            let scaled = Self::eval_fixed_conversion_constant(value, expr.ty, target_ty);
+            return TypedExpr {
+                kind: TypedExprKind::IntLiteral(scaled),
+                ty: target_ty,
+                span,
+                value_category: ValueCategory::RValue,
+            };
+        }
+
+        if expr.ty.is_integer() && target_ty.is_fixed() {
+            return self.build_integer_to_fixed_expr(expr, target_ty, diagnostics, context);
+        }
+        if expr.ty.is_fixed() && target_ty.is_integer() {
+            return self.build_fixed_to_integer_expr(expr, target_ty, diagnostics, context);
+        }
+        if expr.ty.is_fixed() && target_ty.is_fixed() {
+            return self.build_fixed_to_fixed_expr(expr, target_ty, diagnostics, context);
+        }
+
+        diagnostics.error(
+            "semantic",
+            Some(span),
+            format!(
+                "unsupported fixed-point conversion from `{}` to `{}`",
+                expr.ty, target_ty
+            ),
+            None,
+        );
+        expr
+    }
+
+    /// Lowers Q8.8 multiply/divide through the tested Phase 21 32-bit integer helpers.
+    fn build_fixed_q8_helper_expr(
+        &mut self,
+        op: BinaryOp,
+        lhs: TypedExpr,
+        rhs: TypedExpr,
+        fixed_ty: Type,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> TypedExpr {
+        let raw16_ty = fixed_ty
+            .fixed_raw_integer_type()
+            .expect("Q8.8 has raw integer type");
+        let raw32_ty = Type::new(if fixed_ty.is_signed() {
+            ScalarType::I32
+        } else {
+            ScalarType::U32
+        });
+
+        let lhs_raw16 = self.build_bitcast_expr(lhs, raw16_ty);
+        let rhs_raw16 = self.build_bitcast_expr(rhs, raw16_ty);
+        let lhs_raw32 = self.coerce_expr(
+            lhs_raw16,
+            raw32_ty,
+            diagnostics,
+            "fixed helper operand",
+            false,
+        );
+        let rhs_raw32 = self.coerce_expr(
+            rhs_raw16,
+            raw32_ty,
+            diagnostics,
+            "fixed helper operand",
+            false,
+        );
+
+        let wide = match op {
+            BinaryOp::Multiply => {
+                let product = TypedExpr {
+                    kind: TypedExprKind::Binary {
+                        op: BinaryOp::Multiply,
+                        lhs: Box::new(lhs_raw32),
+                        rhs: Box::new(rhs_raw32),
+                    },
+                    ty: raw32_ty,
+                    span,
+                    value_category: ValueCategory::RValue,
+                };
+                Self::constant_shift_expr(product, BinaryOp::ShiftRight, 8, raw32_ty)
+            }
+            BinaryOp::Divide => {
+                let dividend =
+                    Self::constant_shift_expr(lhs_raw32, BinaryOp::ShiftLeft, 8, raw32_ty);
+                TypedExpr {
+                    kind: TypedExprKind::Binary {
+                        op: BinaryOp::Divide,
+                        lhs: Box::new(dividend),
+                        rhs: Box::new(rhs_raw32),
+                    },
+                    ty: raw32_ty,
+                    span,
+                    value_category: ValueCategory::RValue,
+                }
+            }
+            _ => unreachable!("Q8.8 helper lowering only supports multiply/divide"),
+        };
+
+        let narrowed = self.coerce_expr(wide, raw16_ty, diagnostics, "fixed helper result", false);
+        self.build_bitcast_expr(narrowed, fixed_ty)
+    }
+
+    /// Evaluates constant fixed/integer conversions using raw fixed storage rules.
+    fn eval_fixed_conversion_constant(value: i64, source_ty: Type, target_ty: Type) -> i64 {
+        let mut raw = if source_ty.is_signed() {
+            i128::from(signed_value(value, source_ty))
+        } else {
+            i128::from(normalize_value(value, source_ty))
+        };
+        let source_frac = source_ty.fixed_fraction_bits().unwrap_or(0);
+        let target_frac = target_ty.fixed_fraction_bits().unwrap_or(0);
+        if target_frac >= source_frac {
+            raw <<= target_frac - source_frac;
+        } else {
+            raw >>= source_frac - target_frac;
+        }
+        normalize_value(raw as i64, target_ty)
+    }
+
+    /// Builds one nonconstant integer-to-fixed conversion as raw shift plus bitcast.
+    fn build_integer_to_fixed_expr(
+        &mut self,
+        expr: TypedExpr,
+        target_ty: Type,
+        diagnostics: &mut DiagnosticBag,
+        context: &str,
+    ) -> TypedExpr {
+        let raw_ty = target_ty
+            .fixed_raw_integer_type()
+            .expect("fixed target has raw integer type");
+        let frac = target_ty
+            .fixed_fraction_bits()
+            .expect("fixed target has scale");
+        let raw = self.coerce_expr(expr, raw_ty, diagnostics, context, false);
+        let shifted = Self::constant_shift_expr(raw, BinaryOp::ShiftLeft, frac, raw_ty);
+        self.build_bitcast_expr(shifted, target_ty)
+    }
+
+    /// Builds one nonconstant fixed-to-integer conversion as raw bitcast plus arithmetic shift.
+    fn build_fixed_to_integer_expr(
+        &mut self,
+        expr: TypedExpr,
+        target_ty: Type,
+        diagnostics: &mut DiagnosticBag,
+        context: &str,
+    ) -> TypedExpr {
+        let raw_ty = expr
+            .ty
+            .fixed_raw_integer_type()
+            .expect("fixed source has raw integer type");
+        let frac = expr
+            .ty
+            .fixed_fraction_bits()
+            .expect("fixed source has scale");
+        let raw = self.build_bitcast_expr(expr, raw_ty);
+        let shifted = Self::constant_shift_expr(raw, BinaryOp::ShiftRight, frac, raw_ty);
+        self.coerce_expr(shifted, target_ty, diagnostics, context, false)
+    }
+
+    /// Builds one nonconstant fixed-to-fixed conversion by adjusting raw fractional bits.
+    fn build_fixed_to_fixed_expr(
+        &mut self,
+        expr: TypedExpr,
+        target_ty: Type,
+        diagnostics: &mut DiagnosticBag,
+        context: &str,
+    ) -> TypedExpr {
+        let source_raw_ty = expr
+            .ty
+            .fixed_raw_integer_type()
+            .expect("fixed source has raw integer type");
+        let target_raw_ty = target_ty
+            .fixed_raw_integer_type()
+            .expect("fixed target has raw integer type");
+        let source_frac = expr
+            .ty
+            .fixed_fraction_bits()
+            .expect("fixed source has scale");
+        let target_frac = target_ty
+            .fixed_fraction_bits()
+            .expect("fixed target has scale");
+        let mut raw = self.build_bitcast_expr(expr, source_raw_ty);
+
+        if target_ty.bit_width() > source_raw_ty.bit_width() {
+            raw = self.coerce_expr(raw, target_raw_ty, diagnostics, context, false);
+            raw = Self::adjust_fixed_raw_scale(raw, source_frac, target_frac, target_raw_ty);
+        } else {
+            raw = Self::adjust_fixed_raw_scale(raw, source_frac, target_frac, source_raw_ty);
+            raw = self.coerce_expr(raw, target_raw_ty, diagnostics, context, false);
+        }
+
+        self.build_bitcast_expr(raw, target_ty)
+    }
+
+    /// Shifts raw fixed storage to convert between fixed-point fractional widths.
+    fn adjust_fixed_raw_scale(
+        raw: TypedExpr,
+        source_frac: usize,
+        target_frac: usize,
+        raw_ty: Type,
+    ) -> TypedExpr {
+        if target_frac > source_frac {
+            Self::constant_shift_expr(raw, BinaryOp::ShiftLeft, target_frac - source_frac, raw_ty)
+        } else if source_frac > target_frac {
+            Self::constant_shift_expr(raw, BinaryOp::ShiftRight, source_frac - target_frac, raw_ty)
+        } else {
+            raw
+        }
+    }
+
+    /// Builds a cast node that reinterprets raw storage without scaling.
+    fn build_bitcast_expr(&self, expr: TypedExpr, target_ty: Type) -> TypedExpr {
+        if expr.ty == target_ty {
+            return expr;
+        }
+        let span = expr.span;
+        TypedExpr {
+            kind: TypedExprKind::Cast {
+                kind: CastKind::Bitcast,
+                expr: Box::new(expr),
+            },
+            ty: target_ty,
+            span,
+            value_category: ValueCategory::RValue,
+        }
+    }
+
+    /// Builds a constant-count raw shift expression.
+    fn constant_shift_expr(expr: TypedExpr, op: BinaryOp, count: usize, raw_ty: Type) -> TypedExpr {
+        if count == 0 {
+            return expr;
+        }
+        let span = expr.span;
+        TypedExpr {
+            kind: TypedExprKind::Binary {
+                op,
+                lhs: Box::new(expr),
+                rhs: Box::new(TypedExpr {
+                    kind: TypedExprKind::IntLiteral(count as i64),
+                    ty: raw_ty,
+                    span,
+                    value_category: ValueCategory::RValue,
+                }),
+            },
+            ty: raw_ty,
+            span,
+            value_category: ValueCategory::RValue,
+        }
+    }
+
     /// Returns true when one typed expression is the literal zero null-pointer constant.
     fn is_null_pointer_constant(&self, expr: &TypedExpr) -> bool {
         matches!(expr.kind, TypedExprKind::IntLiteral(0))
@@ -4789,12 +5526,7 @@ impl<'a> SemanticAnalyzer<'a> {
         name: &str,
         diagnostics: &mut DiagnosticBag,
     ) {
-        self.validate_const_placement(
-            ty,
-            span,
-            &format!("function `{name}`"),
-            diagnostics,
-        );
+        self.validate_const_placement(ty, span, &format!("function `{name}`"), diagnostics);
         if !self.validate_function_pointer_usage_type(
             ty,
             span,
@@ -4943,7 +5675,9 @@ impl<'a> SemanticAnalyzer<'a> {
                     "semantic",
                     Some(span),
                     format!("program-memory object `{name}` uses unsupported type `{ty}`"),
-                    Some("phase 14 supports only ROM arrays of 8-bit or 16-bit integers".to_string()),
+                    Some(
+                        "phase 14 supports only ROM arrays of 8-bit or 16-bit integers".to_string(),
+                    ),
                 );
                 return;
             }
@@ -4960,8 +5694,7 @@ impl<'a> SemanticAnalyzer<'a> {
             if !matches!(
                 element_ty.scalar,
                 ScalarType::I8 | ScalarType::U8 | ScalarType::I16 | ScalarType::U16
-            )
-                || element_ty.pointer_depth != 0
+            ) || element_ty.pointer_depth != 0
                 || element_ty.is_array()
                 || element_ty.struct_id.is_some()
             {
@@ -5038,7 +5771,10 @@ impl<'a> SemanticAnalyzer<'a> {
                 "semantic",
                 Some(span),
                 format!("{context} uses unsupported pointer-to-function-pointer type `{ty}`"),
-                Some("store function pointers directly, not through another data pointer layer".to_string()),
+                Some(
+                    "store function pointers directly, not through another data pointer layer"
+                        .to_string(),
+                ),
             );
             return false;
         }
@@ -5048,7 +5784,9 @@ impl<'a> SemanticAnalyzer<'a> {
             return true;
         }
 
-        let return_scalar = candidate.function_return_scalar().unwrap_or(ScalarType::Void);
+        let return_scalar = candidate
+            .function_return_scalar()
+            .unwrap_or(ScalarType::Void);
         if !matches!(
             return_scalar,
             ScalarType::Void
@@ -5310,7 +6048,8 @@ impl<'a> SemanticAnalyzer<'a> {
         }
 
         if field_ty.is_pointer()
-            && (field_ty.element_type().has_struct_base() || field_ty.element_type().has_union_base())
+            && (field_ty.element_type().has_struct_base()
+                || field_ty.element_type().has_union_base())
             && !field_ty.element_type().has_size()
         {
             diagnostics.error(
@@ -5347,11 +6086,7 @@ impl<'a> SemanticAnalyzer<'a> {
 
     /// Applies the C parameter-array decay rule to one declared parameter type.
     fn normalize_param_type(&self, ty: Type) -> Type {
-        if ty.is_array() {
-            ty.decay()
-        } else {
-            ty
-        }
+        if ty.is_array() { ty.decay() } else { ty }
     }
 
     /// Rejects direct or mutual recursion because Phase 18 still requires an acyclic call graph.
@@ -5475,7 +6210,11 @@ impl<'a> SemanticAnalyzer<'a> {
     }
 
     /// Rejects obvious local-pointer alias chains that can return stack storage indirectly.
-    fn reject_stack_local_pointer_returns(&self, body: &TypedStmt, diagnostics: &mut DiagnosticBag) {
+    fn reject_stack_local_pointer_returns(
+        &self,
+        body: &TypedStmt,
+        diagnostics: &mut DiagnosticBag,
+    ) {
         let mut tainted_locals = BTreeSet::new();
         self.walk_stmt_for_stack_pointer_returns(body, &mut tainted_locals, diagnostics);
     }
@@ -5490,7 +6229,11 @@ impl<'a> SemanticAnalyzer<'a> {
         match stmt {
             TypedStmt::Block(statements, _) => {
                 for statement in statements {
-                    self.walk_stmt_for_stack_pointer_returns(statement, tainted_locals, diagnostics);
+                    self.walk_stmt_for_stack_pointer_returns(
+                        statement,
+                        tainted_locals,
+                        diagnostics,
+                    );
                 }
             }
             TypedStmt::Switch { expr, body, .. } => {
@@ -5527,7 +6270,11 @@ impl<'a> SemanticAnalyzer<'a> {
                 let mut merged = then_taint;
                 if let Some(else_branch) = else_branch {
                     let mut else_taint = branch_seed;
-                    self.walk_stmt_for_stack_pointer_returns(else_branch, &mut else_taint, diagnostics);
+                    self.walk_stmt_for_stack_pointer_returns(
+                        else_branch,
+                        &mut else_taint,
+                        diagnostics,
+                    );
                     merged.extend(else_taint);
                 } else {
                     merged.extend(branch_seed);
@@ -5544,9 +6291,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 tainted_locals.extend(loop_taint);
             }
             TypedStmt::DoWhile {
-                body,
-                condition,
-                ..
+                body, condition, ..
             } => {
                 let mut loop_taint = tainted_locals.clone();
                 self.walk_stmt_for_stack_pointer_returns(body, &mut loop_taint, diagnostics);
@@ -5605,15 +6350,21 @@ impl<'a> SemanticAnalyzer<'a> {
         match &expr.kind {
             TypedExprKind::IntLiteral(_) => false,
             TypedExprKind::Symbol(symbol) => {
-                expr.ty.is_pointer() && self.is_local_pointer_symbol(*symbol) && tainted_locals.contains(symbol)
+                expr.ty.is_pointer()
+                    && self.is_local_pointer_symbol(*symbol)
+                    && tainted_locals.contains(symbol)
             }
-            TypedExprKind::Unary { expr, .. } => self.track_stack_pointer_expr(expr, tainted_locals),
+            TypedExprKind::Unary { expr, .. } => {
+                self.track_stack_pointer_expr(expr, tainted_locals)
+            }
             TypedExprKind::Binary { lhs, rhs, .. } => {
                 let lhs_tainted = self.track_stack_pointer_expr(lhs, tainted_locals);
                 let rhs_tainted = self.track_stack_pointer_expr(rhs, tainted_locals);
                 expr.ty.is_pointer() && (lhs_tainted || rhs_tainted)
             }
-            TypedExprKind::ArrayDecay(value) | TypedExprKind::AddressOf(value) => self.is_stack_lvalue(value),
+            TypedExprKind::ArrayDecay(value) | TypedExprKind::AddressOf(value) => {
+                self.is_stack_lvalue(value)
+            }
             TypedExprKind::Deref(value) => {
                 let _ = self.track_stack_pointer_expr(value, tainted_locals);
                 false
@@ -5644,16 +6395,16 @@ impl<'a> SemanticAnalyzer<'a> {
                 false
             }
             TypedExprKind::Call { args, .. } => {
-                let arg_tainted = args
-                    .iter()
-                    .fold(false, |acc, arg| self.track_stack_pointer_expr(arg, tainted_locals) || acc);
+                let arg_tainted = args.iter().fold(false, |acc, arg| {
+                    self.track_stack_pointer_expr(arg, tainted_locals) || acc
+                });
                 expr.ty.is_pointer() && arg_tainted
             }
             TypedExprKind::IndirectCall { callee, args, .. } => {
                 let callee_tainted = self.track_stack_pointer_expr(callee, tainted_locals);
-                let arg_tainted = args
-                    .iter()
-                    .fold(false, |acc, arg| self.track_stack_pointer_expr(arg, tainted_locals) || acc);
+                let arg_tainted = args.iter().fold(false, |acc, arg| {
+                    self.track_stack_pointer_expr(arg, tainted_locals) || acc
+                });
                 expr.ty.is_pointer() && (callee_tainted || arg_tainted)
             }
             TypedExprKind::Cast { expr, .. } => self.track_stack_pointer_expr(expr, tainted_locals),
@@ -5710,8 +6461,7 @@ impl<'a> SemanticAnalyzer<'a> {
             TypedStmt::Case { body, .. } | TypedStmt::Default { body, .. } => {
                 self.walk_interrupt_stmt(function, body, diagnostics);
             }
-            TypedStmt::VarDecl(_, initializer, _)
-            | TypedStmt::Return(initializer, _) => {
+            TypedStmt::VarDecl(_, initializer, _) | TypedStmt::Return(initializer, _) => {
                 if let Some(expr) = initializer {
                     self.walk_interrupt_expr(function, expr, diagnostics);
                 }
@@ -5736,9 +6486,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 self.walk_interrupt_stmt(function, body, diagnostics);
             }
             TypedStmt::DoWhile {
-                body,
-                condition,
-                ..
+                body, condition, ..
             } => {
                 self.walk_interrupt_stmt(function, body, diagnostics);
                 self.walk_interrupt_expr(function, condition, diagnostics);
@@ -5773,16 +6521,21 @@ impl<'a> SemanticAnalyzer<'a> {
         diagnostics: &mut DiagnosticBag,
     ) {
         match &expr.kind {
-            TypedExprKind::Call { function: callee, args } => {
+            TypedExprKind::Call {
+                function: callee,
+                args,
+            } => {
                 diagnostics.error(
                     "semantic",
                     Some(expr.span),
                     format!(
                         "interrupt handler `{}` cannot call `{}` in phase 6",
-                        self.symbols[function].name,
-                        self.symbols[*callee].name
+                        self.symbols[function].name, self.symbols[*callee].name
                     ),
-                    Some("keep ISR code inline; call normal functions from non-interrupt code".to_string()),
+                    Some(
+                        "keep ISR code inline; call normal functions from non-interrupt code"
+                            .to_string(),
+                    ),
                 );
                 for arg in args {
                     self.walk_interrupt_expr(function, arg, diagnostics);
@@ -5871,6 +6624,10 @@ impl<'a> SemanticAnalyzer<'a> {
         lhs: &TypedExpr,
         rhs: &TypedExpr,
     ) -> bool {
+        if ty.is_fixed() {
+            return matches!(op, BinaryOp::Multiply | BinaryOp::Divide);
+        }
+
         let lhs_const = eval_integer_constant_expr(lhs).map(|value| normalize_value(value, ty));
         let rhs_const = eval_integer_constant_expr(rhs).map(|value| normalize_value(value, ty));
 
@@ -6008,7 +6765,8 @@ impl<'a> SemanticAnalyzer<'a> {
         }
 
         for symbol in &self.symbols {
-            if matches!(symbol.kind, SymbolKind::Local | SymbolKind::Param) && !symbol.is_referenced {
+            if matches!(symbol.kind, SymbolKind::Local | SymbolKind::Param) && !symbol.is_referenced
+            {
                 diagnostics.warning(
                     "semantic",
                     Some(symbol.span),
@@ -6101,13 +6859,15 @@ fn is_constant_expression(expr: &TypedExpr) -> bool {
 
 /// Evaluates one typed integer constant expression under the compiler's fixed-width rules.
 fn eval_integer_constant_expr(expr: &TypedExpr) -> Option<i64> {
-    if !expr.ty.is_integer() && !expr.ty.is_function_pointer() {
+    if !expr.ty.is_numeric() && !expr.ty.is_function_pointer() {
         return None;
     }
 
     let value = match &expr.kind {
         TypedExprKind::IntLiteral(value) => *value,
-        TypedExprKind::Unary { op, expr } => eval_unary(*op, eval_integer_constant_expr(expr)?, expr.ty, expr.ty),
+        TypedExprKind::Unary { op, expr } => {
+            eval_unary(*op, eval_integer_constant_expr(expr)?, expr.ty, expr.ty)
+        }
         TypedExprKind::Binary { op, lhs, rhs } => {
             let lhs_value = eval_integer_constant_expr(lhs)?;
             let rhs_value = eval_integer_constant_expr(rhs)?;
@@ -6122,7 +6882,9 @@ fn eval_integer_constant_expr(expr: &TypedExpr) -> Option<i64> {
                 CastKind::ZeroExtend | CastKind::Truncate | CastKind::Bitcast => {
                     normalize_value(value, expr.ty)
                 }
-                CastKind::SignExtend => normalize_value(signed_value(value, value_expr.ty), expr.ty),
+                CastKind::SignExtend => {
+                    normalize_value(signed_value(value, value_expr.ty), expr.ty)
+                }
             }
         }
         TypedExprKind::Assign { .. }
@@ -6185,7 +6947,11 @@ fn integer_value_range(ty: Type) -> Option<(i64, i64)> {
         ScalarType::U16 => Some((0, i64::from(u16::MAX))),
         ScalarType::I32 => Some((i64::from(i32::MIN), i64::from(i32::MAX))),
         ScalarType::U32 => Some((0, i64::from(u32::MAX))),
-        ScalarType::Void => None,
+        ScalarType::Q8_8
+        | ScalarType::UQ8_8
+        | ScalarType::Q16_16
+        | ScalarType::UQ16_16
+        | ScalarType::Void => None,
     }
 }
 
@@ -6394,7 +7160,9 @@ fn collect_expr_indirect_call_signatures(expr: &TypedExpr, signatures: &mut BTre
         | TypedExprKind::ArrayDecay(expr)
         | TypedExprKind::AddressOf(expr)
         | TypedExprKind::Deref(expr)
-        | TypedExprKind::Cast { expr, .. } => collect_expr_indirect_call_signatures(expr, signatures),
+        | TypedExprKind::Cast { expr, .. } => {
+            collect_expr_indirect_call_signatures(expr, signatures)
+        }
         TypedExprKind::BitField { storage, .. } => {
             collect_expr_indirect_call_signatures(storage, signatures)
         }
@@ -6445,7 +7213,7 @@ fn zero_expr(span: Span) -> TypedExpr {
 
 #[cfg(test)]
 mod tests {
-    use super::{eval_integer_constant_expr, is_constant_expression, ValueCategory};
+    use super::{ValueCategory, eval_integer_constant_expr, is_constant_expression};
     use crate::common::source::Span;
     use crate::frontend::ast::BinaryOp;
     use crate::frontend::semantic::{TypedExpr, TypedExprKind};

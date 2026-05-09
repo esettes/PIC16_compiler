@@ -215,12 +215,7 @@ impl<'a> Preprocessor<'a> {
             }
             "else" => {
                 let Some(frame) = conditions.last_mut() else {
-                    diagnostics.error(
-                        "preprocessor",
-                        None,
-                        "`#else` without matching `#if`",
-                        None,
-                    );
+                    diagnostics.error("preprocessor", None, "`#else` without matching `#if`", None);
                     return;
                 };
                 frame.current_active = frame.parent_active && !frame.branch_taken;
@@ -293,7 +288,10 @@ impl<'a> Preprocessor<'a> {
         diagnostics.error(
             "preprocessor",
             None,
-            format!("macro expansion recursion limit hit in {}", self.target.name),
+            format!(
+                "macro expansion recursion limit hit in {}",
+                self.target.name
+            ),
             Some("simplify mutually recursive macros".to_string()),
         );
         let _ = origin;
@@ -380,7 +378,9 @@ fn expand_identifiers(line: &str, macros: &BTreeMap<String, MacroDef>) -> String
         if ch.is_ascii_alphabetic() || ch == '_' {
             let start = index;
             index += 1;
-            while index < chars.len() && (chars[index].is_ascii_alphanumeric() || chars[index] == '_') {
+            while index < chars.len()
+                && (chars[index].is_ascii_alphanumeric() || chars[index] == '_')
+            {
                 index += 1;
             }
             let name: String = chars[start..index].iter().collect();

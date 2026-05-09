@@ -1010,10 +1010,18 @@ void main(void) {
     PORTB = value;
 }
 ";
-    let o0 =
-        compile_source_with_optimization("pic16f628a", "const-branch-o0.c", source, OptimizationLevel::O0);
-    let o2 =
-        compile_source_with_optimization("pic16f628a", "const-branch-o2.c", source, OptimizationLevel::O2);
+    let o0 = compile_source_with_optimization(
+        "pic16f628a",
+        "const-branch-o0.c",
+        source,
+        OptimizationLevel::O0,
+    );
+    let o2 = compile_source_with_optimization(
+        "pic16f628a",
+        "const-branch-o2.c",
+        source,
+        OptimizationLevel::O2,
+    );
     let o0_asm = read_artifact(&o0, "asm");
     let o2_asm = read_artifact(&o2, "asm");
 
@@ -1850,7 +1858,10 @@ fn phase17_examples_compile_via_picc() {
     let examples = [
         ("pic16f628a", "examples/pic16f628a/function_pointer_basic.c"),
         ("pic16f877a", "examples/pic16f877a/function_pointer_table.c"),
-        ("pic16f877a", "examples/pic16f877a/function_pointer_struct.c"),
+        (
+            "pic16f877a",
+            "examples/pic16f877a/function_pointer_struct.c",
+        ),
         ("pic16f877a", "examples/pic16f877a/state_dispatch_fp.c"),
     ];
 
@@ -2379,6 +2390,161 @@ fn phase21_examples_compile_via_picc() {
 }
 
 #[test]
+/// Verifies Phase 22 parses fixed-point declarations, casts, and raw constructors.
+fn compiles_phase22_fixed_declarations_and_raw_constructors() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase22-fixed-types.c",
+        "\
+__fixed8_8 q = __q8_8(384);
+__ufixed8_8 uq = __uq8_8(512);
+__fixed16_16 q32 = __q16_16(0x00018000);
+__ufixed16_16 uq32 = __uq16_16(0x00020000);
+__fixed8_8 result;
+void main(void) {
+    int whole;
+    whole = (int)q;
+    result = (__fixed8_8)whole + (__fixed8_8)uq;
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies implicit fixed precision narrowing is diagnosed under `-Werror`.
+fn rejects_phase22_implicit_fixed_narrowing_under_werror() {
+    let error = compile_source_with_profile(
+        "pic16f628a",
+        "phase22-fixed-narrow.c",
+        "\
+__fixed16_16 source;
+__fixed8_8 result;
+void main(void) {
+    result = source;
+}
+",
+        strict_warnings(),
+    )
+    .expect_err("must fail");
+
+    assert!(error.contains("narrows fixed-point precision"));
+}
+
+#[test]
+/// Verifies bitwise operators on fixed-point values require explicit raw casts.
+fn rejects_phase22_fixed_bitwise_operations() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase22-fixed-bitwise.c",
+        "\
+__fixed8_8 a;
+__fixed8_8 b;
+__fixed8_8 result;
+void main(void) {
+    result = a & b;
+}
+",
+    );
+
+    assert!(error.contains("is not supported for fixed-point operands"));
+}
+
+#[test]
+/// Verifies Q16.16 multiplication is explicitly deferred instead of lowered incorrectly.
+fn rejects_phase22_q16_16_multiply() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase22-q16-mul.c",
+        "\
+__fixed16_16 a;
+__fixed16_16 b;
+__fixed16_16 result;
+void main(void) {
+    result = a * b;
+}
+",
+    );
+
+    assert!(error.contains("deferred in phase 22"));
+}
+
+#[test]
+/// Verifies fixed-point division by constant zero is diagnosed.
+fn rejects_phase22_fixed_division_by_constant_zero() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase22-fixed-div-zero.c",
+        "\
+__fixed8_8 a;
+__fixed8_8 result;
+void main(void) {
+    result = a / __q8_8(0);
+}
+",
+    );
+
+    assert!(error.contains("division by constant zero"));
+}
+
+#[test]
+/// Verifies fixed-point ROM objects remain deferred with a clear diagnostic.
+fn rejects_phase22_fixed_rom_objects() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase22-fixed-rom.c",
+        "\
+const __rom __fixed8_8 table[] = { __q8_8(0x0100), __q8_8(0x0200) };
+__fixed8_8 result;
+void main(void) {
+    result = __q8_8(0);
+}
+",
+    );
+
+    assert!(error.contains("unsupported ROM element type"));
+}
+
+#[test]
+/// Verifies helper-backed fixed-point operations stay rejected inside interrupt handlers.
+fn rejects_phase22_fixed_helper_inside_isr() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase22-fixed-isr-helper.c",
+        "\
+__fixed8_8 a;
+__fixed8_8 b;
+__fixed8_8 result;
+void __interrupt isr(void) {
+    result = a * b;
+}
+void main(void) {
+}
+",
+    );
+
+    assert!(error.contains("cannot use `Multiply` when it would lower through a runtime helper"));
+}
+
+#[test]
+/// Verifies checked-in Phase 22 fixed-point examples compile cleanly.
+fn phase22_examples_compile_via_picc() {
+    let examples = [
+        ("pic16f628a", "examples/pic16f628a/fixed_q8_8_basic.c"),
+        ("pic16f877a", "examples/pic16f877a/fixed_q8_8_arithmetic.c"),
+        ("pic16f877a", "examples/pic16f877a/fixed_sensor_scale.c"),
+        ("pic16f877a", "examples/pic16f877a/fixed_struct.c"),
+        ("pic16f877a", "examples/pic16f877a/fixed_table.c"),
+    ];
+
+    for (target, path) in examples {
+        let output = compile_example(target, path);
+        assert_hex_is_programmable(&output);
+    }
+}
+
+#[test]
 /// Verifies unsupported integer-to-pointer explicit casts diagnose non-zero constants.
 fn reports_phase8_unsupported_nonzero_integer_to_pointer_cast() {
     let error = compile_error(
@@ -2526,7 +2692,10 @@ fn assert_makefile_shape(path: &str) {
 /// Verifies the release binary is named `picc`.
 fn release_binary_is_picc() {
     let path = picc_bin();
-    let stem = path.file_stem().and_then(|name| name.to_str()).expect("bin stem");
+    let stem = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .expect("bin stem");
     assert_eq!(stem, "picc");
 }
 
@@ -2862,7 +3031,11 @@ void main(void) {
 fn phase18_examples_compile_via_picc() {
     let compiling = [
         ("pic16f628a", "examples/pic16f628a/stack_report.c", &[][..]),
-        ("pic16f877a", "examples/pic16f877a/stack_check.c", &["--stack-check"][..]),
+        (
+            "pic16f877a",
+            "examples/pic16f877a/stack_check.c",
+            &["--stack-check"][..],
+        ),
     ];
 
     for (target, example, extra_args) in compiling {
@@ -3848,7 +4021,9 @@ void main(void) {
 ",
     );
 
-    assert!(error.contains("whole-aggregate assignment is not supported inside interrupt handlers"));
+    assert!(
+        error.contains("whole-aggregate assignment is not supported inside interrupt handlers")
+    );
 }
 
 #[test]
@@ -3998,7 +4173,9 @@ void main(void) {
 ",
     );
 
-    assert!(error.contains("cannot coerce `char*`") || error.contains("cannot coerce `unsigned char*`"));
+    assert!(
+        error.contains("cannot coerce `char*`") || error.contains("cannot coerce `unsigned char*`")
+    );
 }
 
 #[test]
@@ -4317,7 +4494,10 @@ void main(void) {
 ",
     );
 
-    assert!(error.contains("program-memory arrays do not decay to data-space pointers") || error.contains("cannot coerce"));
+    assert!(
+        error.contains("program-memory arrays do not decay to data-space pointers")
+            || error.contains("cannot coerce")
+    );
 }
 
 #[test]
@@ -4634,7 +4814,10 @@ void main(void) {
     let asm = read_artifact(&output, "asm");
     assert_hex_is_programmable(&output);
     assert!(
-        asm.contains("andwf") || asm.contains("iorwf") || asm.contains("bsf") || asm.contains("bcf")
+        asm.contains("andwf")
+            || asm.contains("iorwf")
+            || asm.contains("bsf")
+            || asm.contains("bcf")
     );
 }
 
@@ -4762,7 +4945,9 @@ void main(void) {
 ",
     );
 
-    assert!(error.contains("anonymous nested struct/union/enum fields are not supported in phase 15"));
+    assert!(
+        error.contains("anonymous nested struct/union/enum fields are not supported in phase 15")
+    );
 }
 
 #[test]

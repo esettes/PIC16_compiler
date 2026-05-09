@@ -2,9 +2,11 @@
 
 # PIC16 `midrange14` Backend
 
-Phase 21 extends the PIC16 backend to four-byte integer values. The return convention is `W` plus `__abi.return_high`, `__abi.return_upper0`, and `__abi.return_upper1`. Multi-byte carry/borrow codegen is shared by 8-, 16-, and 32-bit paths.
+Phase 22 extends the PIC16 backend to fixed-point storage and raw arithmetic lowering without adding IEEE float. Q8.8 values use the existing 16-bit ABI paths; Q16.16 values use the Phase 21 32-bit ABI paths. Q8.8 multiply/divide are lowered through raw 32-bit helper-backed arithmetic before backend codegen.
 
-See `docs/backend/phase21-long-codegen.md`.
+Phase 21 extends the PIC16 backend to four-byte integer values. The return convention is `W` plus `__abi.return_high`, `__abi.return_upper0`, and `__abi.return_upper1`. Multi-byte carry/borrow codegen is shared by 8-, 16-, 32-bit, and fixed raw paths.
+
+See `docs/backend/phase22-fixed-codegen.md` and `docs/backend/phase21-long-codegen.md`.
 
 Shared backend responsibilities:
 
@@ -16,7 +18,7 @@ Shared backend responsibilities:
 - IR -> PIC16 asm lowering
 - 14-bit word encoding
 
-Current backend phase: **Phase 21 32-bit integer codegen on top of Phase 20 simulator tooling, Phase 19 execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier backend phases**
+Current backend phase: **Phase 22 fixed-point codegen on top of Phase 21 32-bit integer codegen, Phase 20 simulator tooling, Phase 19 execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier backend phases**
 
 Backend owns:
 
@@ -28,6 +30,7 @@ Backend owns:
 - per-call frame lowering for locals and IR temps
 - `FSR/INDF` indirect access for pointers and frame storage
 - Phase 5 runtime helper emission for multiply/divide/modulo and dynamic shifts
+- fixed-point raw storage, casts, comparisons, and Q8.8 helper-backed arithmetic
 - interrupt vector emission and ISR dispatch
 - ISR-specific save/restore and `retfie` lowering
 - Phase 7 peephole cleanup and helper fast-path selection
@@ -75,7 +78,8 @@ Current call contract:
 Current return contract:
 
 - 8-bit: `W`
-- 16-bit: `W` low + `return_high` high
+- 16-bit and Q8.8: `W` low + `return_high` high
+- 32-bit and Q16.16: `W` + `return_high` + `return_upper0` + `return_upper1`
 - pointer: same as 16-bit integer
 
 Phase 5 helper contract:
@@ -96,6 +100,9 @@ Current backend docs:
 - [phase6-interrupts.md](phase6-interrupts.md)
 - [phase12-string-pointer-data.md](phase12-string-pointer-data.md)
 - [../runtime/phase5-arithmetic-helpers.md](../runtime/phase5-arithmetic-helpers.md)
+- [phase21-long-codegen.md](phase21-long-codegen.md)
+- [phase22-fixed-codegen.md](phase22-fixed-codegen.md)
+- [../runtime/phase22-fixed-helpers.md](../runtime/phase22-fixed-helpers.md)
 - [../ir/phase5-arithmetic-lowering.md](../ir/phase5-arithmetic-lowering.md)
 - [../ir/phase4-call-lowering.md](../ir/phase4-call-lowering.md)
 

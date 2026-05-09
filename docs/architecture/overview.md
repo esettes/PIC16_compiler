@@ -2,9 +2,9 @@
 
 # General Architecture
 
-Phase 21 extends the existing architecture with 32-bit integer support while preserving the Stack-first ABI and PIC16 `midrange14` backend. The compiler treats `long` and `unsigned long` as 4-byte little-endian scalar values across frontend typing, IR temps, stack frames, global storage, and simulator validation.
+Phase 22 extends the existing architecture with explicit fixed-point scalar support while preserving the Stack-first ABI and PIC16 `midrange14` backend. The compiler treats Q8.8 values as 2-byte raw fixed storage and Q16.16 values as 4-byte raw fixed storage across frontend typing, IR temps, stack frames, globals, aggregates, and simulator validation.
 
-32-bit multiplication, division, modulo, and dynamic shifts lower through runtime helpers. Inline 32-bit add/subtract, bitwise operations, comparisons, constant shifts, loads, stores, and aggregate accesses remain byte-wise backend codegen.
+Phase 21 32-bit integers remain the raw intermediate foundation for Q8.8 multiply/divide. Q16.16 multiply/divide are deferred because a correct implementation needs a wider intermediate than Phase 21 currently provides.
 
 `pic16cc` separates:
 
@@ -16,9 +16,11 @@ Phase 21 extends the existing architecture with 32-bit integer support while pre
 
 Target backend is classic 14-bit PIC16 mid-range family, not a generic 8-bit CPU model.
 
-Current Phase 20 keeps that split intact while extending:
+Current Phase 22 keeps that split intact while extending:
 
 - stack-first caller-pushed ABI
+- fixed-point frontend typing, raw constructors, casts, and diagnostics
+- fixed-point IR lowering through raw integer storage and existing helper paths
 - per-call frame storage for locals and IR temps
 - typed IR call lowering for arbitrary argument counts
 - explicit pointer and frame access through `FSR/INDF`
@@ -47,9 +49,11 @@ Current Phase 20 keeps that split intact while extending:
 - Phase 18 target-aware stack bounds, optional runtime stack guards, and stronger call-graph/stack-report visibility
 - Phase 19 test-only execution validation through an internal PIC16 core emulator fed from generated Intel HEX output
 - Phase 20 optional `pic16-sim` CLI for running HEX files, resolving map symbols, printing state, and tracing instructions
+- Phase 21 controlled 32-bit integer storage, ABI, helpers, and simulator validation
+- Phase 22 explicit fixed-point Q8.8/Q16.16 typing and simulator-validated fixed arithmetic
 - PIC16 banking/paging without backend duplication per device
 
-Phase 20 keeps the compiler layering unchanged:
+Phase 22 keeps the compiler layering unchanged:
 
 - frontend still produces typed trees only
 - IR still stays target-aware but encoding-agnostic

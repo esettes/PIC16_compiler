@@ -32,6 +32,10 @@ pub enum Keyword {
     Int,
     Interrupt,
     Long,
+    Fixed8_8,
+    Ufixed8_8,
+    Fixed16_16,
+    Ufixed16_16,
     Typedef,
     Enum,
     Struct,
@@ -328,28 +332,38 @@ impl<'a> Lexer<'a> {
                             self.index += 1;
                         }
                         b'x' | b'X' => {
-                            let escape_span =
-                                Span::new(self.index.saturating_sub(1), (self.index + 1).min(bytes.len()));
+                            let escape_span = Span::new(
+                                self.index.saturating_sub(1),
+                                (self.index + 1).min(bytes.len()),
+                            );
                             self.diagnostics.error(
                                 "lexer",
                                 Some(escape_span),
                                 "hexadecimal string escapes are not supported in phase 10",
-                                Some("use \\n, \\r, \\t, \\\\, \\\" or \\0 escapes only".to_string()),
+                                Some(
+                                    "use \\n, \\r, \\t, \\\\, \\\" or \\0 escapes only".to_string(),
+                                ),
                             );
                             self.index += 1;
-                            while self.index < bytes.len() && (bytes[self.index] as char).is_ascii_hexdigit() {
+                            while self.index < bytes.len()
+                                && (bytes[self.index] as char).is_ascii_hexdigit()
+                            {
                                 self.index += 1;
                             }
                             value.push(0);
                         }
                         other => {
-                            let escape_span =
-                                Span::new(self.index.saturating_sub(1), (self.index + 1).min(bytes.len()));
+                            let escape_span = Span::new(
+                                self.index.saturating_sub(1),
+                                (self.index + 1).min(bytes.len()),
+                            );
                             self.diagnostics.error(
                                 "lexer",
                                 Some(escape_span),
                                 format!("unsupported escape sequence `\\{}`", other as char),
-                                Some("use \\n, \\r, \\t, \\\\, \\\" or \\0 escapes only".to_string()),
+                                Some(
+                                    "use \\n, \\r, \\t, \\\\, \\\" or \\0 escapes only".to_string(),
+                                ),
                             );
                             self.index += 1;
                             value.push(0);
@@ -420,7 +434,9 @@ impl<'a> Lexer<'a> {
             }
             if self.source.text[self.index..].starts_with("/*") {
                 self.index += 2;
-                while self.index + 1 < bytes.len() && &self.source.text[self.index..self.index + 2] != "*/" {
+                while self.index + 1 < bytes.len()
+                    && &self.source.text[self.index..self.index + 2] != "*/"
+                {
                     self.index += 1;
                 }
                 if self.index + 1 < bytes.len() {
@@ -457,6 +473,10 @@ fn keyword_or_ident(text: &str) -> TokenKind {
         "int" => Some(Keyword::Int),
         "__interrupt" => Some(Keyword::Interrupt),
         "long" => Some(Keyword::Long),
+        "__fixed8_8" => Some(Keyword::Fixed8_8),
+        "__ufixed8_8" => Some(Keyword::Ufixed8_8),
+        "__fixed16_16" => Some(Keyword::Fixed16_16),
+        "__ufixed16_16" => Some(Keyword::Ufixed16_16),
         "typedef" => Some(Keyword::Typedef),
         "enum" => Some(Keyword::Enum),
         "struct" => Some(Keyword::Struct),
@@ -473,7 +493,10 @@ fn keyword_or_ident(text: &str) -> TokenKind {
         "switch" => Some(Keyword::Switch),
         _ => None,
     };
-    keyword.map_or_else(|| TokenKind::Identifier(text.to_string()), TokenKind::Keyword)
+    keyword.map_or_else(
+        || TokenKind::Identifier(text.to_string()),
+        TokenKind::Keyword,
+    )
 }
 
 #[cfg(test)]
@@ -506,7 +529,10 @@ mod tests {
         assert!(!diagnostics.has_errors(), "{diagnostics}");
         assert_eq!(
             tokens,
-            vec![TokenKind::StringLiteral(vec![b'O', b'K', 0]), TokenKind::Eof]
+            vec![
+                TokenKind::StringLiteral(vec![b'O', b'K', 0]),
+                TokenKind::Eof
+            ]
         );
     }
 

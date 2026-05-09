@@ -269,7 +269,11 @@ impl TranslationUnit {
                     let _ = writeln!(
                         output,
                         "{}fn {}({}) -> {}",
-                        if function.is_interrupt { "interrupt " } else { "" },
+                        if function.is_interrupt {
+                            "interrupt "
+                        } else {
+                            ""
+                        },
                         function.name,
                         function
                             .params
@@ -344,11 +348,15 @@ fn render_stmt(stmt: &Stmt, indent: usize, output: &mut String) {
                 render_stmt(else_branch, indent + 1, output);
             }
         }
-        Stmt::While { condition, body, .. } => {
+        Stmt::While {
+            condition, body, ..
+        } => {
             let _ = writeln!(output, "{prefix}while {}", render_expr(condition));
             render_stmt(body, indent + 1, output);
         }
-        Stmt::DoWhile { body, condition, .. } => {
+        Stmt::DoWhile {
+            body, condition, ..
+        } => {
             let _ = writeln!(output, "{prefix}do");
             render_stmt(body, indent + 1, output);
             let _ = writeln!(output, "{prefix}while {}", render_expr(condition));
@@ -363,7 +371,8 @@ fn render_stmt(stmt: &Stmt, indent: usize, output: &mut String) {
             let _ = writeln!(
                 output,
                 "{prefix}for init={} cond={} step={}",
-                init.as_ref().map_or_else(|| "-".to_string(), |_| "stmt".to_string()),
+                init.as_ref()
+                    .map_or_else(|| "-".to_string(), |_| "stmt".to_string()),
                 condition
                     .as_ref()
                     .map_or_else(|| "-".to_string(), render_expr),
@@ -375,7 +384,8 @@ fn render_stmt(stmt: &Stmt, indent: usize, output: &mut String) {
             let _ = writeln!(
                 output,
                 "{prefix}return {}",
-                expr.as_ref().map_or_else(|| "void".to_string(), render_expr)
+                expr.as_ref()
+                    .map_or_else(|| "void".to_string(), render_expr)
             );
         }
         Stmt::Break(_) => {

@@ -2,9 +2,11 @@
 
 # Testing Guide
 
-Phase 21 runtime validation lives in `tests/execution_sim.rs`. It compiles C programs to HEX, runs them through the simulator, and checks 32-bit RAM results for add/subtract, comparisons, shifts, multiply, divide, modulo, calls, returns, struct fields, union overlays, arrays, and startup initialization.
+Phase 22 runtime validation lives in `tests/execution_sim.rs`. It compiles C programs to HEX, runs them through the simulator, and checks fixed-point RAM results for integer/fixed casts, Q8.8 add/subtract/compare, Q8.8 multiply/divide, Q8.8 calls/returns, struct fields, arrays, UQ8.8 arithmetic, and Q16.16 add/subtract/compare.
 
-Phase 21 diagnostics are covered in `tests/compiler_pipeline.rs` for literal range errors, implicit narrowing, explicit casts, unsupported ROM long objects, and ISR helper restrictions.
+Phase 22 diagnostics are covered in `tests/compiler_pipeline.rs` for fixed parsing, implicit fixed narrowing, bitwise fixed rejection, Q16.16 multiply/divide deferral, fixed division by constant zero, unsupported fixed ROM objects, ISR helper restrictions, and checked-in fixed examples.
+
+Phase 21 runtime and diagnostic coverage remains in the same files for 32-bit integer behavior.
 
 `pic16cc` currently uses three testing layers:
 
@@ -69,6 +71,7 @@ The pattern is:
 Use execution tests when output shape is not enough to prove behavior, especially for:
 
 - arithmetic helpers
+- fixed-point scaling and helper-backed Q8.8 arithmetic
 - stack-first calls and nested calls
 - pointer dereference and `FSR/INDF`
 - function-pointer dispatch

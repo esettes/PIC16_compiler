@@ -79,6 +79,19 @@ Rules:
 - caller pushes argument bytes left-to-right
 - caller cleans argument bytes after return
 
+### Phase 22 Fixed-Point Arithmetic
+
+Phase 22 adds explicit fixed-point scalar types without adding IEEE float:
+
+- `__fixed8_8` / `__ufixed8_8`: 16-bit raw Q8.8 storage
+- `__fixed16_16` / `__ufixed16_16`: 32-bit raw Q16.16 storage
+- little-endian storage and existing Stack-first ABI widths
+- raw constructors `__q8_8`, `__uq8_8`, `__q16_16`, and `__uq16_16`
+
+Q8.8 add/sub/compare are raw byte-wise operations. Q8.8 multiply/divide lower through 32-bit raw intermediates and the existing Phase 21 helper paths. Q16.16 add/sub/compare/casts are supported; Q16.16 multiply/divide are rejected until a wider intermediate model is added.
+
+Fixed-point ROM objects remain deferred. Helper-backed fixed operations stay rejected inside ISRs.
+
 ### Phase 21 32-Bit Integers
 
 `long` and `unsigned long` are 4-byte little-endian integer objects. The Stack-first ABI keeps caller-pushed arguments; 32-bit arguments consume four bytes. 32-bit returns use `W` for byte 0 and helper slots `return_high`, `return_upper0`, and `return_upper1` for bytes 1 through 3.

@@ -98,8 +98,8 @@ pub fn constant_fold(program: &mut IrProgram) -> ConstantFoldStats {
                         let lhs = resolve_operand(lhs, &constants);
                         let rhs = resolve_operand(rhs, &constants);
                         if (lhs, rhs) != original {
-                            stats.operands_propagated += usize::from(lhs != original.0)
-                                + usize::from(rhs != original.1);
+                            stats.operands_propagated +=
+                                usize::from(lhs != original.0) + usize::from(rhs != original.1);
                         }
                         *instr = IrInstr::Binary { dst, op, lhs, rhs };
                         if let (Operand::Constant(lhs), Operand::Constant(rhs)) = (lhs, rhs) {
@@ -118,10 +118,7 @@ pub fn constant_fold(program: &mut IrProgram) -> ConstantFoldStats {
                         if resolved != ptr {
                             stats.operands_propagated += 1;
                         }
-                        *instr = IrInstr::LoadIndirect {
-                            dst,
-                            ptr: resolved,
-                        };
+                        *instr = IrInstr::LoadIndirect { dst, ptr: resolved };
                         constants.remove(&dst);
                     }
                     IrInstr::Store { target, value } => {
@@ -137,8 +134,8 @@ pub fn constant_fold(program: &mut IrProgram) -> ConstantFoldStats {
                     IrInstr::StoreIndirect { ptr, value, ty } => {
                         let resolved_ptr = resolve_operand(ptr, &constants);
                         let resolved_value = resolve_operand(value, &constants);
-                        stats.operands_propagated += usize::from(resolved_ptr != ptr)
-                            + usize::from(resolved_value != value);
+                        stats.operands_propagated +=
+                            usize::from(resolved_ptr != ptr) + usize::from(resolved_value != value);
                         *instr = IrInstr::StoreIndirect {
                             ptr: resolved_ptr,
                             value: resolved_value,
@@ -243,8 +240,8 @@ pub fn constant_fold(program: &mut IrProgram) -> ConstantFoldStats {
                     IrCondition::Compare { lhs, rhs, .. } => {
                         let resolved_lhs = resolve_operand(*lhs, &constants);
                         let resolved_rhs = resolve_operand(*rhs, &constants);
-                        stats.operands_propagated += usize::from(resolved_lhs != *lhs)
-                            + usize::from(resolved_rhs != *rhs);
+                        stats.operands_propagated +=
+                            usize::from(resolved_lhs != *lhs) + usize::from(resolved_rhs != *rhs);
                         *lhs = resolved_lhs;
                         *rhs = resolved_rhs;
                     }
@@ -261,7 +258,8 @@ pub fn constant_fold(program: &mut IrProgram) -> ConstantFoldStats {
             } = &block.terminator
                 && let Some(value) = eval_condition(condition)
             {
-                block.terminator = IrTerminator::Jump(if value { *then_block } else { *else_block });
+                block.terminator =
+                    IrTerminator::Jump(if value { *then_block } else { *else_block });
                 stats.branches_simplified += 1;
             }
         }
@@ -277,25 +275,26 @@ pub fn dead_code_elimination(program: &mut IrProgram) -> DeadCodeStats {
     let mut stats = DeadCodeStats::default();
     for function in &mut program.functions {
         let reachable = function.reachable_blocks();
-        let mut live_temps = BTreeSet::new();
-        for block in &function.blocks {
-            if !reachable.contains(&block.id) {
-                continue;
-            }
-            match &block.terminator {
-                IrTerminator::Return(value) => {
-                    if let Some(value) = value {
-                        collect_operand(*value, &mut live_temps);
-                    }
+
+        let mut live_in = vec![BTreeSet::<usize>::new(); function.blocks.len()];
+        loop {
+            let mut changed = false;
+            for block in function.blocks.iter().rev() {
+                if !reachable.contains(&block.id) {
+                    continue;
                 }
-                IrTerminator::Branch { condition, .. } => match condition {
-                    IrCondition::NonZero { value, .. } => collect_operand(*value, &mut live_temps),
-                    IrCondition::Compare { lhs, rhs, .. } => {
-                        collect_operand(*lhs, &mut live_temps);
-                        collect_operand(*rhs, &mut live_temps);
-                    }
-                },
-                IrTerminator::Jump(_) | IrTerminator::Unreachable => {}
+                let mut live = successor_live_temps(&block.terminator, &live_in, &reachable);
+                collect_terminator_temps(&block.terminator, &mut live);
+                for instr in block.instructions.iter().rev() {
+                    update_liveness_for_instr(instr, &mut live);
+                }
+                if live_in[block.id] != live {
+                    live_in[block.id] = live;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
             }
         }
 
@@ -307,77 +306,12 @@ pub fn dead_code_elimination(program: &mut IrProgram) -> DeadCodeStats {
                 block.terminator = IrTerminator::Unreachable;
                 continue;
             }
+            let mut live_temps = successor_live_temps(&block.terminator, &live_in, &reachable);
+            collect_terminator_temps(&block.terminator, &mut live_temps);
             let mut retained = Vec::new();
             for instr in block.instructions.iter().rev() {
-                match instr {
-                    IrInstr::Copy { dst, src }
-                    | IrInstr::Cast { dst, src, .. }
-                    | IrInstr::Unary { dst, src, .. } => {
-                        if live_temps.remove(dst) {
-                            collect_operand(*src, &mut live_temps);
-                            retained.push(instr.clone());
-                        }
-                    }
-                    IrInstr::AddrOf { dst, .. } => {
-                        if live_temps.remove(dst) {
-                            retained.push(instr.clone());
-                        }
-                    }
-                    IrInstr::Binary { dst, lhs, rhs, .. } => {
-                        if live_temps.remove(dst) {
-                            collect_operand(*lhs, &mut live_temps);
-                            collect_operand(*rhs, &mut live_temps);
-                            retained.push(instr.clone());
-                        }
-                    }
-                    IrInstr::LoadIndirect { dst, ptr } => {
-                        if live_temps.remove(dst) {
-                            collect_operand(*ptr, &mut live_temps);
-                            retained.push(instr.clone());
-                        }
-                    }
-                    IrInstr::Store { value, .. } => {
-                        collect_operand(*value, &mut live_temps);
-                        retained.push(instr.clone());
-                    }
-                    IrInstr::StoreIndirect { ptr, value, .. } => {
-                        collect_operand(*ptr, &mut live_temps);
-                        collect_operand(*value, &mut live_temps);
-                        retained.push(instr.clone());
-                    }
-                    IrInstr::RomRead8 { dst, index, .. } => {
-                        if live_temps.remove(dst) {
-                            collect_operand(*index, &mut live_temps);
-                            retained.push(instr.clone());
-                        }
-                    }
-                    IrInstr::RomRead16 { dst, index, .. } => {
-                        if live_temps.remove(dst) {
-                            collect_operand(*index, &mut live_temps);
-                            retained.push(instr.clone());
-                        }
-                    }
-                    IrInstr::Call { dst, args, .. } => {
-                        if let Some(dst) = dst {
-                            live_temps.remove(dst);
-                        }
-                        for arg in args {
-                            collect_operand(*arg, &mut live_temps);
-                        }
-                        retained.push(instr.clone());
-                    }
-                    IrInstr::IndirectCall {
-                        dst, callee, args, ..
-                    } => {
-                        if let Some(dst) = dst {
-                            live_temps.remove(dst);
-                        }
-                        collect_operand(*callee, &mut live_temps);
-                        for arg in args {
-                            collect_operand(*arg, &mut live_temps);
-                        }
-                        retained.push(instr.clone());
-                    }
+                if update_liveness_for_instr(instr, &mut live_temps) {
+                    retained.push(instr.clone());
                 }
             }
             stats.instructions_removed += block.instructions.len().saturating_sub(retained.len());
@@ -386,6 +320,102 @@ pub fn dead_code_elimination(program: &mut IrProgram) -> DeadCodeStats {
         }
     }
     stats
+}
+
+/// Collects temp ids read by one instruction without marking its destination live.
+fn collect_instr_operand_temps(instr: &IrInstr, temps: &mut BTreeSet<usize>) {
+    match instr {
+        IrInstr::Copy { src, .. } | IrInstr::Cast { src, .. } | IrInstr::Unary { src, .. } => {
+            collect_operand(*src, temps);
+        }
+        IrInstr::AddrOf { .. } => {}
+        IrInstr::Binary { lhs, rhs, .. } => {
+            collect_operand(*lhs, temps);
+            collect_operand(*rhs, temps);
+        }
+        IrInstr::LoadIndirect { ptr, .. } => collect_operand(*ptr, temps),
+        IrInstr::Store { value, .. } => collect_operand(*value, temps),
+        IrInstr::StoreIndirect { ptr, value, .. } => {
+            collect_operand(*ptr, temps);
+            collect_operand(*value, temps);
+        }
+        IrInstr::RomRead8 { index, .. } | IrInstr::RomRead16 { index, .. } => {
+            collect_operand(*index, temps);
+        }
+        IrInstr::Call { args, .. } => {
+            for arg in args {
+                collect_operand(*arg, temps);
+            }
+        }
+        IrInstr::IndirectCall { callee, args, .. } => {
+            collect_operand(*callee, temps);
+            for arg in args {
+                collect_operand(*arg, temps);
+            }
+        }
+    }
+}
+
+/// Returns temps live at block exit by joining reachable successor live-in sets.
+fn successor_live_temps(
+    terminator: &IrTerminator,
+    live_in: &[BTreeSet<usize>],
+    reachable: &BTreeSet<usize>,
+) -> BTreeSet<usize> {
+    let mut live = BTreeSet::new();
+    match terminator {
+        IrTerminator::Jump(target) => {
+            if reachable.contains(target) {
+                live.extend(live_in[*target].iter().copied());
+            }
+        }
+        IrTerminator::Branch {
+            then_block,
+            else_block,
+            ..
+        } => {
+            if reachable.contains(then_block) {
+                live.extend(live_in[*then_block].iter().copied());
+            }
+            if reachable.contains(else_block) {
+                live.extend(live_in[*else_block].iter().copied());
+            }
+        }
+        IrTerminator::Return(_) | IrTerminator::Unreachable => {}
+    }
+    live
+}
+
+/// Applies one reverse-liveness step and returns whether the instruction must remain.
+fn update_liveness_for_instr(instr: &IrInstr, live: &mut BTreeSet<usize>) -> bool {
+    match instr {
+        IrInstr::Copy { dst, .. }
+        | IrInstr::Cast { dst, .. }
+        | IrInstr::Unary { dst, .. }
+        | IrInstr::Binary { dst, .. }
+        | IrInstr::LoadIndirect { dst, .. }
+        | IrInstr::RomRead8 { dst, .. }
+        | IrInstr::RomRead16 { dst, .. } => {
+            if live.remove(dst) {
+                collect_instr_operand_temps(instr, live);
+                true
+            } else {
+                false
+            }
+        }
+        IrInstr::AddrOf { dst, .. } => live.remove(dst),
+        IrInstr::Store { .. } | IrInstr::StoreIndirect { .. } => {
+            collect_instr_operand_temps(instr, live);
+            true
+        }
+        IrInstr::Call { dst, .. } | IrInstr::IndirectCall { dst, .. } => {
+            if let Some(dst) = dst {
+                live.remove(dst);
+            }
+            collect_instr_operand_temps(instr, live);
+            true
+        }
+    }
 }
 
 /// Removes unused temp slots and remaps surviving temps to a compact index space.
@@ -444,7 +474,9 @@ fn collect_operand(operand: Operand, temps: &mut BTreeSet<usize>) {
 /// Collects all temp ids referenced or defined by one instruction.
 fn collect_instr_temps(instr: &IrInstr, temps: &mut BTreeSet<usize>) {
     match instr {
-        IrInstr::Copy { dst, src } | IrInstr::Cast { dst, src, .. } | IrInstr::Unary { dst, src, .. } => {
+        IrInstr::Copy { dst, src }
+        | IrInstr::Cast { dst, src, .. }
+        | IrInstr::Unary { dst, src, .. } => {
             temps.insert(*dst);
             collect_operand(*src, temps);
         }
@@ -518,7 +550,9 @@ fn collect_terminator_temps(terminator: &IrTerminator, temps: &mut BTreeSet<usiz
 fn remap_block(block: &mut super::model::IrBlock, remap: &BTreeMap<usize, usize>) {
     for instr in &mut block.instructions {
         match instr {
-            IrInstr::Copy { dst, src } | IrInstr::Cast { dst, src, .. } | IrInstr::Unary { dst, src, .. } => {
+            IrInstr::Copy { dst, src }
+            | IrInstr::Cast { dst, src, .. }
+            | IrInstr::Unary { dst, src, .. } => {
                 *dst = remap[dst];
                 *src = remap_operand(*src, remap);
             }
@@ -605,7 +639,15 @@ fn eval_condition(condition: &IrCondition) -> Option<bool> {
             let (Operand::Constant(lhs), Operand::Constant(rhs)) = (lhs, rhs) else {
                 return None;
             };
-            Some(eval_binary(*op, *lhs, *rhs, *ty, Type::new(crate::frontend::types::ScalarType::U8)) != 0)
+            Some(
+                eval_binary(
+                    *op,
+                    *lhs,
+                    *rhs,
+                    *ty,
+                    Type::new(crate::frontend::types::ScalarType::U8),
+                ) != 0,
+            )
         }
     }
 }
@@ -630,7 +672,10 @@ fn original_unary_src(instr: &IrInstr) -> Operand {
 fn apply_cast(kind: CastKind, value: i64, source_ty: Type, target_ty: Type) -> i64 {
     match kind {
         CastKind::ZeroExtend => normalize_value(normalize_value(value, source_ty), target_ty),
-        CastKind::SignExtend => normalize_value(crate::common::integer::signed_value(value, source_ty), target_ty),
+        CastKind::SignExtend => normalize_value(
+            crate::common::integer::signed_value(value, source_ty),
+            target_ty,
+        ),
         CastKind::Truncate | CastKind::Bitcast => normalize_value(value, target_ty),
     }
 }
@@ -801,7 +846,9 @@ mod tests {
     use crate::frontend::ast::BinaryOp;
     use crate::frontend::semantic::SymbolId;
     use crate::frontend::types::{CastKind, ScalarType, Type};
-    use crate::ir::model::{IrBlock, IrCondition, IrFunction, IrInstr, IrProgram, IrTerminator, Operand};
+    use crate::ir::model::{
+        IrBlock, IrCondition, IrFunction, IrInstr, IrProgram, IrTerminator, Operand,
+    };
 
     #[test]
     /// Checks that constant folding propagates cast results into compare conditions.

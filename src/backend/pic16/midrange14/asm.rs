@@ -136,10 +136,19 @@ impl AsmProgram {
 
                 if matches!(
                     (&self.lines[index], next),
-                    (AsmLine::Instr(AsmInstr::Movlw(_)), AsmLine::Instr(AsmInstr::Movlw(_)))
-                        | (AsmLine::Instr(AsmInstr::Movlw(_)), AsmLine::Instr(AsmInstr::Clrw))
-                        | (AsmLine::Instr(AsmInstr::Clrw), AsmLine::Instr(AsmInstr::Movlw(_)))
-                        | (AsmLine::Instr(AsmInstr::Clrw), AsmLine::Instr(AsmInstr::Clrw))
+                    (
+                        AsmLine::Instr(AsmInstr::Movlw(_)),
+                        AsmLine::Instr(AsmInstr::Movlw(_))
+                    ) | (
+                        AsmLine::Instr(AsmInstr::Movlw(_)),
+                        AsmLine::Instr(AsmInstr::Clrw)
+                    ) | (
+                        AsmLine::Instr(AsmInstr::Clrw),
+                        AsmLine::Instr(AsmInstr::Movlw(_))
+                    ) | (
+                        AsmLine::Instr(AsmInstr::Clrw),
+                        AsmLine::Instr(AsmInstr::Clrw)
+                    )
                 ) {
                     optimized.push(next.clone());
                     index += 2;
@@ -250,7 +259,10 @@ mod tests {
     fn peephole_removes_self_move_roundtrip() {
         let mut program = AsmProgram {
             lines: vec![
-                AsmLine::Instr(AsmInstr::Movf { f: 0x20, d: Dest::W }),
+                AsmLine::Instr(AsmInstr::Movf {
+                    f: 0x20,
+                    d: Dest::W,
+                }),
                 AsmLine::Instr(AsmInstr::Movwf(0x20)),
             ],
         };
@@ -302,7 +314,10 @@ mod tests {
 
         let stats = program.peephole_optimize();
         assert_eq!(program.lines.len(), 1);
-        assert!(matches!(program.lines[0], AsmLine::Instr(AsmInstr::Movlw(0x34))));
+        assert!(matches!(
+            program.lines[0],
+            AsmLine::Instr(AsmInstr::Movlw(0x34))
+        ));
         assert_eq!(stats.overwritten_w_loads_removed, 1);
     }
 }

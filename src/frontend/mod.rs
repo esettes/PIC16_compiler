@@ -7,4 +7,3 @@ pub mod preprocessor;
 pub mod semantic;
 pub mod types;
 // SPDX-License-Identifier: GPL-3.0-or-later
-

@@ -140,7 +140,11 @@ impl IrProgram {
             let _ = writeln!(
                 output,
                 "{}fn #{} entry=b{}",
-                if function.is_interrupt { "interrupt " } else { "" },
+                if function.is_interrupt {
+                    "interrupt "
+                } else {
+                    ""
+                },
                 function.symbol,
                 function.entry
             );

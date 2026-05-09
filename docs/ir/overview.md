@@ -2,9 +2,11 @@
 
 # IR
 
-Phase 21 keeps the IR shape stable and extends carried `Type` metadata to `I32`/`U32`. Cast instructions include source type metadata so 8/16/32-bit extension and truncation fold and codegen correctly.
+Phase 22 keeps the IR shape stable and represents fixed-point values as typed raw integer-width scalars. Q8.8 multiply/divide lower before backend codegen into raw 32-bit integer multiply/divide plus fixed scaling shifts. Fixed comparisons lower to raw integer comparisons so existing branch codegen stays reused.
 
-See `docs/ir/phase21-long-lowering.md`.
+Phase 21 keeps the same IR shape for 32-bit integers and extends carried `Type` metadata to `I32`/`U32`. Cast instructions include source type metadata so 8/16/32-bit extension and truncation fold and codegen correctly.
+
+See `docs/ir/phase22-fixed-lowering.md` and `docs/ir/phase21-long-lowering.md`.
 
 Custom CFG-based IR.
 
@@ -23,6 +25,8 @@ Current IR carries:
 - direct-call instructions with arbitrary argument lists
 - indirect-call instructions with normalized function-pointer signatures
 - typed arithmetic and shift instructions for helper-aware lowering
+- fixed-point casts lowered as raw shifts plus bitcasts
+- Q8.8 multiply/divide lowered to raw 32-bit helper-backed arithmetic
 - member-access-friendly base + constant-offset address computations
 - recursive aggregate initializer lowering into scalar stores or global byte payloads
 - per-function interrupt metadata for backend vector/prologue selection
@@ -95,6 +99,14 @@ Phase 18 stack-analysis notes:
 - call-graph analysis expands across direct calls, helper-triggering operations, ISR roots, and known function-pointer target groups
 - recursion diagnostics remain semantic; backend stack reports assume acyclic call graphs after semantic validation
 
+Phase 22 fixed-point lowering notes:
+
+- fixed values use their raw storage width in temps, locals, and argument slots
+- integer-to-fixed casts shift left by the fractional bit count
+- fixed-to-integer casts shift right by the fractional bit count
+- fixed-to-fixed casts adjust raw fractional width and then truncate/extend
+- Q16.16 multiply/divide are rejected before IR generation
+
 Current Phase 18 limits:
 
 - no incomplete-struct/union pointers
@@ -108,6 +120,8 @@ Current Phase 18 limits:
 - no function-pointer arithmetic or relational comparisons
 - no indirect calls inside interrupt handlers
 - no recursion, even with `--stack-check`
+- no IEEE float or fixed-point decimal literal parser
+- no Q16.16 multiply/divide helper path in Phase 22
 
 Current detail:
 
@@ -118,6 +132,8 @@ Current detail:
 - [phase9-switch-lowering.md](phase9-switch-lowering.md)
 - [phase10-static-initializers.md](phase10-static-initializers.md)
 - [phase11-aggregate-initializers.md](phase11-aggregate-initializers.md)
+- [phase21-long-lowering.md](phase21-long-lowering.md)
+- [phase22-fixed-lowering.md](phase22-fixed-lowering.md)
 - [phase12-pointer-lowering.md](phase12-pointer-lowering.md)
 - [phase13-rom-lowering.md](phase13-rom-lowering.md)
 - [phase14-rom-read-lowering.md](phase14-rom-read-lowering.md)

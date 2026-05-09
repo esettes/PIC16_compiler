@@ -95,49 +95,163 @@ impl DeviceRegistry {
     }
 }
 
-const F628A_GPR: [MemoryRange; 1] = [MemoryRange { start: 0x20, end: 0x6F }];
-const F877A_GPR: [MemoryRange; 1] = [MemoryRange { start: 0x20, end: 0x6F }];
-const SHARED_GPR: [MemoryRange; 1] = [MemoryRange { start: 0x70, end: 0x7F }];
+const F628A_GPR: [MemoryRange; 1] = [MemoryRange {
+    start: 0x20,
+    end: 0x6F,
+}];
+const F877A_GPR: [MemoryRange; 1] = [MemoryRange {
+    start: 0x20,
+    end: 0x6F,
+}];
+const SHARED_GPR: [MemoryRange; 1] = [MemoryRange {
+    start: 0x70,
+    end: 0x7F,
+}];
 
 const F628A_SFRS: [DeviceRegister; 17] = [
-    DeviceRegister { name: "INDF", address: 0x00 },
-    DeviceRegister { name: "TMR0", address: 0x01 },
-    DeviceRegister { name: "PCL", address: 0x02 },
-    DeviceRegister { name: "STATUS", address: 0x03 },
-    DeviceRegister { name: "FSR", address: 0x04 },
-    DeviceRegister { name: "PORTA", address: 0x05 },
-    DeviceRegister { name: "PORTB", address: 0x06 },
-    DeviceRegister { name: "PCLATH", address: 0x0A },
-    DeviceRegister { name: "INTCON", address: 0x0B },
-    DeviceRegister { name: "TMR1L", address: 0x0E },
-    DeviceRegister { name: "TMR1H", address: 0x0F },
-    DeviceRegister { name: "T1CON", address: 0x10 },
-    DeviceRegister { name: "TMR2", address: 0x11 },
-    DeviceRegister { name: "T2CON", address: 0x12 },
-    DeviceRegister { name: "CCP1CON", address: 0x17 },
-    DeviceRegister { name: "TRISA", address: 0x85 },
-    DeviceRegister { name: "TRISB", address: 0x86 },
+    DeviceRegister {
+        name: "INDF",
+        address: 0x00,
+    },
+    DeviceRegister {
+        name: "TMR0",
+        address: 0x01,
+    },
+    DeviceRegister {
+        name: "PCL",
+        address: 0x02,
+    },
+    DeviceRegister {
+        name: "STATUS",
+        address: 0x03,
+    },
+    DeviceRegister {
+        name: "FSR",
+        address: 0x04,
+    },
+    DeviceRegister {
+        name: "PORTA",
+        address: 0x05,
+    },
+    DeviceRegister {
+        name: "PORTB",
+        address: 0x06,
+    },
+    DeviceRegister {
+        name: "PCLATH",
+        address: 0x0A,
+    },
+    DeviceRegister {
+        name: "INTCON",
+        address: 0x0B,
+    },
+    DeviceRegister {
+        name: "TMR1L",
+        address: 0x0E,
+    },
+    DeviceRegister {
+        name: "TMR1H",
+        address: 0x0F,
+    },
+    DeviceRegister {
+        name: "T1CON",
+        address: 0x10,
+    },
+    DeviceRegister {
+        name: "TMR2",
+        address: 0x11,
+    },
+    DeviceRegister {
+        name: "T2CON",
+        address: 0x12,
+    },
+    DeviceRegister {
+        name: "CCP1CON",
+        address: 0x17,
+    },
+    DeviceRegister {
+        name: "TRISA",
+        address: 0x85,
+    },
+    DeviceRegister {
+        name: "TRISB",
+        address: 0x86,
+    },
 ];
 
 const F877A_SFRS: [DeviceRegister; 18] = [
-    DeviceRegister { name: "INDF", address: 0x00 },
-    DeviceRegister { name: "TMR0", address: 0x01 },
-    DeviceRegister { name: "PCL", address: 0x02 },
-    DeviceRegister { name: "STATUS", address: 0x03 },
-    DeviceRegister { name: "FSR", address: 0x04 },
-    DeviceRegister { name: "PORTA", address: 0x05 },
-    DeviceRegister { name: "PORTB", address: 0x06 },
-    DeviceRegister { name: "PORTC", address: 0x07 },
-    DeviceRegister { name: "PORTD", address: 0x08 },
-    DeviceRegister { name: "PORTE", address: 0x09 },
-    DeviceRegister { name: "PCLATH", address: 0x0A },
-    DeviceRegister { name: "INTCON", address: 0x0B },
-    DeviceRegister { name: "TRISA", address: 0x85 },
-    DeviceRegister { name: "TRISB", address: 0x86 },
-    DeviceRegister { name: "TRISC", address: 0x87 },
-    DeviceRegister { name: "TRISD", address: 0x88 },
-    DeviceRegister { name: "TRISE", address: 0x89 },
-    DeviceRegister { name: "ADCON1", address: 0x9F },
+    DeviceRegister {
+        name: "INDF",
+        address: 0x00,
+    },
+    DeviceRegister {
+        name: "TMR0",
+        address: 0x01,
+    },
+    DeviceRegister {
+        name: "PCL",
+        address: 0x02,
+    },
+    DeviceRegister {
+        name: "STATUS",
+        address: 0x03,
+    },
+    DeviceRegister {
+        name: "FSR",
+        address: 0x04,
+    },
+    DeviceRegister {
+        name: "PORTA",
+        address: 0x05,
+    },
+    DeviceRegister {
+        name: "PORTB",
+        address: 0x06,
+    },
+    DeviceRegister {
+        name: "PORTC",
+        address: 0x07,
+    },
+    DeviceRegister {
+        name: "PORTD",
+        address: 0x08,
+    },
+    DeviceRegister {
+        name: "PORTE",
+        address: 0x09,
+    },
+    DeviceRegister {
+        name: "PCLATH",
+        address: 0x0A,
+    },
+    DeviceRegister {
+        name: "INTCON",
+        address: 0x0B,
+    },
+    DeviceRegister {
+        name: "TRISA",
+        address: 0x85,
+    },
+    DeviceRegister {
+        name: "TRISB",
+        address: 0x86,
+    },
+    DeviceRegister {
+        name: "TRISC",
+        address: 0x87,
+    },
+    DeviceRegister {
+        name: "TRISD",
+        address: 0x88,
+    },
+    DeviceRegister {
+        name: "TRISE",
+        address: 0x89,
+    },
+    DeviceRegister {
+        name: "ADCON1",
+        address: 0x9F,
+    },
 ];
 
 /// Builds the descriptor for the PIC16F628A target.

@@ -2,9 +2,11 @@
 
 # Frontend
 
-Phase 21 frontend support adds `long`, `signed long`, `unsigned long`, and integer suffixes `U`, `L`, `UL`, and `LU`. The semantic model warns on implicit narrowing from 32-bit values and rejects literals outside the supported 32-bit range.
+Phase 22 frontend support adds explicit fixed-point scalar types `__fixed8_8`, `__ufixed8_8`, `__fixed16_16`, and `__ufixed16_16`. Raw constructors `__q8_8(raw)`, `__uq8_8(raw)`, `__q16_16(raw)`, and `__uq16_16(raw)` create fixed constants without ambiguous decimal parsing.
 
-See `docs/frontend/phase21-long-types.md` for the exact type, suffix, conversion, ISR, and ROM rules.
+Phase 21 frontend support remains: `long`, `signed long`, `unsigned long`, and integer suffixes `U`, `L`, `UL`, and `LU`. The semantic model warns on implicit narrowing from 32-bit values and rejects literals outside the supported 32-bit range.
+
+See `docs/frontend/phase22-fixed-point.md` and `docs/frontend/phase21-long-types.md` for exact type, conversion, ISR, and ROM rules.
 
 Responsibilities:
 
@@ -43,6 +45,10 @@ Current Phase 18 frontend surface:
 - rejects writes to const objects and through pointer-to-const
 - rejects reassignment of const pointer objects and implicit qualifier discard
 - validates explicit casts for supported scalar/data-pointer combinations
+- accepts fixed-point casts between integer/fixed formats with explicit scaling
+- rejects implicit unsafe fixed narrowing under `-Werror`
+- rejects fixed bitwise operations unless the program casts to a raw integer type first
+- rejects Q16.16 fixed multiply/divide in Phase 22
 - validates pointer relational comparisons for compatible data-space pointer types
 - validates pointer subtraction for compatible data-space pointer types with 1-byte or 2-byte elements
 - parses explicit `__rom` declarations for file-scope 8-bit/16-bit integer arrays
@@ -74,3 +80,5 @@ Current detail:
 - [phase15-union-bitfields.md](phase15-union-bitfields.md)
 - [phase16-multidimensional-arrays.md](phase16-multidimensional-arrays.md)
 - [phase17-function-pointers.md](phase17-function-pointers.md)
+- [phase21-long-types.md](phase21-long-types.md)
+- [phase22-fixed-point.md](phase22-fixed-point.md)

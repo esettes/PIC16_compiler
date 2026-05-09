@@ -63,14 +63,16 @@ impl DiagnosticBag {
 
     /// Adds one diagnostic and upgrades warnings to errors when `-Werror` is active.
     pub fn push(&mut self, diagnostic: Diagnostic) {
-        self.diagnostics.push(if diagnostic.severity == Severity::Warning && self.warning_profile.werror {
-            Diagnostic {
-                severity: Severity::Error,
-                ..diagnostic
-            }
-        } else {
-            diagnostic
-        });
+        self.diagnostics.push(
+            if diagnostic.severity == Severity::Warning && self.warning_profile.werror {
+                Diagnostic {
+                    severity: Severity::Error,
+                    ..diagnostic
+                }
+            } else {
+                diagnostic
+            },
+        );
     }
 
     /// Records an error diagnostic with optional source span and fix hint.
@@ -168,7 +170,11 @@ impl Display for DiagnosticBag {
     /// Formats diagnostics in a compact stage-prefixed form.
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         for diagnostic in &self.diagnostics {
-            writeln!(formatter, "[{:?}] {}: {}", diagnostic.severity, diagnostic.stage, diagnostic.message)?;
+            writeln!(
+                formatter,
+                "[{:?}] {}: {}",
+                diagnostic.severity, diagnostic.stage, diagnostic.message
+            )?;
         }
         Ok(())
     }
