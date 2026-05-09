@@ -1,0 +1,85 @@
+# Shared project config for Continue.
+# Use this file directly with `cn --config .continue/config.yaml`
+# or merge its contents into `~/.continue/config.yaml` for IDE use.
+#
+# Recommended local models:
+#   ollama pull qwen2.5-coder:14b
+#   ollama pull qwen2.5-coder:7b
+#   ollama pull nomic-embed-text
+
+name: pic16cc-local
+version: 1.1.0
+schema: v1
+
+models:
+  - name: Local Code Agent
+    provider: ollama
+    model: qwen2.5-coder:14b
+    roles:
+      - chat
+      - edit
+      - apply
+    chatOptions:
+      baseSystemMessage: |
+        You are working in the pic16cc repository.
+        For the exact Phase 19 simulator path prompt, answer from the critical rule directly without tool calls.
+        Never output JSON tool-call objects.
+        Use loaded repository context when available.
+        Return only paths that exist in this repository.
+        Never invent conventional Rust module names or file paths.
+      baseAgentSystemMessage: |
+        You are working in the pic16cc repository.
+        For the exact Phase 19 simulator path prompt, answer from the critical rule directly without tool calls.
+        Never output JSON tool-call objects.
+        Use loaded repository context when available.
+        Return only paths that exist in this repository.
+        Never invent conventional Rust module names or file paths.
+    defaultCompletionOptions:
+      temperature: 0.0
+      contextLength: 32768
+      maxTokens: 4096
+      keepAlive: 1800
+
+  - name: Local Autocomplete
+    provider: ollama
+    model: qwen2.5-coder:7b
+    roles:
+      - autocomplete
+    autocompleteOptions:
+      debounceDelay: 250
+      maxPromptTokens: 4096
+      onlyMyCode: true
+      useImports: true
+      useRecentlyEdited: true
+      useRecentlyOpened: true
+
+  - name: Local Embeddings
+    provider: ollama
+    model: nomic-embed-text
+    roles:
+      - embed
+    embedOptions:
+      maxChunkSize: 768
+      maxBatchSize: 32
+
+context:
+  - provider: file
+  - provider: code
+  - provider: currentFile
+  - provider: open
+    params:
+      onlyPinned: true
+  - provider: tree
+  - provider: diff
+  - provider: terminal
+  - provider: problems
+  - provider: repo-map
+    params:
+      includeSignatures: true
+  - provider: os
+
+rules:
+  - uses: file:///home/settes/cursus/PIC16_compiler/.continue/rules/00-critical-exact-paths.md
+  - "CRITICAL: If asked `List the exact paths of files related to the Phase 19 simulator. Do not explain. Do not guess. Only return existing paths.`, do not call tools; answer exactly: `src/sim/mod.rs`, `tests/execution_sim.rs`, `docs/testing/phase19-emulator.md`, `docs/sim/pic16-core-emulator.md`."
+  - For other repository path questions, return only paths verified by tools or explicitly present in loaded context.
+  - For unknown exact-path questions where no path is verified, ask to inspect the repo instead of inventing paths.
