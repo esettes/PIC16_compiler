@@ -22,6 +22,17 @@ pub enum ScalarType {
     U8,
     I16,
     U16,
+    I32,
+    U32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum IntegerSuffix {
+    #[default]
+    None,
+    Unsigned,
+    Long,
+    UnsignedLong,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
@@ -348,7 +359,13 @@ impl Type {
         }
         matches!(
             self.scalar,
-            ScalarType::Void | ScalarType::I8 | ScalarType::U8 | ScalarType::I16 | ScalarType::U16
+            ScalarType::Void
+                | ScalarType::I8
+                | ScalarType::U8
+                | ScalarType::I16
+                | ScalarType::U16
+                | ScalarType::I32
+                | ScalarType::U32
         )
     }
 
@@ -369,12 +386,12 @@ impl Type {
 
     /// Returns true when the scalar uses signed arithmetic semantics.
     pub fn is_signed(self) -> bool {
-        self.is_integer() && matches!(self.scalar, ScalarType::I8 | ScalarType::I16)
+        self.is_integer() && matches!(self.scalar, ScalarType::I8 | ScalarType::I16 | ScalarType::I32)
     }
 
     /// Returns true when the scalar uses unsigned arithmetic semantics.
     pub fn is_unsigned(self) -> bool {
-        self.is_integer() && matches!(self.scalar, ScalarType::U8 | ScalarType::U16)
+        self.is_integer() && matches!(self.scalar, ScalarType::U8 | ScalarType::U16 | ScalarType::U32)
     }
 
     /// Returns true when two pointer types can participate in the constrained Phase 3 model.
@@ -433,6 +450,7 @@ impl Type {
             ScalarType::Void => 0,
             ScalarType::I8 | ScalarType::U8 => 1,
             ScalarType::I16 | ScalarType::U16 => 2,
+            ScalarType::I32 | ScalarType::U32 => 4,
         }
     }
 
@@ -442,6 +460,7 @@ impl Type {
             0 => 0,
             8 => 0x00FF,
             16 => 0xFFFF,
+            32 => 0xFFFF_FFFF,
             _ => unreachable!("mask is only defined for scalar and pointer values"),
         }
     }
@@ -595,6 +614,8 @@ const fn scalar_name(scalar: ScalarType) -> &'static str {
         ScalarType::U8 => "unsigned char",
         ScalarType::I16 => "int",
         ScalarType::U16 => "unsigned int",
+        ScalarType::I32 => "long",
+        ScalarType::U32 => "unsigned long",
     }
 }
 
@@ -609,6 +630,8 @@ mod tests {
         assert_eq!(Type::new(ScalarType::U8).mask(), 0x00FF);
         assert_eq!(Type::new(ScalarType::I16).byte_width(), 2);
         assert_eq!(Type::new(ScalarType::U16).mask(), 0xFFFF);
+        assert_eq!(Type::new(ScalarType::I32).byte_width(), 4);
+        assert_eq!(Type::new(ScalarType::U32).mask(), 0xFFFF_FFFF);
     }
 
     #[test]
@@ -616,6 +639,8 @@ mod tests {
     fn signedness_helpers_match_supported_scalars() {
         assert!(Type::new(ScalarType::I16).is_signed());
         assert!(Type::new(ScalarType::U16).is_unsigned());
+        assert!(Type::new(ScalarType::I32).is_signed());
+        assert!(Type::new(ScalarType::U32).is_unsigned());
         assert!(Type::new(ScalarType::U16).is_integer());
         assert!(!Type::new(ScalarType::Void).is_integer());
     }

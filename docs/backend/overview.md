@@ -2,6 +2,10 @@
 
 # PIC16 `midrange14` Backend
 
+Phase 21 extends the PIC16 backend to four-byte integer values. The return convention is `W` plus `__abi.return_high`, `__abi.return_upper0`, and `__abi.return_upper1`. Multi-byte carry/borrow codegen is shared by 8-, 16-, and 32-bit paths.
+
+See `docs/backend/phase21-long-codegen.md`.
+
 Shared backend responsibilities:
 
 - instruction selection
@@ -12,13 +16,13 @@ Shared backend responsibilities:
 - IR -> PIC16 asm lowering
 - 14-bit word encoding
 
-Current backend phase: **Phase 19 emulator-based execution validation on top of Phase 18 stack safety, call-graph analysis, and stack-usage reporting, Phase 17 controlled function pointers and indirect dispatch, Phase 16 multidimensional arrays and aggregate polish, Phase 15 named union support and basic unsigned bitfields, Phase 14 richer program-memory usability, Phase 13 explicit program-memory const/string/table lowering, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 static-data cleanup, Phase 9 control-flow coverage, Phase 8 aggregate/type-aware lowering, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**
+Current backend phase: **Phase 21 32-bit integer codegen on top of Phase 20 simulator tooling, Phase 19 execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier backend phases**
 
 Backend owns:
 
 - software stack helper slots: `stack_ptr`, `frame_ptr`
 - stack bound symbols: `__stack_base`, `__stack_limit`, `__stack_ptr`, `__frame_ptr`
-- return helper slot: `return_high`
+- return helper slots: `return_high`, `return_upper0`, `return_upper1`
 - short-lived scratch slots: `scratch0`, `scratch1`
 - caller-pushed stack argument lowering
 - per-call frame lowering for locals and IR temps

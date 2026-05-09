@@ -11,8 +11,8 @@ use super::ast::{
 };
 use super::lexer::{Keyword, Symbol, Token, TokenKind};
 use super::types::{
-    AddressSpace, MAX_POINTER_DEPTH, Qualifiers, ScalarType, StorageClass, StructId, Type,
-    UnionId,
+    AddressSpace, IntegerSuffix, MAX_POINTER_DEPTH, Qualifiers, ScalarType, StorageClass,
+    StructId, Type, UnionId,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -810,10 +810,10 @@ impl<'a> Parser<'a> {
             self.expect_symbol(Symbol::RParen);
             return expr;
         }
-        if let TokenKind::Number(value) = self.current().kind.clone() {
+        if let TokenKind::Number { value, suffix } = self.current().kind.clone() {
             self.advance();
             return Expr {
-                kind: ExprKind::IntLiteral(value),
+                kind: ExprKind::IntLiteral { value, suffix },
                 span: Span::new(start, self.previous_span().end),
             };
         }
@@ -840,7 +840,10 @@ impl<'a> Parser<'a> {
         );
         self.advance();
         Expr {
-            kind: ExprKind::IntLiteral(0),
+            kind: ExprKind::IntLiteral {
+                value: 0,
+                suffix: IntegerSuffix::None,
+            },
             span: Span::new(start, self.previous_span().end),
         }
     }
@@ -850,6 +853,8 @@ impl<'a> Parser<'a> {
         let mut storage = StorageClass::Auto;
         let mut qualifiers = Qualifiers::default();
         let mut saw_unsigned = false;
+        let mut saw_signed = false;
+        let mut saw_long = false;
         let mut saw_rom = false;
         let mut is_interrupt = false;
         let mut is_typedef = false;
@@ -885,11 +890,43 @@ impl<'a> Parser<'a> {
                     self.advance();
                 }
                 TokenKind::Keyword(Keyword::Unsigned) => {
+                    if saw_signed {
+                        self.diagnostics.error(
+                            "parser",
+                            Some(self.current_span()),
+                            "`signed` and `unsigned` cannot be combined",
+                            None,
+                        );
+                    }
                     saw_unsigned = true;
+                    self.advance();
+                }
+                TokenKind::Keyword(Keyword::Signed) => {
+                    if saw_unsigned {
+                        self.diagnostics.error(
+                            "parser",
+                            Some(self.current_span()),
+                            "`signed` and `unsigned` cannot be combined",
+                            None,
+                        );
+                    }
+                    saw_signed = true;
                     self.advance();
                 }
                 TokenKind::Keyword(Keyword::Interrupt) => {
                     is_interrupt = true;
+                    self.advance();
+                }
+                TokenKind::Keyword(Keyword::Long) => {
+                    if scalar.is_some() || explicit_type.is_some() || saw_long {
+                        self.diagnostics.error(
+                            "parser",
+                            Some(self.current_span()),
+                            "duplicate or invalid `long` type specifier",
+                            None,
+                        );
+                    }
+                    saw_long = true;
                     self.advance();
                 }
                 TokenKind::Keyword(Keyword::Struct) => {
@@ -932,7 +969,7 @@ impl<'a> Parser<'a> {
                     allows_omitted_declarator = omittable;
                 }
                 TokenKind::Keyword(Keyword::Void) => {
-                    if scalar.is_some() {
+                    if scalar.is_some() || saw_long || saw_signed || saw_unsigned {
                         self.diagnostics.error(
                             "parser",
                             Some(self.current_span()),
@@ -944,7 +981,7 @@ impl<'a> Parser<'a> {
                     self.advance();
                 }
                 TokenKind::Keyword(Keyword::Char) => {
-                    if scalar.is_some() {
+                    if scalar.is_some() || saw_long {
                         self.diagnostics.error(
                             "parser",
                             Some(self.current_span()),
@@ -956,6 +993,10 @@ impl<'a> Parser<'a> {
                     self.advance();
                 }
                 TokenKind::Keyword(Keyword::Int) => {
+                    if saw_long {
+                        self.advance();
+                        continue;
+                    }
                     if scalar.is_some() {
                         self.diagnostics.error(
                             "parser",
@@ -979,28 +1020,36 @@ impl<'a> Parser<'a> {
         }
 
         let mut ty = if let Some(ty) = explicit_type {
-            if saw_unsigned {
+            if saw_unsigned || saw_signed || saw_long {
                 self.diagnostics.error(
                     "parser",
                     Some(self.current_span()),
-                    "`unsigned` cannot be combined with this type specifier",
+                    "signedness or `long` cannot be combined with this type specifier",
                     None,
                 );
             }
             ty
         } else {
-            let scalar = scalar.unwrap_or_else(|| {
+            let scalar = if saw_long {
+                if saw_unsigned {
+                    ScalarType::U32
+                } else {
+                    ScalarType::I32
+                }
+            } else {
+                scalar.unwrap_or_else(|| {
                 self.diagnostics.error(
                     "parser",
                     Some(self.current_span()),
                     "expected type specifier",
                     Some(
-                        "supported types: void, char, unsigned char, int, unsigned int, typedef names, enum, struct, union"
+                        "supported types: void, char, unsigned char, int, unsigned int, long, unsigned long, typedef names, enum, struct, union"
                             .to_string(),
                     ),
                 );
                 ScalarType::I16
-            });
+                })
+            };
             Type::new(scalar)
         };
         ty = ty.with_qualifiers(qualifiers);
@@ -1511,7 +1560,7 @@ impl<'a> Parser<'a> {
     /// Evaluates an enum constant expression with integer-only operators.
     fn eval_enum_const_expr(&self, expr: &Expr) -> Option<i64> {
         match &expr.kind {
-            ExprKind::IntLiteral(value) => Some(*value),
+            ExprKind::IntLiteral { value, .. } => Some(*value),
             ExprKind::StringLiteral(_) => None,
             ExprKind::Name(name) => self.enum_constant_by_name.get(name).copied(),
             ExprKind::Cast { expr, .. } => self.eval_enum_const_expr(expr),
@@ -1718,12 +1767,14 @@ impl<'a> Parser<'a> {
                 TokenKind::Keyword(Keyword::Const)
                 | TokenKind::Keyword(Keyword::Rom)
                 | TokenKind::Keyword(Keyword::Volatile)
+                | TokenKind::Keyword(Keyword::Signed)
                 | TokenKind::Keyword(Keyword::Unsigned) => {
                     cursor += 1;
                 }
                 TokenKind::Keyword(Keyword::Void)
                 | TokenKind::Keyword(Keyword::Char)
-                | TokenKind::Keyword(Keyword::Int) => {
+                | TokenKind::Keyword(Keyword::Int)
+                | TokenKind::Keyword(Keyword::Long) => {
                     saw_type = true;
                     cursor += 1;
                 }
@@ -1946,7 +1997,7 @@ impl<'a> Parser<'a> {
     /// Parses one fixed array length expression restricted to an integer literal.
     fn parse_array_len(&mut self) -> usize {
         let span = self.current_span();
-        let TokenKind::Number(value) = self.current().kind.clone() else {
+        let TokenKind::Number { value, .. } = self.current().kind.clone() else {
             self.diagnostics.error(
                 "parser",
                 Some(span),
@@ -1978,10 +2029,12 @@ impl<'a> Parser<'a> {
                 | TokenKind::Keyword(Keyword::Const)
                 | TokenKind::Keyword(Keyword::Rom)
                 | TokenKind::Keyword(Keyword::Volatile)
+                | TokenKind::Keyword(Keyword::Signed)
                 | TokenKind::Keyword(Keyword::Unsigned)
                 | TokenKind::Keyword(Keyword::Void)
                 | TokenKind::Keyword(Keyword::Char)
                 | TokenKind::Keyword(Keyword::Int)
+                | TokenKind::Keyword(Keyword::Long)
                 | TokenKind::Keyword(Keyword::Enum)
                 | TokenKind::Keyword(Keyword::Struct)
                 | TokenKind::Keyword(Keyword::Union)

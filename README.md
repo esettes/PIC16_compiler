@@ -33,7 +33,19 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 20: user-facing simulator CLI, execution traces, and debugging workflow on top of Phase 19 emulator-based execution validation, Phase 18 stack safety, call-graph analysis, and stack-usage reporting, Phase 17 controlled function pointers and indirect dispatch, Phase 16 multidimensional arrays and aggregate-polish support, Phase 15 named `union` support and basic unsigned bitfields, Phase 14 richer program-memory data usability, Phase 13 explicit ROM objects, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 string/static-data cleanup, Phase 9 `switch` control flow, Phase 8 type-system work, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
+Current implementation is **Phase 21: controlled 32-bit integer support (`long` and `unsigned long`) on top of Phase 20 simulator CLI/debugging workflow, Phase 19 emulator-based execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier frontend/backend phases**.
+
+Phase 21 scope:
+
+- `long`, `signed long`, and `unsigned long` as 32-bit integer types
+- little-endian 4-byte storage for globals, statics, locals, parameters, returns, arrays, structs, and unions
+- literal suffixes `U`, `L`, `UL`, and `LU`
+- 32-bit inline add/subtract, bitwise ops, comparisons, and shifts
+- 32-bit runtime helpers for multiply, divide, modulo, and dynamic shifts
+- Stack-first ABI extension for 4-byte arguments and returns: `W`, `return_high`, `return_upper0`, `return_upper1`
+- simulator execution tests for 32-bit arithmetic, helpers, calls, aggregates, arrays, unions, and startup initialization
+- conservative diagnostics for narrowing, oversized literals, helper use inside ISRs, and deferred 32-bit ROM objects
+- no float, recursion, or advanced optimization work
 
 Phase 20 scope:
 

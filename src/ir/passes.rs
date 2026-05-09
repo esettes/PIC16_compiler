@@ -50,14 +50,24 @@ pub fn constant_fold(program: &mut IrProgram) -> ConstantFoldStats {
                         *instr = IrInstr::AddrOf { dst, symbol };
                         constants.remove(&dst);
                     }
-                    IrInstr::Cast { dst, kind, src } => {
+                    IrInstr::Cast {
+                        dst,
+                        kind,
+                        src,
+                        src_ty,
+                    } => {
                         let src = resolve_operand(src, &constants);
                         if src != original_unary_src(instr) {
                             stats.operands_propagated += 1;
                         }
-                        *instr = IrInstr::Cast { dst, kind, src };
+                        *instr = IrInstr::Cast {
+                            dst,
+                            kind,
+                            src,
+                            src_ty,
+                        };
                         if let Operand::Constant(value) = src {
-                            let result = apply_cast(kind, value, function.temp_types[dst]);
+                            let result = apply_cast(kind, value, src_ty, function.temp_types[dst]);
                             *instr = IrInstr::Copy {
                                 dst,
                                 src: Operand::Constant(result),
@@ -617,17 +627,10 @@ fn original_unary_src(instr: &IrInstr) -> Operand {
 }
 
 /// Evaluates an IR cast in the same way the runtime backend would truncate or extend it.
-fn apply_cast(kind: CastKind, value: i64, target_ty: Type) -> i64 {
+fn apply_cast(kind: CastKind, value: i64, source_ty: Type, target_ty: Type) -> i64 {
     match kind {
-        CastKind::ZeroExtend => normalize_value(value & 0xFF, target_ty),
-        CastKind::SignExtend => {
-            let low = value & 0xFF;
-            if (low & 0x80) != 0 {
-                normalize_value(low | !0xFF, target_ty)
-            } else {
-                normalize_value(low, target_ty)
-            }
-        }
+        CastKind::ZeroExtend => normalize_value(normalize_value(value, source_ty), target_ty),
+        CastKind::SignExtend => normalize_value(crate::common::integer::signed_value(value, source_ty), target_ty),
         CastKind::Truncate | CastKind::Bitcast => normalize_value(value, target_ty),
     }
 }
@@ -826,11 +829,13 @@ mod tests {
                                 dst: 0,
                                 kind: CastKind::ZeroExtend,
                                 src: Operand::Constant(0xFF),
+                                src_ty: Type::new(ScalarType::U8),
                             },
                             IrInstr::Cast {
                                 dst: 1,
                                 kind: CastKind::SignExtend,
                                 src: Operand::Constant(0xFF),
+                                src_ty: Type::new(ScalarType::I8),
                             },
                             IrInstr::Copy {
                                 dst: 2,
@@ -902,6 +907,7 @@ mod tests {
                             dst: 1,
                             kind: CastKind::Truncate,
                             src: Operand::Temp(0),
+                            src_ty: Type::new(ScalarType::U16),
                         },
                     ],
                     terminator: IrTerminator::Return(None),

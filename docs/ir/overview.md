@@ -2,6 +2,10 @@
 
 # IR
 
+Phase 21 keeps the IR shape stable and extends carried `Type` metadata to `I32`/`U32`. Cast instructions include source type metadata so 8/16/32-bit extension and truncation fold and codegen correctly.
+
+See `docs/ir/phase21-long-lowering.md`.
+
 Custom CFG-based IR.
 
 Motivation:

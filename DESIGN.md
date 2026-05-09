@@ -78,6 +78,12 @@ Rules:
 
 - caller pushes argument bytes left-to-right
 - caller cleans argument bytes after return
+
+### Phase 21 32-Bit Integers
+
+`long` and `unsigned long` are 4-byte little-endian integer objects. The Stack-first ABI keeps caller-pushed arguments; 32-bit arguments consume four bytes. 32-bit returns use `W` for byte 0 and helper slots `return_high`, `return_upper0`, and `return_upper1` for bytes 1 through 3.
+
+The backend lowers inline-safe 32-bit byte-wise operations directly and uses runtime helpers for multiply, divide, modulo, and dynamic shifts. ROM long objects remain deferred and are rejected clearly.
 - callee saves caller `FP`
 - callee sets `FP` to callee argument base
 - callee allocates locals, local arrays, IR temps in frame storage

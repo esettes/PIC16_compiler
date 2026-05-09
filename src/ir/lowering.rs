@@ -397,6 +397,7 @@ impl FunctionBuilder {
                             dst,
                             kind: *kind,
                             src,
+                            src_ty: value.ty,
                         });
                         Operand::Temp(dst)
                     }

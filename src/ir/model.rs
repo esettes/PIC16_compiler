@@ -57,6 +57,7 @@ pub enum IrInstr {
         dst: TempId,
         kind: CastKind,
         src: Operand,
+        src_ty: Type,
     },
     Unary {
         dst: TempId,
@@ -186,8 +187,13 @@ fn render_instr(instr: &IrInstr) -> String {
     match instr {
         IrInstr::Copy { dst, src } => format!("t{dst} = {}", render_operand(*src)),
         IrInstr::AddrOf { dst, symbol } => format!("t{dst} = &s{symbol}"),
-        IrInstr::Cast { dst, kind, src } => {
-            format!("t{dst} = {kind:?} {}", render_operand(*src))
+        IrInstr::Cast {
+            dst,
+            kind,
+            src,
+            src_ty,
+        } => {
+            format!("t{dst} = {kind:?} {} from {src_ty}", render_operand(*src))
         }
         IrInstr::Unary { dst, op, src } => {
             format!("t{dst} = {op:?} {}", render_operand(*src))

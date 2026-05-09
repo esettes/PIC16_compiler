@@ -4,7 +4,7 @@ use std::fmt::Write;
 
 use crate::common::source::Span;
 
-use super::types::{StorageClass, StructId, Type, UnionId};
+use super::types::{IntegerSuffix, StorageClass, StructId, Type, UnionId};
 
 #[derive(Clone, Debug)]
 pub struct TranslationUnit {
@@ -156,7 +156,10 @@ pub struct Expr {
 
 #[derive(Clone, Debug)]
 pub enum ExprKind {
-    IntLiteral(i64),
+    IntLiteral {
+        value: i64,
+        suffix: IntegerSuffix,
+    },
     StringLiteral(Vec<u8>),
     Name(String),
     Cast {
@@ -390,7 +393,7 @@ fn render_stmt(stmt: &Stmt, indent: usize, output: &mut String) {
 /// Renders one expression subtree into a compact single-line form.
 fn render_expr(expr: &Expr) -> String {
     match &expr.kind {
-        ExprKind::IntLiteral(value) => value.to_string(),
+        ExprKind::IntLiteral { value, .. } => value.to_string(),
         ExprKind::StringLiteral(bytes) => render_string_literal(bytes),
         ExprKind::Name(name) => name.clone(),
         ExprKind::Cast { ty, expr } => format!("({ty})({})", render_expr(expr)),

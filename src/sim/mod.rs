@@ -232,6 +232,14 @@ impl Pic16Core {
         u16::from(lo) | (u16::from(hi) << 8)
     }
 
+    pub fn read_data_u32(&self, addr: u16) -> u32 {
+        let b0 = u32::from(self.read_data(addr));
+        let b1 = u32::from(self.read_data(addr + 1));
+        let b2 = u32::from(self.read_data(addr + 2));
+        let b3 = u32::from(self.read_data(addr + 3));
+        b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+    }
+
     pub fn run_until_pc(&mut self, stop_pc: u16, max_steps: u64) -> Result<RunOutcome, SimError> {
         while self.pc != stop_pc {
             if self.steps >= max_steps {

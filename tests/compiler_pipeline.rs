@@ -2245,6 +2245,140 @@ void main(void) {
 }
 
 #[test]
+/// Verifies Phase 21 parses 32-bit integer declarations and literal suffixes.
+fn compiles_phase21_long_declarations_and_literals() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase21-long-types.c",
+        "\
+unsigned long global = 100000UL;
+long signed_global = -200000L;
+unsigned long result;
+void main(void) {
+    long local;
+    local = signed_global;
+    result = global + (unsigned long)local + 0x12345678UL;
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies implicit narrowing from a 32-bit value is diagnosed under `-Werror`.
+fn rejects_phase21_implicit_long_narrowing_under_werror() {
+    let error = compile_source_with_profile(
+        "pic16f628a",
+        "phase21-long-narrow.c",
+        "\
+unsigned long source;
+unsigned int result;
+void main(void) {
+    result = source;
+}
+",
+        strict_warnings(),
+    )
+    .expect_err("must fail");
+
+    assert!(error.contains("conversion from `unsigned long` to `unsigned int` truncates"));
+}
+
+#[test]
+/// Verifies explicit narrowing casts from 32-bit values are accepted.
+fn allows_phase21_explicit_long_narrowing_cast() {
+    let output = compile_source_with_profile(
+        "pic16f628a",
+        "phase21-long-explicit-narrow.c",
+        "\
+unsigned long source;
+unsigned int result;
+void main(void) {
+    result = (unsigned int)source;
+}
+",
+        strict_warnings(),
+    )
+    .unwrap_or_else(|error| panic!("unexpected diagnostics: {error}"));
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies integer literals above the supported 32-bit range are rejected.
+fn rejects_phase21_literal_too_large_for_u32() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase21-literal-too-large.c",
+        "\
+unsigned long result;
+void main(void) {
+    result = 4294967296UL;
+}
+",
+    );
+
+    assert!(error.contains("integer literal does not fit unsigned long"));
+}
+
+#[test]
+/// Verifies deferred 32-bit ROM objects produce a clear diagnostic.
+fn rejects_phase21_rom_long_objects() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase21-rom-long.c",
+        "\
+const __rom unsigned long table[] = { 1UL, 2UL };
+unsigned long result;
+void main(void) {
+    result = 0UL;
+}
+",
+    );
+
+    assert!(error.contains("unsupported ROM element type"));
+}
+
+#[test]
+/// Verifies helper-backed 32-bit operations stay rejected inside interrupt handlers.
+fn rejects_phase21_long_helper_inside_isr() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase21-isr-long-helper.c",
+        "\
+unsigned long a;
+unsigned long b;
+unsigned long result;
+void __interrupt isr(void) {
+    result = a * b;
+}
+void main(void) {
+}
+",
+    );
+
+    assert!(error.contains("cannot use `Multiply` when it would lower through a runtime helper"));
+}
+
+#[test]
+/// Verifies checked-in Phase 21 long examples compile cleanly.
+fn phase21_examples_compile_via_picc() {
+    let examples = [
+        ("pic16f628a", "examples/pic16f628a/long_basic.c"),
+        ("pic16f877a", "examples/pic16f877a/long_arithmetic.c"),
+        ("pic16f877a", "examples/pic16f877a/long_struct.c"),
+        ("pic16f877a", "examples/pic16f877a/long_array.c"),
+        ("pic16f877a", "examples/pic16f877a/long_counter.c"),
+    ];
+
+    for (target, path) in examples {
+        let output = compile_example(target, path);
+        assert_hex_is_programmable(&output);
+    }
+}
+
+#[test]
 /// Verifies unsupported integer-to-pointer explicit casts diagnose non-zero constants.
 fn reports_phase8_unsupported_nonzero_integer_to_pointer_cast() {
     let error = compile_error(

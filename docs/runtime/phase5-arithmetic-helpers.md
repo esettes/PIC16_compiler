@@ -2,10 +2,12 @@
 
 # Phase 5 Arithmetic Helpers
 
+Phase 21 adds 32-bit helper variants for `long` and `unsigned long`; see `docs/runtime/phase21-long-helpers.md`. Existing 8-bit and 16-bit helper names and calling behavior remain compatible.
+
 Phase status:
 
-- helper behavior is frozen under the Phase 6 stabilization baseline
-- no new arithmetic helper families are planned in this branch
+- 8-bit and 16-bit helper behavior is frozen under the Phase 6 stabilization baseline
+- Phase 21 extends the same helper model to 32-bit integer types
 
 Phase 5 adds compiler-generated PIC16 runtime helpers for:
 
@@ -21,6 +23,8 @@ Supported scalar types:
 - `unsigned char`
 - `int`
 - `unsigned int`
+- `long`
+- `unsigned long`
 
 ## Helper Families
 

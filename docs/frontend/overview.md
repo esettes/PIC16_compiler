@@ -2,6 +2,10 @@
 
 # Frontend
 
+Phase 21 frontend support adds `long`, `signed long`, `unsigned long`, and integer suffixes `U`, `L`, `UL`, and `LU`. The semantic model warns on implicit narrowing from 32-bit values and rejects literals outside the supported 32-bit range.
+
+See `docs/frontend/phase21-long-types.md` for the exact type, suffix, conversion, ISR, and ROM rules.
+
 Responsibilities:
 
 - preprocess

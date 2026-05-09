@@ -3,7 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::backend::pic16::devices::TargetDevice;
-use crate::common::integer::{eval_binary, eval_unary, infer_integer_literal_type, normalize_value, signed_value};
+use crate::common::integer::{
+    eval_binary, eval_unary, infer_integer_literal_type_with_suffix, normalize_value, signed_value,
+};
 use crate::common::source::Span;
 use crate::diagnostics::DiagnosticBag;
 
@@ -12,7 +14,8 @@ use super::ast::{
     Stmt, StructDef, TranslationUnit, UnaryOp, UnionDef, VarDecl,
 };
 use super::types::{
-    AddressSpace, CastKind, Qualifiers, ScalarType, StorageClass, StructId, Type, UnionId,
+    AddressSpace, CastKind, IntegerSuffix, Qualifiers, ScalarType, StorageClass, StructId, Type,
+    UnionId,
 };
 
 pub type SymbolId = usize;
@@ -1020,12 +1023,15 @@ impl<'a> SemanticAnalyzer<'a> {
         decay_arrays: bool,
     ) -> Option<TypedExpr> {
         let typed = match &expr.kind {
-            ExprKind::IntLiteral(value) => TypedExpr {
-                kind: TypedExprKind::IntLiteral(*value),
-                ty: infer_integer_literal_type(*value),
-                span: expr.span,
-                value_category: ValueCategory::RValue,
-            },
+            ExprKind::IntLiteral { value, suffix } => {
+                self.diagnose_integer_literal(*value, *suffix, expr.span, diagnostics);
+                TypedExpr {
+                    kind: TypedExprKind::IntLiteral(*value),
+                    ty: infer_integer_literal_type_with_suffix(*value, *suffix),
+                    span: expr.span,
+                    value_category: ValueCategory::RValue,
+                }
+            }
             ExprKind::StringLiteral(bytes) => self.analyze_string_literal_expr(bytes, expr.span),
             ExprKind::Name(name) => self.analyze_name(name, expr.span, diagnostics)?,
             ExprKind::Cast { ty, expr: value } => {
@@ -1080,6 +1086,36 @@ impl<'a> SemanticAnalyzer<'a> {
             Some(self.decay_array_expr(typed, expr.span))
         } else {
             Some(typed)
+        }
+    }
+
+    /// Emits Phase 21 range diagnostics for integer literals before typed lowering.
+    fn diagnose_integer_literal(
+        &self,
+        value: i64,
+        suffix: IntegerSuffix,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        let max = match suffix {
+            IntegerSuffix::Long => i64::from(i32::MAX),
+            IntegerSuffix::Unsigned | IntegerSuffix::UnsignedLong | IntegerSuffix::None => {
+                i64::from(u32::MAX)
+            }
+        };
+        if value > max {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                match suffix {
+                    IntegerSuffix::Long => "integer literal does not fit signed long",
+                    IntegerSuffix::Unsigned | IntegerSuffix::UnsignedLong => {
+                        "integer literal does not fit unsigned long"
+                    }
+                    IntegerSuffix::None => "integer literal is too large for 32-bit integer support",
+                },
+                Some("use a value in the supported 32-bit integer range".to_string()),
+            );
         }
     }
 
@@ -2158,6 +2194,17 @@ impl<'a> SemanticAnalyzer<'a> {
                 span,
                 value_category: ValueCategory::RValue,
             }),
+            ScalarType::I32 | ScalarType::U32 => {
+                diagnostics.error(
+                    "semantic",
+                    Some(base.span),
+                    format!(
+                        "direct ROM indexing does not support 32-bit ROM element type `{element_ty}` in phase 21"
+                    ),
+                    Some("keep 32-bit objects in data memory; ROM long tables are deferred".to_string()),
+                );
+                None
+            }
             ScalarType::Void => {
                 diagnostics.error(
                     "semantic",
@@ -4352,7 +4399,7 @@ impl<'a> SemanticAnalyzer<'a> {
 
         let element_ty = lhs.ty.element_type();
         let element_size = element_ty.byte_width();
-        if !matches!(element_size, 1 | 2) {
+        if !matches!(element_size, 1 | 2 | 4) {
             diagnostics.error(
                 "semantic",
                 Some(span),
@@ -4360,7 +4407,7 @@ impl<'a> SemanticAnalyzer<'a> {
                     "pointer subtraction for element type `{}` is not supported in phase 12",
                     element_ty
                 ),
-                Some("use element sizes of 1 or 2 bytes only for pointer subtraction".to_string()),
+                Some("use element sizes of 1, 2, or 4 bytes only for pointer subtraction".to_string()),
             );
             return None;
         }
@@ -4397,13 +4444,13 @@ impl<'a> SemanticAnalyzer<'a> {
             value_category: ValueCategory::RValue,
         };
 
-        if element_size == 2 {
+        if matches!(element_size, 2 | 4) {
             diff = TypedExpr {
                 kind: TypedExprKind::Binary {
                     op: BinaryOp::ShiftRight,
                     lhs: Box::new(diff),
                     rhs: Box::new(TypedExpr {
-                        kind: TypedExprKind::IntLiteral(1),
+                        kind: TypedExprKind::IntLiteral(if element_size == 2 { 1 } else { 2 }),
                         ty: raw_ty,
                         span,
                         value_category: ValueCategory::RValue,
@@ -5004,14 +5051,20 @@ impl<'a> SemanticAnalyzer<'a> {
         let return_scalar = candidate.function_return_scalar().unwrap_or(ScalarType::Void);
         if !matches!(
             return_scalar,
-            ScalarType::Void | ScalarType::I8 | ScalarType::U8 | ScalarType::I16 | ScalarType::U16
+            ScalarType::Void
+                | ScalarType::I8
+                | ScalarType::U8
+                | ScalarType::I16
+                | ScalarType::U16
+                | ScalarType::I32
+                | ScalarType::U32
         ) {
             diagnostics.error(
                 "semantic",
                 Some(span),
                 format!("{context} uses unsupported function-pointer return type `{candidate}`"),
                 Some(
-                    "supported indirect-call returns are `void`, `char`, `unsigned char`, `int`, or `unsigned int`"
+                    "supported indirect-call returns are `void`, `char`, `unsigned char`, `int`, `unsigned int`, `long`, or `unsigned long`"
                         .to_string(),
                 ),
             );
@@ -5032,7 +5085,15 @@ impl<'a> SemanticAnalyzer<'a> {
             let scalar = candidate
                 .function_param_scalar(index)
                 .expect("function pointer parameter index in range");
-            if !matches!(scalar, ScalarType::I8 | ScalarType::U8 | ScalarType::I16 | ScalarType::U16) {
+            if !matches!(
+                scalar,
+                ScalarType::I8
+                    | ScalarType::U8
+                    | ScalarType::I16
+                    | ScalarType::U16
+                    | ScalarType::I32
+                    | ScalarType::U32
+            ) {
                 diagnostics.error(
                     "semantic",
                     Some(span),
@@ -6122,6 +6183,8 @@ fn integer_value_range(ty: Type) -> Option<(i64, i64)> {
         ScalarType::U8 => Some((0, i64::from(u8::MAX))),
         ScalarType::I16 => Some((i64::from(i16::MIN), i64::from(i16::MAX))),
         ScalarType::U16 => Some((0, i64::from(u16::MAX))),
+        ScalarType::I32 => Some((i64::from(i32::MIN), i64::from(i32::MAX))),
+        ScalarType::U32 => Some((0, i64::from(u32::MAX))),
         ScalarType::Void => None,
     }
 }

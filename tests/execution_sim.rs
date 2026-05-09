@@ -81,7 +81,7 @@ fn run_fixture_to_symbol(target: &str, output: &Path, map: &str, stop_symbol: &s
     let program = ProgramImage::from_hex_file(output).expect("load hex");
     let halt = map_symbol_address(map, stop_symbol).expect("stop symbol");
     let mut core = Pic16Core::new(device, program);
-    core.run_until_pc(halt, 200_000).expect("run to halt");
+    core.run_until_pc(halt, 1_000_000).expect("run to halt");
     core
 }
 
@@ -98,6 +98,11 @@ fn symbol_u8(core: &Pic16Core, map: &str, needle: &str) -> u8 {
 fn symbol_u16(core: &Pic16Core, map: &str, needle: &str) -> u16 {
     let addr = map_symbol_address(map, needle).expect("symbol");
     core.read_data_u16(addr)
+}
+
+fn symbol_u32(core: &Pic16Core, map: &str, needle: &str) -> u32 {
+    let addr = map_symbol_address(map, needle).expect("symbol");
+    core.read_data_u32(addr)
 }
 
 #[test]
@@ -612,4 +617,173 @@ void main(void) {
     );
 
     assert_eq!(symbol_u16(&core, &map, "result"), 300);
+}
+
+#[test]
+fn executes_32bit_add_sub_compare_shift_result() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase21-long-add-shift.c",
+        r#"
+unsigned long a = 100000UL;
+unsigned long b = 250UL;
+unsigned long result;
+
+void main(void) {
+    unsigned long x;
+    x = a + b;
+    x = x - 100UL;
+    if (x == 100150UL && x > 100000UL && x >= 100150UL) {
+        result = x << 1;
+        result = result >> 1;
+    } else {
+        result = 1UL;
+    }
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 100_150);
+}
+
+#[test]
+fn executes_32bit_multiply_helper() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase21-long-mul.c",
+        r#"
+unsigned long a = 1234UL;
+unsigned long b = 17UL;
+unsigned long result;
+
+void main(void) {
+    result = a * b;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 20_978);
+}
+
+#[test]
+fn executes_32bit_divide_helper() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase21-long-div.c",
+        r#"
+unsigned long c = 100000UL;
+unsigned long result;
+
+void main(void) {
+    result = c / 25UL;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 4_000);
+}
+
+#[test]
+fn executes_32bit_modulo_helper() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase21-long-mod.c",
+        r#"
+unsigned long c = 100000UL;
+unsigned long result;
+
+void main(void) {
+    result = c % 97UL;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 90);
+}
+
+#[test]
+fn executes_32bit_argument_and_return() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase21-long-call.c",
+        r#"
+unsigned long result;
+
+unsigned long add32(unsigned long a, unsigned long b) {
+    return a + b;
+}
+
+void main(void) {
+    result = add32(100000UL, 250UL);
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 100_250);
+}
+
+#[test]
+fn executes_32bit_struct_field_and_startup_init() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase21-long-struct-init.c",
+        r#"
+struct Counter {
+    unsigned long value;
+};
+
+struct Counter counter = { 0x01020304UL };
+unsigned long result;
+
+void main(void) {
+    result = counter.value;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0x01020304);
+}
+
+#[test]
+fn executes_32bit_union_overlay() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase21-long-union.c",
+        r#"
+union Overlay {
+    unsigned long word;
+    unsigned char bytes[4];
+};
+
+union Overlay overlay;
+unsigned long result;
+
+void main(void) {
+    overlay.word = 0x11223344UL;
+    result = overlay.bytes[0];
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0x44);
+}
+
+#[test]
+fn executes_32bit_array_indexing() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase21-long-array.c",
+        r#"
+unsigned long values[3] = { 10UL, 20UL, 30UL };
+unsigned char index;
+unsigned long result;
+
+void main(void) {
+    index = 2;
+    result = values[index];
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 30);
 }

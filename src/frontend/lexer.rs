@@ -4,11 +4,12 @@ use std::fmt::Write;
 
 use crate::common::source::{PreprocessedSource, Span};
 use crate::diagnostics::DiagnosticBag;
+use crate::frontend::types::IntegerSuffix;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TokenKind {
     Identifier(String),
-    Number(i64),
+    Number { value: i64, suffix: IntegerSuffix },
     StringLiteral(Vec<u8>),
     Keyword(Keyword),
     Symbol(Symbol),
@@ -30,12 +31,14 @@ pub enum Keyword {
     If,
     Int,
     Interrupt,
+    Long,
     Typedef,
     Enum,
     Struct,
     Union,
     Return,
     Static,
+    Signed,
     Unsigned,
     Void,
     Volatile,
@@ -172,14 +175,36 @@ impl<'a> Lexer<'a> {
                     self.index += 1;
                 }
             }
-            let literal = &self.source.text[start..self.index];
+            let digits_end = self.index;
+            while self.index < bytes.len() && (bytes[self.index] as char).is_ascii_alphabetic() {
+                self.index += 1;
+            }
+            let literal = &self.source.text[start..digits_end];
+            let suffix_text = &self.source.text[digits_end..self.index];
             let value = if literal.starts_with("0x") || literal.starts_with("0X") {
-                i64::from_str_radix(&literal[2..], 16).unwrap_or(0)
+                i64::from_str_radix(&literal[2..], 16).unwrap_or_else(|_| {
+                    self.diagnostics.error(
+                        "lexer",
+                        Some(Span::new(start, digits_end)),
+                        "integer literal is too large",
+                        Some("use a value that fits in 32 bits".to_string()),
+                    );
+                    0
+                })
             } else {
-                literal.parse::<i64>().unwrap_or(0)
+                literal.parse::<i64>().unwrap_or_else(|_| {
+                    self.diagnostics.error(
+                        "lexer",
+                        Some(Span::new(start, digits_end)),
+                        "integer literal is too large",
+                        Some("use a value that fits in 32 bits".to_string()),
+                    );
+                    0
+                })
             };
+            let suffix = self.parse_integer_suffix(suffix_text, Span::new(digits_end, self.index));
             return Token {
-                kind: TokenKind::Number(value),
+                kind: TokenKind::Number { value, suffix },
                 span: Span::new(start, self.index),
             };
         }
@@ -232,6 +257,28 @@ impl<'a> Lexer<'a> {
         Token {
             kind,
             span: Span::new(start, self.index),
+        }
+    }
+
+    /// Parses the supported integer suffixes used by Phase 21 long constants.
+    fn parse_integer_suffix(&mut self, suffix: &str, span: Span) -> IntegerSuffix {
+        if suffix.is_empty() {
+            return IntegerSuffix::None;
+        }
+        let upper = suffix.to_ascii_uppercase();
+        match upper.as_str() {
+            "U" => IntegerSuffix::Unsigned,
+            "L" => IntegerSuffix::Long,
+            "UL" | "LU" => IntegerSuffix::UnsignedLong,
+            _ => {
+                self.diagnostics.error(
+                    "lexer",
+                    Some(span),
+                    format!("unsupported integer literal suffix `{suffix}`"),
+                    Some("supported suffixes are `U`, `L`, `UL`, and `LU`".to_string()),
+                );
+                IntegerSuffix::None
+            }
         }
     }
 
@@ -409,12 +456,14 @@ fn keyword_or_ident(text: &str) -> TokenKind {
         "if" => Some(Keyword::If),
         "int" => Some(Keyword::Int),
         "__interrupt" => Some(Keyword::Interrupt),
+        "long" => Some(Keyword::Long),
         "typedef" => Some(Keyword::Typedef),
         "enum" => Some(Keyword::Enum),
         "struct" => Some(Keyword::Struct),
         "union" => Some(Keyword::Union),
         "return" => Some(Keyword::Return),
         "sizeof" => Some(Keyword::Sizeof),
+        "signed" => Some(Keyword::Signed),
         "static" => Some(Keyword::Static),
         "unsigned" => Some(Keyword::Unsigned),
         "void" => Some(Keyword::Void),

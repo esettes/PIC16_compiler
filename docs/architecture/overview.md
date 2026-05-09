@@ -2,6 +2,10 @@
 
 # General Architecture
 
+Phase 21 extends the existing architecture with 32-bit integer support while preserving the Stack-first ABI and PIC16 `midrange14` backend. The compiler treats `long` and `unsigned long` as 4-byte little-endian scalar values across frontend typing, IR temps, stack frames, global storage, and simulator validation.
+
+32-bit multiplication, division, modulo, and dynamic shifts lower through runtime helpers. Inline 32-bit add/subtract, bitwise operations, comparisons, constant shifts, loads, stores, and aggregate accesses remain byte-wise backend codegen.
+
 `pic16cc` separates:
 
 - C frontend

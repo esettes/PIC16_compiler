@@ -2,6 +2,10 @@
 
 # Testing Guide
 
+Phase 21 runtime validation lives in `tests/execution_sim.rs`. It compiles C programs to HEX, runs them through the simulator, and checks 32-bit RAM results for add/subtract, comparisons, shifts, multiply, divide, modulo, calls, returns, struct fields, union overlays, arrays, and startup initialization.
+
+Phase 21 diagnostics are covered in `tests/compiler_pipeline.rs` for literal range errors, implicit narrowing, explicit casts, unsupported ROM long objects, and ISR helper restrictions.
+
 `pic16cc` currently uses three testing layers:
 
 - Rust unit tests for frontend, IR, backend, encoder, and simulator internals
