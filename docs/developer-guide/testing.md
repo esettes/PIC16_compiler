@@ -7,6 +7,7 @@
 - Rust unit tests for frontend, IR, backend, encoder, and simulator internals
 - compiler pipeline integration tests that validate diagnostics plus `.hex` / `.map` / `.lst` / `.asm` shape
 - Phase 19 execution tests that run generated PIC16 machine code inside the internal emulator
+- Phase 20 simulator CLI tests that run `pic16-sim` as a user-facing binary
 
 Core commands:
 
@@ -14,8 +15,37 @@ Core commands:
 cargo check
 cargo test
 cargo test --test execution_sim
+cargo test --test sim_cli
 cargo clippy --all-targets -- -D warnings
 ```
+
+## Simulator CLI Tests
+
+Phase 20 CLI validation lives in:
+
+- `src/sim_cli.rs`
+- `src/bin/pic16-sim.rs`
+- `tests/sim_cli.rs`
+
+The pattern is:
+
+1. compile a small C source to Intel HEX and `.map`
+2. invoke `pic16-sim` with `--map`
+3. run until `__halt` or a max-step budget
+4. assert stdout/stderr for symbols, registers, traces, and diagnostics
+
+Use simulator CLI tests for:
+
+- `--help` / `--version`
+- malformed HEX diagnostics
+- missing map diagnostics
+- unknown symbol diagnostics
+- `--run-until`
+- `--max-steps`
+- `--print-regs`
+- `--print-symbol`
+- `--trace`
+- `--trace-file`
 
 ## Execution Tests
 
@@ -69,3 +99,4 @@ Then assert `result == 5` after simulation.
 - asynchronous interrupt timing is not modeled
 - unsupported opcodes must fail explicitly instead of being guessed
 - execution validation complements, not replaces, map/listing/diagnostic tests
+- `pic16-sim` validates generated machine-code behavior; it is not a hardware-accurate peripheral simulator

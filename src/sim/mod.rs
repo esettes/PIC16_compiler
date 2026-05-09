@@ -29,6 +29,27 @@ pub struct RunOutcome {
     pub steps: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MachineState {
+    pub pc: u16,
+    pub w: u8,
+    pub status: u8,
+    pub pclath: u8,
+    pub fsr: u8,
+    pub steps: u64,
+    pub hardware_stack_top: Option<u16>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TraceRecord {
+    pub step: u64,
+    pub pc: u16,
+    pub word: u16,
+    pub instruction: String,
+    pub w: u8,
+    pub status: u8,
+}
+
 #[derive(Debug)]
 pub enum SimError {
     InvalidHexRecord(String),
@@ -88,8 +109,9 @@ pub struct Pic16Core {
 
 impl ProgramImage {
     pub fn from_hex_file(path: &Path) -> Result<Self, SimError> {
-        let records = fs::read_to_string(path)
-            .map_err(|error| SimError::InvalidHexRecord(format!("failed to read `{}`: {error}", path.display())))?;
+        let records = fs::read_to_string(path).map_err(|error| {
+            SimError::InvalidHexRecord(format!("failed to read `{}`: {error}", path.display()))
+        })?;
         Self::from_hex_records(&records)
     }
 
@@ -135,6 +157,10 @@ impl ProgramImage {
     pub fn word(&self, pc: u16) -> Option<u16> {
         self.words.get(&pc).copied()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.words.is_empty()
+    }
 }
 
 impl Pic16Core {
@@ -163,8 +189,36 @@ impl Pic16Core {
         self.w
     }
 
+    pub fn status(&self) -> u8 {
+        self.ram[usize::from(STATUS_ADDR)]
+    }
+
+    pub fn pclath(&self) -> u8 {
+        self.ram[usize::from(PCLATH_ADDR)]
+    }
+
+    pub fn fsr(&self) -> u8 {
+        self.ram[usize::from(FSR_ADDR)]
+    }
+
     pub fn steps(&self) -> u64 {
         self.steps
+    }
+
+    pub fn hardware_stack_top(&self) -> Option<u16> {
+        self.hardware_stack.last().copied()
+    }
+
+    pub fn state(&self) -> MachineState {
+        MachineState {
+            pc: self.pc,
+            w: self.w,
+            status: self.status(),
+            pclath: self.pclath(),
+            fsr: self.fsr(),
+            steps: self.steps,
+            hardware_stack_top: self.hardware_stack_top(),
+        }
     }
 
     pub fn read_data(&self, addr: u16) -> u8 {
@@ -194,16 +248,38 @@ impl Pic16Core {
         })
     }
 
+    pub fn trace_next(&self) -> Result<TraceRecord, SimError> {
+        let pc = self.pc;
+        let word = self.program.word(pc).ok_or(SimError::MissingInstruction {
+            pc,
+            program_limit: self.program_limit,
+        })?;
+        let instr =
+            DecodedInstr::decode(word).ok_or(SimError::UnsupportedInstruction { pc, word })?;
+        Ok(TraceRecord {
+            step: self.steps,
+            pc,
+            word,
+            instruction: instr.to_string(),
+            w: self.w,
+            status: self.status(),
+        })
+    }
+
+    pub fn step_with_trace(&mut self) -> Result<TraceRecord, SimError> {
+        let trace = self.trace_next()?;
+        self.step()?;
+        Ok(trace)
+    }
+
     pub fn step(&mut self) -> Result<(), SimError> {
         let pc = self.pc;
-        let word = self
-            .program
-            .word(pc)
-            .ok_or(SimError::MissingInstruction {
-                pc,
-                program_limit: self.program_limit,
-            })?;
-        let instr = DecodedInstr::decode(word).ok_or(SimError::UnsupportedInstruction { pc, word })?;
+        let word = self.program.word(pc).ok_or(SimError::MissingInstruction {
+            pc,
+            program_limit: self.program_limit,
+        })?;
+        let instr =
+            DecodedInstr::decode(word).ok_or(SimError::UnsupportedInstruction { pc, word })?;
         let next_pc = pc.wrapping_add(1);
         self.ram[usize::from(PCL_ADDR)] = next_pc as u8;
 
@@ -321,7 +397,11 @@ impl Pic16Core {
             }
             DecodedInstr::Rrf { f, d } => {
                 let value = self.read_direct(f);
-                let carry_in = if self.status_bit(STATUS_C_BIT) { 0x80 } else { 0 };
+                let carry_in = if self.status_bit(STATUS_C_BIT) {
+                    0x80
+                } else {
+                    0
+                };
                 let result = (value >> 1) | carry_in;
                 self.set_status_bit(STATUS_C_BIT, (value & 0x01) != 0);
                 match d {
@@ -390,7 +470,10 @@ impl Pic16Core {
         let sum = u16::from(lhs) + u16::from(rhs);
         let result = sum as u8;
         self.set_status_bit(STATUS_C_BIT, sum > 0xFF);
-        self.set_status_bit(STATUS_DC_BIT, u16::from(lhs & 0x0F) + u16::from(rhs & 0x0F) > 0x0F);
+        self.set_status_bit(
+            STATUS_DC_BIT,
+            u16::from(lhs & 0x0F) + u16::from(rhs & 0x0F) > 0x0F,
+        );
         self.set_status_bit(STATUS_Z_BIT, result == 0);
         result
     }
@@ -440,7 +523,11 @@ impl Pic16Core {
     }
 
     fn indirect_raw_addr(&self) -> u16 {
-        let high = if self.status_bit(STATUS_IRP_BIT) { 0x100 } else { 0 };
+        let high = if self.status_bit(STATUS_IRP_BIT) {
+            0x100
+        } else {
+            0
+        };
         high | u16::from(self.ram[usize::from(FSR_ADDR)])
     }
 
@@ -549,6 +636,64 @@ impl DecodedInstr {
     }
 }
 
+impl Display for TraceRecord {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{step:06} PC={pc:04X} WORD={word:04X} {instr:<16} W={w:02X} STATUS={status:02X}",
+            step = self.step,
+            pc = self.pc,
+            word = self.word,
+            instr = self.instruction,
+            w = self.w,
+            status = self.status
+        )
+    }
+}
+
+impl Display for DecodedInstr {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Nop => formatter.write_str("NOP"),
+            Self::Movlw(value) => write!(formatter, "MOVLW 0x{value:02X}"),
+            Self::Movwf(f) => write!(formatter, "MOVWF 0x{f:02X}"),
+            Self::Movf { f, d } => write!(formatter, "MOVF 0x{f:02X},{}", d.suffix()),
+            Self::Clrf(f) => write!(formatter, "CLRF 0x{f:02X}"),
+            Self::Clrw => formatter.write_str("CLRW"),
+            Self::Addlw(value) => write!(formatter, "ADDLW 0x{value:02X}"),
+            Self::Andlw(value) => write!(formatter, "ANDLW 0x{value:02X}"),
+            Self::Iorlw(value) => write!(formatter, "IORLW 0x{value:02X}"),
+            Self::Xorlw(value) => write!(formatter, "XORLW 0x{value:02X}"),
+            Self::Addwf { f, d } => write!(formatter, "ADDWF 0x{f:02X},{}", d.suffix()),
+            Self::Andwf { f, d } => write!(formatter, "ANDWF 0x{f:02X},{}", d.suffix()),
+            Self::Iorwf { f, d } => write!(formatter, "IORWF 0x{f:02X},{}", d.suffix()),
+            Self::Xorwf { f, d } => write!(formatter, "XORWF 0x{f:02X},{}", d.suffix()),
+            Self::Subwf { f, d } => write!(formatter, "SUBWF 0x{f:02X},{}", d.suffix()),
+            Self::Rlf { f, d } => write!(formatter, "RLF 0x{f:02X},{}", d.suffix()),
+            Self::Rrf { f, d } => write!(formatter, "RRF 0x{f:02X},{}", d.suffix()),
+            Self::Swapf { f, d } => write!(formatter, "SWAPF 0x{f:02X},{}", d.suffix()),
+            Self::Bcf { f, b } => write!(formatter, "BCF 0x{f:02X},{b}"),
+            Self::Bsf { f, b } => write!(formatter, "BSF 0x{f:02X},{b}"),
+            Self::Btfsc { f, b } => write!(formatter, "BTFSC 0x{f:02X},{b}"),
+            Self::Btfss { f, b } => write!(formatter, "BTFSS 0x{f:02X},{b}"),
+            Self::Goto(target) => write!(formatter, "GOTO 0x{target:04X}"),
+            Self::Call(target) => write!(formatter, "CALL 0x{target:04X}"),
+            Self::Retlw(value) => write!(formatter, "RETLW 0x{value:02X}"),
+            Self::Return => formatter.write_str("RETURN"),
+            Self::Retfie => formatter.write_str("RETFIE"),
+        }
+    }
+}
+
+impl Dest {
+    const fn suffix(self) -> &'static str {
+        match self {
+            Self::W => "W",
+            Self::F => "F",
+        }
+    }
+}
+
 impl Display for SimError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -565,7 +710,10 @@ impl Display for SimError {
                 )
             }
             Self::UnsupportedInstruction { pc, word } => {
-                write!(formatter, "unsupported PIC16 instruction 0x{word:04X} at PC 0x{pc:04X}")
+                write!(
+                    formatter,
+                    "unsupported PIC16 instruction 0x{word:04X} at PC 0x{pc:04X}"
+                )
             }
             Self::ReturnStackUnderflow { pc } => {
                 write!(formatter, "return-stack underflow at PC 0x{pc:04X}")
@@ -614,12 +762,15 @@ fn parse_hex_u16(field: &str, line: &str) -> Result<u16, SimError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_data_addr, DecodedInstr, Pic16Core, ProgramImage, SimError};
+    use super::{DecodedInstr, Pic16Core, ProgramImage, SimError, canonical_data_addr};
     use crate::backend::pic16::devices::DeviceRegistry;
 
     #[test]
     fn decodes_retlw() {
-        assert_eq!(DecodedInstr::decode(0x345A), Some(DecodedInstr::Retlw(0x5A)));
+        assert_eq!(
+            DecodedInstr::decode(0x345A),
+            Some(DecodedInstr::Retlw(0x5A))
+        );
     }
 
     #[test]
@@ -651,7 +802,10 @@ mod tests {
         let error = core.step().expect_err("unsupported word must fail");
         assert!(matches!(
             error,
-            SimError::UnsupportedInstruction { pc: 0x0000, word: 0x3FFF }
+            SimError::UnsupportedInstruction {
+                pc: 0x0000,
+                word: 0x3FFF
+            }
         ));
     }
 

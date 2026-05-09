@@ -4,7 +4,10 @@
 
 `pic16cc` is an experimental Rust compiler for classic 14-bit PIC16 mid-range MCUs. The pipeline is native end to end:
 
-Installed CLI executable name: `picc`.
+Installed CLI executable names:
+
+- `picc`: compiler
+- `pic16-sim`: optional simulator/debugging tool
 
 1. preprocessing
 2. lexing
@@ -30,15 +33,27 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 19: emulator-based execution validation on top of Phase 18 stack safety, call-graph analysis, and stack-usage reporting, Phase 17 controlled function pointers and indirect dispatch, Phase 16 multidimensional arrays and aggregate-polish support, Phase 15 named `union` support and basic unsigned bitfields, Phase 14 richer program-memory data usability, Phase 13 explicit ROM objects, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 string/static-data cleanup, Phase 9 `switch` control flow, Phase 8 type-system work, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
+Current implementation is **Phase 20: user-facing simulator CLI, execution traces, and debugging workflow on top of Phase 19 emulator-based execution validation, Phase 18 stack safety, call-graph analysis, and stack-usage reporting, Phase 17 controlled function pointers and indirect dispatch, Phase 16 multidimensional arrays and aggregate-polish support, Phase 15 named `union` support and basic unsigned bitfields, Phase 14 richer program-memory data usability, Phase 13 explicit ROM objects, Phase 12 richer data-space pointers, Phase 11 aggregate completeness, Phase 10 string/static-data cleanup, Phase 9 `switch` control flow, Phase 8 type-system work, Phase 7 optimization, Phase 6 interrupts, Phase 5 arithmetic helpers, and the Phase 4 Stack-first ABI**.
 
-Phase 19 scope:
+Phase 20 scope:
+
+- optional `pic16-sim` binary for running generated Intel HEX files
+- `.map` loading for code/data symbol lookup
+- `--run-until <symbol>` stop support, including generated labels such as `__halt`
+- bounded execution through `--max-steps`
+- RAM/SFR symbol printing and compact register dumps
+- instruction tracing to stdout or a trace file
+- user-friendly diagnostics for malformed HEX, invalid map files, unknown symbols, unsupported instructions, and step-limit exhaustion
+- simulator-focused examples under `examples/sim/`
+- no C language expansion; floats and recursion remain unsupported
+
+Phase 19 scope remains:
 
 - internal test-only PIC16 core emulator for the subset of 14-bit instructions emitted by the current backend
 - execution tests that compile real C inputs to HEX, load them into the emulator, run to `__halt`, and assert final RAM/SFR results
 - runtime validation coverage for arithmetic, control flow, stack/calls, function-pointer dispatch, pointers, aggregates, bitfields, and ROM reads
 - explicit simulator errors for unsupported instructions or malformed HEX input
-- no required user-facing `--simulate` CLI in this phase; execution validation stays modular under `src/sim/` and `tests/execution_sim.rs`
+- execution validation stays modular under `src/sim/` and `tests/execution_sim.rs`
 
 Phase 18 scope remains:
 
@@ -643,13 +658,47 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
+Phase 20 simulator CLI tests live in `tests/sim_cli.rs`.
 Phase 19 execution tests live in `tests/execution_sim.rs` and use the internal emulator in `src/sim/mod.rs`.
+
+## Simulator CLI
+
+Phase 20 exposes the internal emulator through `pic16-sim`.
+
+Example:
+
+```bash
+cargo build --release
+./target/release/picc --target pic16f877a -I include --map --list-file -o build/arithmetic.hex examples/sim/arithmetic_sim.c
+./target/release/pic16-sim build/arithmetic.hex --map build/arithmetic.map --run-until __halt --print-symbol result
+```
+
+Expected output:
+
+```text
+result = 5 (0x05)
+```
+
+Useful options:
+
+- `--run-until <symbol>` stops before executing a code symbol from the `.map`
+- `--max-steps <n>` bounds execution
+- `--print-symbol <name>` prints one RAM/SFR value
+- `--print-regs` prints PC, W, STATUS, PCLATH, FSR, step count, and return-stack top
+- `--trace` prints compact instruction trace lines
+- `--trace-file <path>` writes trace output to a file
+- `--target <name>` selects `pic16f628a` or `pic16f877a`; default is `pic16f877a`
+
+See:
+
+- [docs/sim/pic16-sim-cli.md](docs/sim/pic16-sim-cli.md)
+- [docs/developer-guide/simulator-workflow.md](docs/developer-guide/simulator-workflow.md)
 
 ## Execution Validation
 
-Phase 19 adds a small internal PIC16 core emulator for compiler regression tests.
+Phase 19 added a small internal PIC16 core emulator for compiler regression tests.
 
-- it is test-only in this phase; normal `picc` CLI behavior is unchanged
+- normal `picc` CLI behavior is unchanged; simulation is optional tooling
 - tests compile C to Intel HEX, load the HEX image, run until a generated stop label such as `__halt`, and then inspect RAM/SFR state
 - supported runtime coverage includes arithmetic, branches/loops, stack-first calls, helper calls, function-pointer dispatch, pointers, aggregates, bitfields, multidimensional arrays, and explicit `__rom` table reads
 - unsupported instruction words fail clearly in the simulator instead of silently executing bad behavior
@@ -666,13 +715,18 @@ See:
 cargo build --release
 ./target/release/picc --version
 ./target/release/picc --help
+./target/release/pic16-sim --version
+./target/release/pic16-sim --help
 
 cargo install --path .
 picc --version
 picc --help
+pic16-sim --version
+pic16-sim --help
 
 # Verify PATH precedence to avoid stale binary confusion
 which -a picc
+which -a pic16-sim
 command -v picc
 ```
 

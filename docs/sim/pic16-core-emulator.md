@@ -2,12 +2,13 @@
 
 # PIC16 Core Emulator
 
-Phase 19 introduces a small internal PIC16 emulator in `src/sim/mod.rs`.
+Phase 19 introduced a small internal PIC16 emulator in `src/sim/mod.rs`.
 
 Its job is narrow:
 
 - execute the subset of 14-bit PIC16 instructions emitted by `pic16cc`
 - validate runtime behavior of generated HEX in tests
+- support the optional Phase 20 `pic16-sim` CLI
 - fail clearly when the backend emits an unsupported instruction
 
 It is **not** a full PIC16 device simulator.
@@ -101,4 +102,18 @@ This is intentional. If backend code generation drifts outside the supported sub
 - full peripheral behavior
 - asynchronous interrupts
 - every legal PIC16 instruction
-- user-facing simulation CLI
+
+## User-Facing CLI
+
+Phase 20 adds `pic16-sim`, a thin CLI wrapper around this core.
+
+The CLI owns:
+
+- command-line parsing
+- `.map` symbol lookup
+- run-until-symbol behavior
+- register and symbol printing
+- trace rendering
+- user-facing diagnostics
+
+The core remains reusable by tests and does not depend on the CLI.

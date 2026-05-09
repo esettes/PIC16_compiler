@@ -11,6 +11,10 @@ description = "Experimental C compiler for PIC16 mid-range MCUs"
 name = "picc"
 path = "src/main.rs"
 
+[[bin]]
+name = "pic16-sim"
+path = "src/bin/pic16-sim.rs"
+
 [lib]
 name = "pic16cc"
 path = "src/lib.rs"

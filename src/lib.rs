@@ -12,6 +12,7 @@ pub mod hex;
 pub mod ir;
 pub mod linker;
 pub mod sim;
+pub mod sim_cli;
 
 use std::collections::BTreeMap;
 use std::fs;

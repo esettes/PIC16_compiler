@@ -2,7 +2,10 @@
 
 # `pic16cc` Design
 
-CLI binary name for end users: `picc`.
+CLI binary names for end users:
+
+- `picc`: compiler
+- `pic16-sim`: optional simulator/debugging tool
 
 ## Goal
 
@@ -57,7 +60,9 @@ Output:
 Execution validation:
 
 - `src/sim/mod.rs`
+- `src/sim_cli.rs`
 - `tests/execution_sim.rs`
+- `tests/sim_cli.rs`
 
 ## Current Technical Decisions
 
@@ -101,15 +106,42 @@ Software stack is real backend state:
 - `--stack-report` surfaces per-function frame/helper/call-depth data plus ISR context cost
 - stack depth is computed statically over the non-recursive call graph and expanded across known function-pointer dispatcher targets
 
-Recursion stays unsupported in Phase 19 even when runtime stack checks are enabled.
+Recursion stays unsupported in Phase 20 even when runtime stack checks are enabled.
 
-### Phase 19 Execution Validation
+### Phase 20 Simulator CLI
 
-Phase 19 adds a small internal emulator for the subset of PIC16 instructions currently emitted by the backend.
+Phase 20 exposes the Phase 19 emulator through a separate `pic16-sim` binary.
 
 Rules:
 
-- emulator is test-only in this phase; no required `picc --simulate` user CLI
+- normal `picc` compilation behavior is unchanged
+- simulator usage is optional and lives outside the compiler pipeline
+- `pic16-sim` loads user-provided Intel HEX files
+- `.map` files are parsed only for code/data symbol lookup
+- stop conditions are `--run-until <symbol>` and `--max-steps <n>`
+- tracing is a simulator/debugging concern, not a backend output change
+- no language support is added in this phase
+
+Current CLI support:
+
+- `--map <file>`
+- `--run-until <symbol>`
+- `--max-steps <n>`
+- `--print-symbol <name>`
+- `--print-regs`
+- `--trace`
+- `--trace-file <path>`
+- `--target <name>`
+- `--help`
+- `--version`
+
+### Phase 19 Execution Validation
+
+Phase 19 added a small internal emulator for the subset of PIC16 instructions currently emitted by the backend.
+
+Rules:
+
+- emulator core remains reusable and separate from normal compilation
 - tests compile real C inputs all the way to Intel HEX first
 - simulator loads generated HEX rather than IR or backend internals
 - tests stop at generated labels such as `__halt` with a hard instruction-step ceiling
