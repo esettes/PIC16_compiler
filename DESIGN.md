@@ -79,18 +79,20 @@ Rules:
 - caller pushes argument bytes left-to-right
 - caller cleans argument bytes after return
 
-### Phase 22 Fixed-Point Arithmetic
+### Phase 23 Fixed-Point Completeness
 
-Phase 22 adds explicit fixed-point scalar types without adding IEEE float:
+Phase 22/23 add explicit fixed-point scalar types without adding IEEE float:
 
 - `__fixed8_8` / `__ufixed8_8`: 16-bit raw Q8.8 storage
 - `__fixed16_16` / `__ufixed16_16`: 32-bit raw Q16.16 storage
 - little-endian storage and existing Stack-first ABI widths
 - raw constructors `__q8_8`, `__uq8_8`, `__q16_16`, and `__uq16_16`
+- decimal fixed literals with explicit suffixes `q8_8`, `uq8_8`, `q16_16`, and `uq16_16`
+- one-dimensional fixed-point `const __rom` calibration tables with direct indexing
 
-Q8.8 add/sub/compare are raw byte-wise operations. Q8.8 multiply/divide lower through 32-bit raw intermediates and the existing Phase 21 helper paths. Q16.16 add/sub/compare/casts are supported; Q16.16 multiply/divide are rejected until a wider intermediate model is added.
+Q8.8 add/sub/compare are raw byte-wise operations. Q8.8 multiply/divide lower through 32-bit raw intermediates and the existing Phase 21 helper paths. Q16.16 add/sub/compare/casts are supported; Q16.16 multiply/divide are folded for compile-time constants.
 
-Fixed-point ROM objects remain deferred. Helper-backed fixed operations stay rejected inside ISRs.
+Q16.16 multiply/divide constants are folded exactly. Dynamic Q16.16 multiply/divide remain rejected in Phase 23 because the correct helper body needs page-safe splitting before it can be emitted safely. Helper-backed fixed operations stay rejected inside ISRs.
 
 ### Phase 21 32-Bit Integers
 

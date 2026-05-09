@@ -983,3 +983,152 @@ void main(void) {
     assert_eq!(symbol_u32(&core, &map, "result"), 0x0001_8000);
     assert_eq!(symbol_u8(&core, &map, "fixed_flag"), 1);
 }
+
+#[test]
+fn executes_phase23_fixed_decimal_literals() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase23-fixed-literals.c",
+        r#"
+__fixed8_8 q8_result;
+__ufixed8_8 uq8_result;
+__fixed16_16 q16_result;
+__ufixed16_16 uq16_result;
+
+void main(void) {
+    q8_result = 1.5q8_8;
+    uq8_result = 2.25uq8_8;
+    q16_result = 1.5q16_16;
+    uq16_result = 0.5uq16_16;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u16(&core, &map, "q8_result"), 0x0180);
+    assert_eq!(symbol_u16(&core, &map, "uq8_result"), 0x0240);
+    assert_eq!(symbol_u32(&core, &map, "q16_result"), 0x0001_8000);
+    assert_eq!(symbol_u32(&core, &map, "uq16_result"), 0x0000_8000);
+}
+
+#[test]
+fn executes_phase23_fixed_rom_tables() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase23-fixed-rom.c",
+        r#"
+const __rom __fixed8_8 calibration[] = { 1.0q8_8, 1.5q8_8, 2.0q8_8 };
+const __rom __ufixed16_16 gains[] = { 1.0uq16_16, 0.5uq16_16 };
+unsigned char index;
+__fixed8_8 q8_result;
+__ufixed16_16 q16_result;
+
+void main(void) {
+    index = 1;
+    q8_result = calibration[index];
+    q16_result = gains[index];
+}
+"#,
+    );
+
+    assert_eq!(symbol_u16(&core, &map, "q8_result"), 0x0180);
+    assert_eq!(symbol_u32(&core, &map, "q16_result"), 0x0000_8000);
+}
+
+#[test]
+fn executes_phase23_q16_16_multiply_constant_fold() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase23-q16-mul.c",
+        r#"
+__fixed16_16 result;
+
+void main(void) {
+    result = 1.5q16_16 * 2.0q16_16;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0x0003_0000);
+}
+
+#[test]
+fn executes_phase23_q16_16_divide_constant_fold() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase23-q16-div.c",
+        r#"
+__fixed16_16 result;
+
+void main(void) {
+    result = 3.0q16_16 / 2.0q16_16;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0x0001_8000);
+}
+
+#[test]
+fn executes_phase23_signed_q16_16_negative_multiply() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase23-q16-neg-mul.c",
+        r#"
+__fixed16_16 result;
+
+void main(void) {
+    result = -1.5q16_16 * 2.0q16_16;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0xFFFD_0000);
+}
+
+#[test]
+fn executes_phase23_unsigned_uq16_16_multiply_constant_fold() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase23-uq16-mul.c",
+        r#"
+__ufixed16_16 result;
+
+void main(void) {
+    result = 1.5uq16_16 * 2.0uq16_16;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0x0003_0000);
+}
+
+#[test]
+fn executes_phase23_fixed_casts() {
+    let (core, map) = run_source(
+        "pic16f628a",
+        "phase23-fixed-casts.c",
+        r#"
+__fixed8_8 q8 = 1.5q8_8;
+__fixed16_16 q16 = 2.25q16_16;
+__fixed16_16 widened;
+__fixed8_8 narrowed;
+int int_result;
+long long_result;
+__fixed16_16 from_int;
+
+void main(void) {
+    widened = (__fixed16_16)q8;
+    narrowed = (__fixed8_8)q16;
+    int_result = (int)q8;
+    long_result = (long)q16;
+    from_int = (__fixed16_16)3;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "widened"), 0x0001_8000);
+    assert_eq!(symbol_u16(&core, &map, "narrowed"), 0x0240);
+    assert_eq!(symbol_u16(&core, &map, "int_result"), 1);
+    assert_eq!(symbol_u32(&core, &map, "long_result"), 2);
+    assert_eq!(symbol_u32(&core, &map, "from_int"), 0x0003_0000);
+}

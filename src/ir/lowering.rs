@@ -519,6 +519,16 @@ impl FunctionBuilder {
                 });
                 Operand::Temp(dst)
             }
+            TypedExprKind::RomRead32 { symbol, index } => {
+                let index = self.lower_expr(index);
+                let dst = self.new_temp(expr.ty);
+                self.emit(IrInstr::RomRead32 {
+                    dst,
+                    symbol: *symbol,
+                    index,
+                });
+                Operand::Temp(dst)
+            }
             TypedExprKind::Call { function, args } => {
                 let args = args
                     .iter()

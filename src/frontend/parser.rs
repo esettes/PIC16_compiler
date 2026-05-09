@@ -833,6 +833,13 @@ impl<'a> Parser<'a> {
                 span: Span::new(start, self.previous_span().end),
             };
         }
+        if let TokenKind::FixedNumber { raw, scalar } = self.current().kind.clone() {
+            self.advance();
+            return Expr {
+                kind: ExprKind::FixedLiteral { raw, scalar },
+                span: Span::new(start, self.previous_span().end),
+            };
+        }
         if let TokenKind::StringLiteral(bytes) = self.current().kind.clone() {
             self.advance();
             return Expr {
@@ -1615,6 +1622,7 @@ impl<'a> Parser<'a> {
     fn eval_enum_const_expr(&self, expr: &Expr) -> Option<i64> {
         match &expr.kind {
             ExprKind::IntLiteral { value, .. } => Some(*value),
+            ExprKind::FixedLiteral { .. } => None,
             ExprKind::StringLiteral(_) => None,
             ExprKind::Name(name) => self.enum_constant_by_name.get(name).copied(),
             ExprKind::Cast { expr, .. } => self.eval_enum_const_expr(expr),

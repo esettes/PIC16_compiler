@@ -192,6 +192,10 @@ pub enum TypedExprKind {
         symbol: SymbolId,
         index: Box<TypedExpr>,
     },
+    RomRead32 {
+        symbol: SymbolId,
+        index: Box<TypedExpr>,
+    },
     Call {
         function: SymbolId,
         args: Vec<TypedExpr>,
@@ -1051,6 +1055,12 @@ impl<'a> SemanticAnalyzer<'a> {
                     value_category: ValueCategory::RValue,
                 }
             }
+            ExprKind::FixedLiteral { raw, scalar } => TypedExpr {
+                kind: TypedExprKind::IntLiteral(*raw),
+                ty: Type::new(*scalar),
+                span: expr.span,
+                value_category: ValueCategory::RValue,
+            },
             ExprKind::StringLiteral(bytes) => self.analyze_string_literal_expr(bytes, expr.span),
             ExprKind::Name(name) => self.analyze_name(name, expr.span, diagnostics)?,
             ExprKind::Cast { ty, expr: value } => {
@@ -1431,7 +1441,9 @@ impl<'a> SemanticAnalyzer<'a> {
         let value = self.analyze_expr_with_decay(expr, diagnostics, false)?;
         if matches!(
             value.kind,
-            TypedExprKind::RomRead8 { .. } | TypedExprKind::RomRead16 { .. }
+            TypedExprKind::RomRead8 { .. }
+                | TypedExprKind::RomRead16 { .. }
+                | TypedExprKind::RomRead32 { .. }
         ) {
             diagnostics.error(
                 "semantic",
@@ -2184,16 +2196,33 @@ impl<'a> SemanticAnalyzer<'a> {
             BinaryOp::Multiply | BinaryOp::Divide => {
                 self.diagnose_division_rhs(op, &rhs, span, diagnostics);
                 if matches!(lhs_ty.scalar, ScalarType::Q16_16 | ScalarType::UQ16_16) {
-                    diagnostics.error(
-                        "semantic",
-                        Some(span),
-                        format!(
-                            "`{op:?}` for `{}` is deferred in phase 22 because it needs a wider intermediate",
-                            lhs_ty
-                        ),
-                        Some("use Q8.8 multiplication/division or keep Q16.16 to add/sub/compare/casts".to_string()),
-                    );
-                    return None;
+                    if eval_integer_constant_expr(&lhs).is_none()
+                        || eval_integer_constant_expr(&rhs).is_none()
+                    {
+                        diagnostics.error(
+                            "semantic",
+                            Some(span),
+                            format!(
+                                "dynamic `{op:?}` for `{}` is deferred in phase 23",
+                                lhs_ty
+                            ),
+                            Some(
+                                "Q16.16 multiply/divide constants are folded exactly; runtime Q16.16 helpers are kept deferred until the page-sized helper path is split safely"
+                                    .to_string(),
+                            ),
+                        );
+                        return None;
+                    }
+                    return Some(TypedExpr {
+                        kind: TypedExprKind::Binary {
+                            op,
+                            lhs: Box::new(lhs),
+                            rhs: Box::new(rhs),
+                        },
+                        ty: lhs_ty,
+                        span,
+                        value_category: ValueCategory::RValue,
+                    });
                 }
                 Some(self.build_fixed_q8_helper_expr(op, lhs, rhs, lhs_ty, span, diagnostics))
             }
@@ -2438,6 +2467,24 @@ impl<'a> SemanticAnalyzer<'a> {
                 span,
                 value_category: ValueCategory::RValue,
             }),
+            ScalarType::Q8_8 | ScalarType::UQ8_8 => Some(TypedExpr {
+                kind: TypedExprKind::RomRead16 {
+                    symbol,
+                    index: Box::new(index),
+                },
+                ty: result_ty,
+                span,
+                value_category: ValueCategory::RValue,
+            }),
+            ScalarType::Q16_16 | ScalarType::UQ16_16 => Some(TypedExpr {
+                kind: TypedExprKind::RomRead32 {
+                    symbol,
+                    index: Box::new(index),
+                },
+                ty: result_ty,
+                span,
+                value_category: ValueCategory::RValue,
+            }),
             ScalarType::I32 | ScalarType::U32 => {
                 diagnostics.error(
                     "semantic",
@@ -2446,15 +2493,6 @@ impl<'a> SemanticAnalyzer<'a> {
                         "direct ROM indexing does not support 32-bit ROM element type `{element_ty}` in phase 21"
                     ),
                     Some("keep 32-bit objects in data memory; ROM long tables are deferred".to_string()),
-                );
-                None
-            }
-            ScalarType::Q8_8 | ScalarType::UQ8_8 | ScalarType::Q16_16 | ScalarType::UQ16_16 => {
-                diagnostics.error(
-                    "semantic",
-                    Some(base.span),
-                    format!("direct ROM indexing does not support fixed-point ROM element type `{element_ty}` in phase 22"),
-                    Some("keep fixed-point calibration tables in data memory; ROM fixed arrays are deferred".to_string()),
                 );
                 None
             }
@@ -2484,7 +2522,9 @@ impl<'a> SemanticAnalyzer<'a> {
         let target = self.analyze_expr_with_decay(target, diagnostics, false)?;
         if matches!(
             target.kind,
-            TypedExprKind::RomRead8 { .. } | TypedExprKind::RomRead16 { .. }
+            TypedExprKind::RomRead8 { .. }
+                | TypedExprKind::RomRead16 { .. }
+                | TypedExprKind::RomRead32 { .. }
         ) {
             diagnostics.error(
                 "semantic",
@@ -5676,7 +5716,8 @@ impl<'a> SemanticAnalyzer<'a> {
                     Some(span),
                     format!("program-memory object `{name}` uses unsupported type `{ty}`"),
                     Some(
-                        "phase 14 supports only ROM arrays of 8-bit or 16-bit integers".to_string(),
+                        "phase 23 supports one-dimensional ROM arrays of 8-bit/16-bit integers or fixed-point calibration values"
+                            .to_string(),
                     ),
                 );
                 return;
@@ -5693,7 +5734,14 @@ impl<'a> SemanticAnalyzer<'a> {
             let element_ty = ty.element_type();
             if !matches!(
                 element_ty.scalar,
-                ScalarType::I8 | ScalarType::U8 | ScalarType::I16 | ScalarType::U16
+                ScalarType::I8
+                    | ScalarType::U8
+                    | ScalarType::I16
+                    | ScalarType::U16
+                    | ScalarType::Q8_8
+                    | ScalarType::UQ8_8
+                    | ScalarType::Q16_16
+                    | ScalarType::UQ16_16
             ) || element_ty.pointer_depth != 0
                 || element_ty.is_array()
                 || element_ty.struct_id.is_some()
@@ -5703,7 +5751,7 @@ impl<'a> SemanticAnalyzer<'a> {
                     Some(span),
                     format!("program-memory object `{name}` uses unsupported ROM element type `{element_ty}`"),
                     Some(
-                        "use `const __rom char[]`, `const __rom unsigned char[]`, `const __rom int[]`, or `const __rom unsigned int[]`"
+                        "use integer ROM arrays or fixed ROM arrays such as `const __rom __fixed8_8 table[]`"
                             .to_string(),
                     ),
                 );
@@ -6390,7 +6438,9 @@ impl<'a> SemanticAnalyzer<'a> {
                 let _ = self.track_stack_pointer_expr(value, tainted_locals);
                 false
             }
-            TypedExprKind::RomRead8 { index, .. } | TypedExprKind::RomRead16 { index, .. } => {
+            TypedExprKind::RomRead8 { index, .. }
+            | TypedExprKind::RomRead16 { index, .. }
+            | TypedExprKind::RomRead32 { index, .. } => {
                 let _ = self.track_stack_pointer_expr(index, tainted_locals);
                 false
             }
@@ -6598,7 +6648,9 @@ impl<'a> SemanticAnalyzer<'a> {
                 self.walk_interrupt_expr(function, target, diagnostics);
                 self.walk_interrupt_expr(function, value, diagnostics);
             }
-            TypedExprKind::RomRead8 { index, .. } | TypedExprKind::RomRead16 { index, .. } => {
+            TypedExprKind::RomRead8 { index, .. }
+            | TypedExprKind::RomRead16 { index, .. }
+            | TypedExprKind::RomRead32 { index, .. } => {
                 if !is_constant_expression(index) {
                     diagnostics.error(
                         "semantic",
@@ -6848,6 +6900,7 @@ fn is_constant_expression(expr: &TypedExpr) -> bool {
         | TypedExprKind::StructAssign { .. }
         | TypedExprKind::RomRead8 { .. }
         | TypedExprKind::RomRead16 { .. }
+        | TypedExprKind::RomRead32 { .. }
         | TypedExprKind::Call { .. }
         | TypedExprKind::IndirectCall { .. }
         | TypedExprKind::ArrayDecay(_)
@@ -6892,6 +6945,7 @@ fn eval_integer_constant_expr(expr: &TypedExpr) -> Option<i64> {
         | TypedExprKind::StructAssign { .. }
         | TypedExprKind::RomRead8 { .. }
         | TypedExprKind::RomRead16 { .. }
+        | TypedExprKind::RomRead32 { .. }
         | TypedExprKind::Call { .. }
         | TypedExprKind::IndirectCall { .. }
         | TypedExprKind::ArrayDecay(_)
@@ -7062,9 +7116,9 @@ fn collect_expr_calls(expr: &TypedExpr, callees: &mut BTreeSet<SymbolId>) {
             collect_expr_calls(target, callees);
             collect_expr_calls(value, callees);
         }
-        TypedExprKind::RomRead8 { index, .. } | TypedExprKind::RomRead16 { index, .. } => {
-            collect_expr_calls(index, callees)
-        }
+        TypedExprKind::RomRead8 { index, .. }
+        | TypedExprKind::RomRead16 { index, .. }
+        | TypedExprKind::RomRead32 { index, .. } => collect_expr_calls(index, callees),
         TypedExprKind::Call { function, args } => {
             callees.insert(*function);
             for arg in args {
@@ -7178,7 +7232,9 @@ fn collect_expr_indirect_call_signatures(expr: &TypedExpr, signatures: &mut BTre
             collect_expr_indirect_call_signatures(target, signatures);
             collect_expr_indirect_call_signatures(value, signatures);
         }
-        TypedExprKind::RomRead8 { index, .. } | TypedExprKind::RomRead16 { index, .. } => {
+        TypedExprKind::RomRead8 { index, .. }
+        | TypedExprKind::RomRead16 { index, .. }
+        | TypedExprKind::RomRead32 { index, .. } => {
             collect_expr_indirect_call_signatures(index, signatures)
         }
         TypedExprKind::Call { args, .. } => {

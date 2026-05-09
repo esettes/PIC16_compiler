@@ -50,4 +50,9 @@ wide = raw_a_32 << 8
 raw_result = wide / raw_b_32
 ```
 
-Q16.16 multiply/divide are rejected before IR generation.
+Phase 23 folds Q16.16 multiply/divide constants before backend emission. Dynamic Q16.16 multiply/divide are rejected before IR generation.
+
+Phase 23 fixed ROM tables lower direct indexing as:
+
+- Q8.8/UQ8.8 -> `RomRead16`
+- Q16.16/UQ16.16 -> `RomRead32`

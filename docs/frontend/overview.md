@@ -2,11 +2,11 @@
 
 # Frontend
 
-Phase 22 frontend support adds explicit fixed-point scalar types `__fixed8_8`, `__ufixed8_8`, `__fixed16_16`, and `__ufixed16_16`. Raw constructors `__q8_8(raw)`, `__uq8_8(raw)`, `__q16_16(raw)`, and `__uq16_16(raw)` create fixed constants without ambiguous decimal parsing.
+Phase 23 frontend support adds explicit fixed-point decimal literals and ROM calibration tables on top of the Phase 22 scalar types `__fixed8_8`, `__ufixed8_8`, `__fixed16_16`, and `__ufixed16_16`. Raw constructors `__q8_8(raw)`, `__uq8_8(raw)`, `__q16_16(raw)`, and `__uq16_16(raw)` remain available.
 
 Phase 21 frontend support remains: `long`, `signed long`, `unsigned long`, and integer suffixes `U`, `L`, `UL`, and `LU`. The semantic model warns on implicit narrowing from 32-bit values and rejects literals outside the supported 32-bit range.
 
-See `docs/frontend/phase22-fixed-point.md` and `docs/frontend/phase21-long-types.md` for exact type, conversion, ISR, and ROM rules.
+See `docs/frontend/phase23-fixed-literals.md`, `docs/frontend/phase22-fixed-point.md`, and `docs/frontend/phase21-long-types.md` for exact type, conversion, ISR, and ROM rules.
 
 Responsibilities:
 
@@ -48,7 +48,9 @@ Current Phase 18 frontend surface:
 - accepts fixed-point casts between integer/fixed formats with explicit scaling
 - rejects implicit unsafe fixed narrowing under `-Werror`
 - rejects fixed bitwise operations unless the program casts to a raw integer type first
-- rejects Q16.16 fixed multiply/divide in Phase 22
+- accepts fixed decimal literals with `q8_8`, `uq8_8`, `q16_16`, and `uq16_16` suffixes
+- accepts one-dimensional fixed-point `const __rom` arrays for direct indexing
+- folds Q16.16 fixed multiply/divide constants and rejects dynamic Q16.16 helper-backed multiply/divide
 - validates pointer relational comparisons for compatible data-space pointer types
 - validates pointer subtraction for compatible data-space pointer types with 1-byte or 2-byte elements
 - parses explicit `__rom` declarations for file-scope 8-bit/16-bit integer arrays
@@ -82,3 +84,4 @@ Current detail:
 - [phase17-function-pointers.md](phase17-function-pointers.md)
 - [phase21-long-types.md](phase21-long-types.md)
 - [phase22-fixed-point.md](phase22-fixed-point.md)
+- [phase23-fixed-literals.md](phase23-fixed-literals.md)

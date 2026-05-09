@@ -4,12 +4,13 @@ use std::fmt::Write;
 
 use crate::common::source::{PreprocessedSource, Span};
 use crate::diagnostics::DiagnosticBag;
-use crate::frontend::types::IntegerSuffix;
+use crate::frontend::types::{IntegerSuffix, ScalarType};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TokenKind {
     Identifier(String),
     Number { value: i64, suffix: IntegerSuffix },
+    FixedNumber { raw: i64, scalar: ScalarType },
     StringLiteral(Vec<u8>),
     Keyword(Keyword),
     Symbol(Symbol),
@@ -165,52 +166,7 @@ impl<'a> Lexer<'a> {
         }
 
         if ch.is_ascii_digit() {
-            self.index += 1;
-            if ch == '0'
-                && self.index < bytes.len()
-                && matches!(bytes[self.index] as char, 'x' | 'X')
-            {
-                self.index += 1;
-                while self.index < bytes.len() && (bytes[self.index] as char).is_ascii_hexdigit() {
-                    self.index += 1;
-                }
-            } else {
-                while self.index < bytes.len() && (bytes[self.index] as char).is_ascii_digit() {
-                    self.index += 1;
-                }
-            }
-            let digits_end = self.index;
-            while self.index < bytes.len() && (bytes[self.index] as char).is_ascii_alphabetic() {
-                self.index += 1;
-            }
-            let literal = &self.source.text[start..digits_end];
-            let suffix_text = &self.source.text[digits_end..self.index];
-            let value = if literal.starts_with("0x") || literal.starts_with("0X") {
-                i64::from_str_radix(&literal[2..], 16).unwrap_or_else(|_| {
-                    self.diagnostics.error(
-                        "lexer",
-                        Some(Span::new(start, digits_end)),
-                        "integer literal is too large",
-                        Some("use a value that fits in 32 bits".to_string()),
-                    );
-                    0
-                })
-            } else {
-                literal.parse::<i64>().unwrap_or_else(|_| {
-                    self.diagnostics.error(
-                        "lexer",
-                        Some(Span::new(start, digits_end)),
-                        "integer literal is too large",
-                        Some("use a value that fits in 32 bits".to_string()),
-                    );
-                    0
-                })
-            };
-            let suffix = self.parse_integer_suffix(suffix_text, Span::new(digits_end, self.index));
-            return Token {
-                kind: TokenKind::Number { value, suffix },
-                span: Span::new(start, self.index),
-            };
+            return self.lex_number(start);
         }
 
         if ch == '"' {
@@ -262,6 +218,220 @@ impl<'a> Lexer<'a> {
             kind,
             span: Span::new(start, self.index),
         }
+    }
+
+    /// Scans either an integer literal or an explicit Phase 23 fixed-point decimal literal.
+    fn lex_number(&mut self, start: usize) -> Token {
+        let bytes = self.source.text.as_bytes();
+        self.index += 1;
+        let is_hex = bytes[start] == b'0'
+            && self.index < bytes.len()
+            && matches!(bytes[self.index] as char, 'x' | 'X');
+
+        if is_hex {
+            self.index += 1;
+            while self.index < bytes.len() && (bytes[self.index] as char).is_ascii_hexdigit() {
+                self.index += 1;
+            }
+        } else {
+            while self.index < bytes.len() && (bytes[self.index] as char).is_ascii_digit() {
+                self.index += 1;
+            }
+        }
+
+        let digits_end = self.index;
+        if !is_hex && self.index < bytes.len() && bytes[self.index] == b'.' {
+            return self.lex_fixed_number(start, digits_end);
+        }
+
+        while self.index < bytes.len() {
+            let current = bytes[self.index] as char;
+            if current.is_ascii_alphanumeric() || current == '_' {
+                self.index += 1;
+            } else {
+                break;
+            }
+        }
+
+        let literal = &self.source.text[start..digits_end];
+        let suffix_text = &self.source.text[digits_end..self.index];
+        let value = if literal.starts_with("0x") || literal.starts_with("0X") {
+            i64::from_str_radix(&literal[2..], 16).unwrap_or_else(|_| {
+                self.diagnostics.error(
+                    "lexer",
+                    Some(Span::new(start, digits_end)),
+                    "integer literal is too large",
+                    Some("use a value that fits in 32 bits".to_string()),
+                );
+                0
+            })
+        } else {
+            literal.parse::<i64>().unwrap_or_else(|_| {
+                self.diagnostics.error(
+                    "lexer",
+                    Some(Span::new(start, digits_end)),
+                    "integer literal is too large",
+                    Some("use a value that fits in 32 bits".to_string()),
+                );
+                0
+            })
+        };
+        let suffix = self.parse_integer_suffix(suffix_text, Span::new(digits_end, self.index));
+        Token {
+            kind: TokenKind::Number { value, suffix },
+            span: Span::new(start, self.index),
+        }
+    }
+
+    /// Scans a decimal fixed-point literal with a required explicit fixed suffix.
+    fn lex_fixed_number(&mut self, start: usize, integer_end: usize) -> Token {
+        let bytes = self.source.text.as_bytes();
+        self.index += 1;
+        let fraction_start = self.index;
+        while self.index < bytes.len() && (bytes[self.index] as char).is_ascii_digit() {
+            self.index += 1;
+        }
+        let fraction_end = self.index;
+        while self.index < bytes.len() {
+            let current = bytes[self.index] as char;
+            if current.is_ascii_alphanumeric() || current == '_' {
+                self.index += 1;
+            } else {
+                break;
+            }
+        }
+        let suffix_text = &self.source.text[fraction_end..self.index];
+        let scalar = self.parse_fixed_suffix(suffix_text, Span::new(fraction_end, self.index));
+        let raw = if fraction_start == fraction_end {
+            self.diagnostics.error(
+                "lexer",
+                Some(Span::new(start, self.index)),
+                "malformed fixed-point literal",
+                Some("write an explicit fractional part, for example `1.0q8_8`".to_string()),
+            );
+            0
+        } else {
+            let integer_text = self.source.text[start..integer_end].to_string();
+            let fraction_text = self.source.text[fraction_start..fraction_end].to_string();
+            self.fixed_literal_raw(
+                &integer_text,
+                &fraction_text,
+                scalar,
+                Span::new(start, self.index),
+            )
+        };
+
+        Token {
+            kind: TokenKind::FixedNumber { raw, scalar },
+            span: Span::new(start, self.index),
+        }
+    }
+
+    /// Parses the explicit fixed-point literal suffixes introduced in Phase 23.
+    fn parse_fixed_suffix(&mut self, suffix: &str, span: Span) -> ScalarType {
+        match suffix {
+            "q8_8" => ScalarType::Q8_8,
+            "uq8_8" => ScalarType::UQ8_8,
+            "q16_16" => ScalarType::Q16_16,
+            "uq16_16" => ScalarType::UQ16_16,
+            "" => {
+                self.diagnostics.error(
+                    "lexer",
+                    Some(span),
+                    "fixed-point decimal literal requires an explicit suffix",
+                    Some(
+                        "supported suffixes are `q8_8`, `uq8_8`, `q16_16`, and `uq16_16`"
+                            .to_string(),
+                    ),
+                );
+                ScalarType::Q8_8
+            }
+            _ => {
+                self.diagnostics.error(
+                    "lexer",
+                    Some(span),
+                    format!("unsupported fixed-point literal suffix `{suffix}`"),
+                    Some(
+                        "supported suffixes are `q8_8`, `uq8_8`, `q16_16`, and `uq16_16`"
+                            .to_string(),
+                    ),
+                );
+                ScalarType::Q8_8
+            }
+        }
+    }
+
+    /// Converts `A.Bq` to raw fixed storage using deterministic truncation.
+    fn fixed_literal_raw(
+        &mut self,
+        integer_text: &str,
+        fraction_text: &str,
+        scalar: ScalarType,
+        span: Span,
+    ) -> i64 {
+        let int_part = integer_text.parse::<u128>().unwrap_or_else(|_| {
+            self.diagnostics.error(
+                "lexer",
+                Some(span),
+                "fixed-point literal integer part is too large",
+                Some("use a value within the selected fixed-point type range".to_string()),
+            );
+            0
+        });
+        let mut frac_part = 0u128;
+        let mut scale = 1u128;
+        for digit in fraction_text.bytes() {
+            let Some(next_scale) = scale.checked_mul(10) else {
+                self.diagnostics.error(
+                    "lexer",
+                    Some(span),
+                    "fixed-point literal has too many fractional digits",
+                    Some(
+                        "use fewer decimal digits for deterministic fixed-point conversion"
+                            .to_string(),
+                    ),
+                );
+                return 0;
+            };
+            scale = next_scale;
+            frac_part = frac_part
+                .saturating_mul(10)
+                .saturating_add(u128::from(digit - b'0'));
+        }
+
+        let frac_bits = match scalar {
+            ScalarType::Q8_8 | ScalarType::UQ8_8 => 8,
+            ScalarType::Q16_16 | ScalarType::UQ16_16 => 16,
+            _ => unreachable!("fixed literal suffix maps to fixed scalar"),
+        };
+        let Some(integer_raw) = int_part.checked_shl(frac_bits) else {
+            self.diagnostics.error(
+                "lexer",
+                Some(span),
+                "fixed-point literal is out of range",
+                Some("use a value within the selected fixed-point type range".to_string()),
+            );
+            return 0;
+        };
+        let fraction_raw = frac_part.saturating_mul(1u128 << frac_bits) / scale;
+        let raw = integer_raw.saturating_add(fraction_raw);
+        let max = match scalar {
+            ScalarType::Q8_8 => i16::MAX as u128,
+            ScalarType::UQ8_8 => u16::MAX as u128,
+            ScalarType::Q16_16 => i32::MAX as u128,
+            ScalarType::UQ16_16 => u32::MAX as u128,
+            _ => unreachable!("fixed literal suffix maps to fixed scalar"),
+        };
+        if raw > max {
+            self.diagnostics.error(
+                "lexer",
+                Some(span),
+                "fixed-point literal is out of range",
+                Some("use a value within the selected fixed-point type range".to_string()),
+            );
+            return 0;
+        }
+        raw as i64
     }
 
     /// Parses the supported integer suffixes used by Phase 21 long constants.

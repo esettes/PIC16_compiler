@@ -24,9 +24,9 @@ The Stack-first ABI remains unchanged:
 - widened helper intermediates occupy four bytes inside lowered helper expressions
 - returned raw fixed results truncate back to 16-bit before storing Q8.8/UQ8.8 values
 
-Deferred:
+Phase 23 updates:
 
-- Q16.16 multiply/divide
-- wider-than-32-bit helper intermediates
-- fixed-point ROM tables
-- decimal fixed literal parser
+- fixed decimal literals are parsed and folded before helper lowering
+- fixed-point ROM tables are supported through direct indexing
+- Q16.16 multiply/divide constants are folded exactly
+- dynamic Q16.16 multiply/divide remain rejected until the helper body can be split into page-safe PIC14 chunks

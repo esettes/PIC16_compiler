@@ -1083,6 +1083,9 @@ impl<'a> CodegenContext<'a> {
             IrInstr::RomRead16 { dst, symbol, index } => {
                 self.emit_rom_read16(function, *symbol, *index, *dst, diagnostics);
             }
+            IrInstr::RomRead32 { dst, symbol, index } => {
+                self.emit_rom_read32(function, *symbol, *index, *dst, diagnostics);
+            }
             IrInstr::Call {
                 dst,
                 function: callee,
@@ -1498,6 +1501,136 @@ impl<'a> CodegenContext<'a> {
         self.store_w_to_temp_byte(function.symbol, dst, 0);
         self.emit_const_to_w(0);
         self.store_w_to_temp_byte(function.symbol, dst, 1);
+        self.program.push(AsmLine::Label(done_label));
+    }
+
+    /// Lowers one Phase 23 fixed-point ROM double-word read from little-endian bytes.
+    fn emit_rom_read32(
+        &mut self,
+        function: &IrFunction,
+        symbol: SymbolId,
+        index: Operand,
+        dst: usize,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        let index_ty = self.operand_type(function, index);
+        let Some(bytes) = self.rom_object_bytes(symbol) else {
+            diagnostics.error(
+                "backend",
+                None,
+                format!(
+                    "ROM object `{}` needs a byte-array initializer in phase 23",
+                    self.symbol_name(symbol)
+                ),
+                None,
+            );
+            self.clear_temp(function.symbol, dst, function.temp_types[dst]);
+            return;
+        };
+        if bytes.len() % 4 != 0 {
+            diagnostics.error(
+                "backend",
+                None,
+                format!(
+                    "ROM object `{}` has an invalid 32-bit byte layout in phase 23",
+                    self.symbol_name(symbol)
+                ),
+                None,
+            );
+            self.clear_temp(function.symbol, dst, function.temp_types[dst]);
+            return;
+        }
+
+        let len = bytes.len() / 4;
+        if len == 0 || bytes.len() > 255 {
+            diagnostics.error(
+                "backend",
+                None,
+                format!(
+                    "ROM object `{}` has unsupported phase 23 double-word table length {} ({} bytes)",
+                    self.symbol_name(symbol),
+                    len,
+                    bytes.len()
+                ),
+                Some("keep each 32-bit ROM table within one 255-byte RETLW payload page".to_string()),
+            );
+            self.clear_temp(function.symbol, dst, function.temp_types[dst]);
+            return;
+        }
+        if let Some(index_value) = constant_operand_value(index, index_ty)
+            .map(|value| normalize_value(value, index_ty) as usize)
+        {
+            let byte_index = index_value.saturating_mul(4);
+            let value = [
+                bytes.get(byte_index).copied().unwrap_or(0),
+                bytes.get(byte_index + 1).copied().unwrap_or(0),
+                bytes.get(byte_index + 2).copied().unwrap_or(0),
+                bytes.get(byte_index + 3).copied().unwrap_or(0),
+            ];
+            for (byte, value) in value.into_iter().enumerate() {
+                self.emit_const_to_w(value);
+                self.store_w_to_temp_byte(function.symbol, dst, byte);
+            }
+            return;
+        }
+        if function.is_interrupt {
+            diagnostics.error(
+                "backend",
+                None,
+                format!(
+                    "interrupt handler `{}` reached dynamic ROM double-word lowering in phase 23",
+                    self.symbol_name(function.symbol)
+                ),
+                Some("only constant-index ROM reads are allowed inside ISRs".to_string()),
+            );
+            self.clear_temp(function.symbol, dst, function.temp_types[dst]);
+            return;
+        }
+
+        let read_label = self.unique_label("rom32_read");
+        let miss_label = self.unique_label("rom32_miss");
+        let done_label = self.unique_label("rom32_done");
+        self.emit_unsigned_relation_branch(
+            function.symbol,
+            index,
+            Operand::Constant(len as i64),
+            index_ty,
+            BinaryOp::Less,
+            BranchTargets {
+                then_label: &read_label,
+                else_label: &miss_label,
+            },
+        );
+
+        self.program.push(AsmLine::Label(read_label.clone()));
+        self.load_operand_byte_to_w(function.symbol, index, index_ty, 0);
+        self.store_w_to_addr(self.layout.helpers.w_save);
+        for _ in 0..2 {
+            self.select_bank(self.layout.helpers.w_save);
+            self.program.push(AsmLine::Instr(AsmInstr::Addwf {
+                f: low7(self.layout.helpers.w_save),
+                d: Dest::W,
+            }));
+            self.store_w_to_addr(self.layout.helpers.w_save);
+            self.load_addr_to_w(self.layout.helpers.w_save);
+        }
+        for byte in 0..4 {
+            if byte != 0 {
+                self.load_addr_to_w(self.layout.helpers.w_save);
+                self.program.push(AsmLine::Instr(AsmInstr::Addlw(1)));
+                self.store_w_to_addr(self.layout.helpers.w_save);
+            }
+            self.load_addr_to_w(self.layout.helpers.w_save);
+            self.emit_dynamic_rom_byte_call_from_w(symbol);
+            self.store_w_to_temp_byte(function.symbol, dst, byte);
+        }
+        self.branch_to_label(&done_label);
+
+        self.program.push(AsmLine::Label(miss_label));
+        for byte in 0..4 {
+            self.emit_const_to_w(0);
+            self.store_w_to_temp_byte(function.symbol, dst, byte);
+        }
         self.program.push(AsmLine::Label(done_label));
     }
 
@@ -3597,6 +3730,13 @@ impl<'a> CodegenContext<'a> {
                     matches!(helper, RuntimeHelper::MulQ8_8),
                 );
             }
+            RuntimeHelper::MulQ16_16 | RuntimeHelper::MulUQ16_16 => {
+                self.emit_fixed_q16_16_mul_helper(
+                    ty,
+                    local_base,
+                    matches!(helper, RuntimeHelper::MulQ16_16),
+                );
+            }
             RuntimeHelper::MulU8 | RuntimeHelper::MulU16 | RuntimeHelper::MulU32 => {
                 self.clear_current_frame_slot(work_offset, ty);
                 self.emit_const_to_w(ty.bit_width() as u8);
@@ -3638,6 +3778,13 @@ impl<'a> CodegenContext<'a> {
                     ty,
                     local_base,
                     matches!(helper, RuntimeHelper::DivQ8_8),
+                );
+            }
+            RuntimeHelper::DivQ16_16 | RuntimeHelper::DivUQ16_16 => {
+                self.emit_fixed_q16_16_div_helper(
+                    ty,
+                    local_base,
+                    matches!(helper, RuntimeHelper::DivQ16_16),
                 );
             }
             RuntimeHelper::DivU8
@@ -3869,6 +4016,189 @@ impl<'a> CodegenContext<'a> {
             self.program.push(AsmLine::Label(done_label));
         }
         self.emit_return_current_frame_value(dividend32_offset, ty);
+    }
+
+    /// Emits Q16.16 fixed multiply through 16x16 partial products without a public 64-bit type.
+    fn emit_fixed_q16_16_mul_helper(&mut self, ty: Type, local_base: u16, signed: bool) {
+        let work_ty = Type::new(ScalarType::U32);
+        let arg0_offset = 0u16;
+        let arg1_offset = ty.byte_width() as u16;
+        let result32_offset = local_base;
+        let lhs32_offset = result32_offset + 4;
+        let rhs32_offset = lhs32_offset + 4;
+        let work32_offset = rhs32_offset + 4;
+        let count_offset = work32_offset + 4;
+        let flag_offset = count_offset + 1;
+
+        if signed {
+            self.clear_current_frame_slot(flag_offset, Type::new(ScalarType::U8));
+            self.emit_runtime_negate_if_signed(arg0_offset, ty, flag_offset, 0x01);
+            self.emit_runtime_negate_if_signed(arg1_offset, ty, flag_offset, 0x01);
+        }
+        self.clear_current_frame_slot(result32_offset, work_ty);
+        self.emit_fixed_q16_16_mul_partial(
+            arg0_offset,
+            arg1_offset,
+            -16,
+            lhs32_offset,
+            rhs32_offset,
+            work32_offset,
+            count_offset,
+            result32_offset,
+        );
+        self.emit_fixed_q16_16_mul_partial(
+            arg0_offset + 2,
+            arg1_offset,
+            0,
+            lhs32_offset,
+            rhs32_offset,
+            work32_offset,
+            count_offset,
+            result32_offset,
+        );
+        self.emit_fixed_q16_16_mul_partial(
+            arg0_offset,
+            arg1_offset + 2,
+            0,
+            lhs32_offset,
+            rhs32_offset,
+            work32_offset,
+            count_offset,
+            result32_offset,
+        );
+        self.emit_fixed_q16_16_mul_partial(
+            arg0_offset + 2,
+            arg1_offset + 2,
+            16,
+            lhs32_offset,
+            rhs32_offset,
+            work32_offset,
+            count_offset,
+            result32_offset,
+        );
+        if signed {
+            let negate_label = self.unique_label("rt_q16mul_neg");
+            let done_label = self.unique_label("rt_q16mul_done");
+            self.branch_on_current_frame_bit(flag_offset, 0, &negate_label, &done_label);
+            self.program.push(AsmLine::Label(negate_label));
+            self.negate_current_frame_value(result32_offset, ty);
+            self.program.push(AsmLine::Label(done_label));
+        }
+        self.emit_return_current_frame_value(result32_offset, ty);
+    }
+
+    /// Emits one Q16.16 multiply partial term into the accumulated raw 32-bit result.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_fixed_q16_16_mul_partial(
+        &mut self,
+        lhs_src_offset: u16,
+        rhs_src_offset: u16,
+        product_shift: i8,
+        lhs32_offset: u16,
+        rhs32_offset: u16,
+        work32_offset: u16,
+        count_offset: u16,
+        result32_offset: u16,
+    ) {
+        let work_ty = Type::new(ScalarType::U32);
+        self.clear_current_frame_slot(lhs32_offset, work_ty);
+        self.clear_current_frame_slot(rhs32_offset, work_ty);
+        self.clear_current_frame_slot(work32_offset, work_ty);
+        self.copy_current_frame_bytes(lhs_src_offset, lhs32_offset, 2);
+        self.copy_current_frame_bytes(rhs_src_offset, rhs32_offset, 2);
+        self.emit_const_to_w(16);
+        self.store_w_to_current_frame_byte(count_offset);
+        self.emit_unsigned_mul_core(
+            lhs32_offset,
+            rhs32_offset,
+            work32_offset,
+            count_offset,
+            work_ty,
+        );
+        if product_shift < 0 {
+            for _ in 0..(-product_shift) {
+                self.shift_current_frame_value_right(work32_offset, work_ty, false);
+            }
+        } else {
+            for _ in 0..product_shift {
+                self.shift_current_frame_value_left(work32_offset, work_ty);
+            }
+        }
+        self.add_current_frame_value_into_slot(work32_offset, result32_offset, work_ty);
+    }
+
+    /// Emits Q16.16 fixed divide using a 32-bit divide plus 16 fractional restoring steps.
+    fn emit_fixed_q16_16_div_helper(&mut self, ty: Type, local_base: u16, signed: bool) {
+        let work_ty = Type::new(ScalarType::U32);
+        let arg0_offset = 0u16;
+        let arg1_offset = ty.byte_width() as u16;
+        let quotient32_offset = local_base;
+        let divisor32_offset = quotient32_offset + 4;
+        let remainder32_offset = divisor32_offset + 4;
+        let count_offset = remainder32_offset + 4;
+        let flag_offset = count_offset + 1;
+        let core_label = self.unique_label("rt_q16div_core");
+        let zero_label = self.unique_label("rt_q16div_zero");
+        let fraction_label = self.unique_label("rt_q16div_fraction");
+        let finish_label = self.unique_label("rt_q16div_finish");
+
+        if signed {
+            self.clear_current_frame_slot(flag_offset, Type::new(ScalarType::U8));
+            self.emit_runtime_negate_if_signed(arg0_offset, ty, flag_offset, 0x01);
+            self.emit_runtime_negate_if_signed(arg1_offset, ty, flag_offset, 0x01);
+        }
+        self.copy_current_frame_bytes(arg0_offset, quotient32_offset, ty.byte_width());
+        self.copy_current_frame_bytes(arg1_offset, divisor32_offset, ty.byte_width());
+        self.clear_current_frame_slot(remainder32_offset, work_ty);
+        self.emit_const_to_w(work_ty.bit_width() as u8);
+        self.store_w_to_current_frame_byte(count_offset);
+        self.emit_current_frame_nonzero_branch(divisor32_offset, work_ty, &core_label, &zero_label);
+        self.program.push(AsmLine::Label(core_label));
+        self.emit_unsigned_divmod_core(
+            quotient32_offset,
+            divisor32_offset,
+            remainder32_offset,
+            count_offset,
+            work_ty,
+            &fraction_label,
+        );
+        self.program.push(AsmLine::Label(zero_label));
+        self.clear_current_frame_slot(quotient32_offset, work_ty);
+        self.clear_current_frame_slot(remainder32_offset, work_ty);
+        self.branch_to_label(&finish_label);
+        self.program.push(AsmLine::Label(fraction_label));
+        for _ in 0..16 {
+            self.shift_current_frame_value_left(quotient32_offset, work_ty);
+            self.shift_current_frame_value_left(remainder32_offset, work_ty);
+            let subtract_label = self.unique_label("rt_q16div_sub");
+            let next_label = self.unique_label("rt_q16div_next");
+            self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+                f: low7(STATUS_ADDR),
+                b: STATUS_C_BIT,
+            }));
+            self.branch_to_label(&subtract_label);
+            self.emit_current_frame_unsigned_ge_branch(
+                remainder32_offset,
+                divisor32_offset,
+                work_ty,
+                &subtract_label,
+                &next_label,
+            );
+            self.program.push(AsmLine::Label(subtract_label));
+            self.sub_current_frame_value_from_slot(divisor32_offset, remainder32_offset, work_ty);
+            self.set_current_frame_bit(quotient32_offset, 0);
+            self.program.push(AsmLine::Label(next_label));
+        }
+        self.program.push(AsmLine::Label(finish_label));
+        if signed {
+            let negate_label = self.unique_label("rt_q16div_neg");
+            let done_label = self.unique_label("rt_q16div_done");
+            self.branch_on_current_frame_bit(flag_offset, 0, &negate_label, &done_label);
+            self.program.push(AsmLine::Label(negate_label));
+            self.negate_current_frame_value(quotient32_offset, ty);
+            self.program.push(AsmLine::Label(done_label));
+        }
+        self.emit_return_current_frame_value(quotient32_offset, ty);
     }
 
     /// Copies contiguous bytes inside the active helper frame.
@@ -4922,6 +5252,7 @@ fn eval_const_expr(expr: &TypedExpr) -> i64 {
         | TypedExprKind::StructAssign { .. }
         | TypedExprKind::RomRead8 { .. }
         | TypedExprKind::RomRead16 { .. }
+        | TypedExprKind::RomRead32 { .. }
         | TypedExprKind::Call { .. }
         | TypedExprKind::IndirectCall { .. }
         | TypedExprKind::ArrayDecay(_)

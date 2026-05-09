@@ -2,11 +2,11 @@
 
 # PIC16 `midrange14` Backend
 
-Phase 22 extends the PIC16 backend to fixed-point storage and raw arithmetic lowering without adding IEEE float. Q8.8 values use the existing 16-bit ABI paths; Q16.16 values use the Phase 21 32-bit ABI paths. Q8.8 multiply/divide are lowered through raw 32-bit helper-backed arithmetic before backend codegen.
+Phase 23 extends the PIC16 backend to fixed-point ROM calibration tables while keeping fixed-point storage and raw arithmetic lowering from Phase 22. Q8.8 values use the existing 16-bit ABI paths; Q16.16 values use the Phase 21 32-bit ABI paths. Q8.8 multiply/divide are lowered through raw 32-bit helper-backed arithmetic before backend codegen.
 
 Phase 21 extends the PIC16 backend to four-byte integer values. The return convention is `W` plus `__abi.return_high`, `__abi.return_upper0`, and `__abi.return_upper1`. Multi-byte carry/borrow codegen is shared by 8-, 16-, 32-bit, and fixed raw paths.
 
-See `docs/backend/phase22-fixed-codegen.md` and `docs/backend/phase21-long-codegen.md`.
+See `docs/backend/phase23-fixed-rom-tables.md`, `docs/backend/phase22-fixed-codegen.md`, and `docs/backend/phase21-long-codegen.md`.
 
 Shared backend responsibilities:
 
@@ -18,7 +18,7 @@ Shared backend responsibilities:
 - IR -> PIC16 asm lowering
 - 14-bit word encoding
 
-Current backend phase: **Phase 22 fixed-point codegen on top of Phase 21 32-bit integer codegen, Phase 20 simulator tooling, Phase 19 execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier backend phases**
+Current backend phase: **Phase 23 fixed ROM table codegen on top of Phase 22 fixed-point codegen, Phase 21 32-bit integer codegen, Phase 20 simulator tooling, Phase 19 execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier backend phases**
 
 Backend owns:
 
@@ -31,6 +31,7 @@ Backend owns:
 - `FSR/INDF` indirect access for pointers and frame storage
 - Phase 5 runtime helper emission for multiply/divide/modulo and dynamic shifts
 - fixed-point raw storage, casts, comparisons, and Q8.8 helper-backed arithmetic
+- fixed-point ROM table reads through `RomRead16`/`RomRead32`
 - interrupt vector emission and ISR dispatch
 - ISR-specific save/restore and `retfie` lowering
 - Phase 7 peephole cleanup and helper fast-path selection
@@ -102,6 +103,7 @@ Current backend docs:
 - [../runtime/phase5-arithmetic-helpers.md](../runtime/phase5-arithmetic-helpers.md)
 - [phase21-long-codegen.md](phase21-long-codegen.md)
 - [phase22-fixed-codegen.md](phase22-fixed-codegen.md)
+- [phase23-fixed-rom-tables.md](phase23-fixed-rom-tables.md)
 - [../runtime/phase22-fixed-helpers.md](../runtime/phase22-fixed-helpers.md)
 - [../ir/phase5-arithmetic-lowering.md](../ir/phase5-arithmetic-lowering.md)
 - [../ir/phase4-call-lowering.md](../ir/phase4-call-lowering.md)

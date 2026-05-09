@@ -33,20 +33,22 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 22: fixed-point arithmetic support on top of Phase 21 controlled 32-bit integers, Phase 20 simulator CLI/debugging workflow, Phase 19 emulator-based execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier frontend/backend phases**.
+Current implementation is **Phase 23: fixed-point completeness and ROM calibration tables on top of Phase 22 fixed-point arithmetic, Phase 21 controlled 32-bit integers, Phase 20 simulator CLI/debugging workflow, Phase 19 emulator-based execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier frontend/backend phases**.
 
-Phase 22 scope:
+Phase 23 scope:
 
 - fixed-point scalar keywords `__fixed8_8`, `__ufixed8_8`, `__fixed16_16`, and `__ufixed16_16`
 - little-endian raw storage: Q8.8/UQ8.8 are 2 bytes; Q16.16/UQ16.16 are 4 bytes
 - raw fixed constructors `__q8_8(raw)`, `__uq8_8(raw)`, `__q16_16(raw)`, and `__uq16_16(raw)`
+- fixed decimal literals such as `1.5q8_8`, `2.25uq8_8`, `10.125q16_16`, and `0.5uq16_16`
 - fixed globals, statics, locals, parameters, returns, arrays, structs, unions, and data pointers
 - Q8.8/UQ8.8 add, subtract, compare, multiply, divide, unary negate, and integer/fixed casts
+- fixed-point ROM calibration arrays with direct indexing
 - Q16.16/UQ16.16 add, subtract, compare, casts, storage, and ABI support
-- Q16.16/UQ16.16 multiply/divide intentionally deferred because correct lowering needs a wider intermediate
-- fixed multiply/divide lower through proven Phase 21 32-bit helper paths; ISR helper restrictions still apply
-- simulator execution tests for casts, Q8.8 arithmetic, calls, aggregates, arrays, UQ8.8 arithmetic, and Q16.16 add/sub/compare
-- conservative diagnostics for unsupported bitwise fixed ops, fixed ROM objects, Q16.16 helper ops, fixed division by constant zero, and unsafe implicit fixed conversions
+- Q16.16/UQ16.16 multiply/divide constants fold exactly; dynamic helper-backed forms remain deferred
+- Q8.8 fixed multiply/divide lower through proven Phase 21 32-bit helper paths; ISR helper restrictions still apply
+- simulator execution tests for casts, fixed decimal literals, fixed ROM reads, Q8.8 arithmetic, calls, aggregates, arrays, UQ8.8 arithmetic, and Q16.16 constant folding
+- conservative diagnostics for unsupported bitwise fixed ops, dynamic Q16.16 helper ops, fixed modulo, fixed division by constant zero, malformed fixed literals, and unsafe implicit fixed conversions
 - no IEEE float, recursion, or advanced optimization work
 
 Phase 21 scope:
@@ -199,6 +201,7 @@ What changed from Phase 3:
 - Phase 20 adds optional `pic16-sim` CLI debugging over generated HEX plus map-symbol inspection and tracing
 - Phase 21 adds controlled 32-bit `long` / `unsigned long` storage, ABI, arithmetic, helpers, and simulator validation
 - Phase 22 adds explicit fixed-point scalar types and simulator-validated Q8.8 arithmetic without enabling IEEE float
+- Phase 23 adds fixed decimal literals, fixed ROM calibration tables, and Q16.16 constant folding
 - active docs now describe stack-first behavior; old Phase 2/3 docs remain historical
 
 Historical milestone snapshots below describe what each phase introduced at the time. The current supported subset is summarized later under `Supported Subset`, `Current constraints`, and `Current Limits`.
@@ -898,6 +901,7 @@ picc --list-targets
 - [examples/pic16f628a/array_initializer.c](examples/pic16f628a/array_initializer.c)
 - [examples/pic16f628a/casts.c](examples/pic16f628a/casts.c)
 - [examples/pic16f628a/function_pointer_basic.c](examples/pic16f628a/function_pointer_basic.c)
+- [examples/pic16f628a/fixed_literals.c](examples/pic16f628a/fixed_literals.c)
 - [examples/pic16f628a/pointer_to_pointer.c](examples/pic16f628a/pointer_to_pointer.c)
 - [examples/pic16f628a/rom_index.c](examples/pic16f628a/rom_index.c)
 - [examples/pic16f628a/rom_table.c](examples/pic16f628a/rom_table.c)
@@ -920,6 +924,10 @@ picc --list-targets
 - [examples/pic16f877a/expression_test.c](examples/pic16f877a/expression_test.c)
 - [examples/pic16f877a/function_pointer_struct.c](examples/pic16f877a/function_pointer_struct.c)
 - [examples/pic16f877a/function_pointer_table.c](examples/pic16f877a/function_pointer_table.c)
+- [examples/pic16f877a/fixed_q16_16_arithmetic.c](examples/pic16f877a/fixed_q16_16_arithmetic.c)
+- [examples/pic16f877a/fixed_rom_table.c](examples/pic16f877a/fixed_rom_table.c)
+- [examples/pic16f877a/fixed_calibration.c](examples/pic16f877a/fixed_calibration.c)
+- [examples/pic16f877a/fixed_conversion.c](examples/pic16f877a/fixed_conversion.c)
 - [examples/pic16f877a/bitfield_flags.c](examples/pic16f877a/bitfield_flags.c)
 - [examples/pic16f877a/bitfield_register_like.c](examples/pic16f877a/bitfield_register_like.c)
 - [examples/pic16f877a/const_config.c](examples/pic16f877a/const_config.c)
@@ -969,6 +977,7 @@ picc --list-targets
 - [docs/backend/phase16-aggregate-layout.md](docs/backend/phase16-aggregate-layout.md)
 - [docs/backend/phase17-dispatcher.md](docs/backend/phase17-dispatcher.md)
 - [docs/backend/phase18-stack-safety.md](docs/backend/phase18-stack-safety.md)
+- [docs/backend/phase23-fixed-rom-tables.md](docs/backend/phase23-fixed-rom-tables.md)
 - [docs/backend/phase9-switch-codegen.md](docs/backend/phase9-switch-codegen.md)
 - [docs/developer-guide/testing.md](docs/developer-guide/testing.md)
 - [docs/ir/phase4-call-lowering.md](docs/ir/phase4-call-lowering.md)
@@ -983,6 +992,7 @@ picc --list-targets
 - [docs/ir/phase16-aggregate-index-lowering.md](docs/ir/phase16-aggregate-index-lowering.md)
 - [docs/ir/phase17-indirect-call-lowering.md](docs/ir/phase17-indirect-call-lowering.md)
 - [docs/ir/phase18-call-graph.md](docs/ir/phase18-call-graph.md)
+- [docs/ir/phase23-fixed-constant-folding.md](docs/ir/phase23-fixed-constant-folding.md)
 - [docs/ir/phase9-switch-lowering.md](docs/ir/phase9-switch-lowering.md)
 - [docs/frontend/phase10-string-literals.md](docs/frontend/phase10-string-literals.md)
 - [docs/frontend/phase11-aggregates.md](docs/frontend/phase11-aggregates.md)
@@ -992,11 +1002,13 @@ picc --list-targets
 - [docs/frontend/phase15-union-bitfields.md](docs/frontend/phase15-union-bitfields.md)
 - [docs/frontend/phase16-multidimensional-arrays.md](docs/frontend/phase16-multidimensional-arrays.md)
 - [docs/frontend/phase17-function-pointers.md](docs/frontend/phase17-function-pointers.md)
+- [docs/frontend/phase23-fixed-literals.md](docs/frontend/phase23-fixed-literals.md)
 - [docs/frontend/phase9-switch.md](docs/frontend/phase9-switch.md)
 - [docs/developer-guide/stack-report.md](docs/developer-guide/stack-report.md)
 - [docs/testing/phase19-emulator.md](docs/testing/phase19-emulator.md)
 - [docs/sim/pic16-core-emulator.md](docs/sim/pic16-core-emulator.md)
 - [docs/runtime/phase5-arithmetic-helpers.md](docs/runtime/phase5-arithmetic-helpers.md)
+- [docs/runtime/phase23-q16-16-helpers.md](docs/runtime/phase23-q16-16-helpers.md)
 - [docs/migration/phase3-to-phase4-abi.md](docs/migration/phase3-to-phase4-abi.md)
 - [docs/developer-guide/adding-device.md](docs/developer-guide/adding-device.md)
 
@@ -1009,4 +1021,4 @@ picc --list-targets
 
 ## Current Limits
 
-Phase 19 adds execution validation through a small internal emulator, but current hard limits remain: no general ROM pointer model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no function-pointer calls inside ISR, no raw computed PIC16 indirect calls, no `float`, and no recursion. The emulator is intentionally core-only in this phase: no full peripheral timing model, no asynchronous interrupt scheduling, and no claim of complete PIC16 device emulation.
+Phase 23 adds fixed decimal literals and fixed ROM calibration tables, but current hard limits remain: no general ROM pointer model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no function-pointer calls inside ISR, no dynamic Q16.16 multiply/divide helper path, no raw computed PIC16 indirect calls, no `float`, and no recursion. The emulator is intentionally core-only: no full peripheral timing model, no asynchronous interrupt scheduling, and no claim of complete PIC16 device emulation.

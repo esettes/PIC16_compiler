@@ -2,9 +2,9 @@
 
 # General Architecture
 
-Phase 22 extends the existing architecture with explicit fixed-point scalar support while preserving the Stack-first ABI and PIC16 `midrange14` backend. The compiler treats Q8.8 values as 2-byte raw fixed storage and Q16.16 values as 4-byte raw fixed storage across frontend typing, IR temps, stack frames, globals, aggregates, and simulator validation.
+Phase 23 extends the fixed-point layer with explicit decimal literals and fixed-point ROM calibration tables while preserving the Stack-first ABI and PIC16 `midrange14` backend. The compiler treats Q8.8 values as 2-byte raw fixed storage and Q16.16 values as 4-byte raw fixed storage across frontend typing, IR temps, stack frames, globals, aggregates, ROM tables, and simulator validation.
 
-Phase 21 32-bit integers remain the raw intermediate foundation for Q8.8 multiply/divide. Q16.16 multiply/divide are deferred because a correct implementation needs a wider intermediate than Phase 21 currently provides.
+Phase 21 32-bit integers remain the raw intermediate foundation for Q8.8 multiply/divide. Q16.16 multiply/divide constants are folded exactly; dynamic Q16.16 helper-backed operations remain deferred until the helper path is split safely across PIC14 pages.
 
 `pic16cc` separates:
 
@@ -16,11 +16,13 @@ Phase 21 32-bit integers remain the raw intermediate foundation for Q8.8 multipl
 
 Target backend is classic 14-bit PIC16 mid-range family, not a generic 8-bit CPU model.
 
-Current Phase 22 keeps that split intact while extending:
+Current Phase 23 keeps that split intact while extending:
 
 - stack-first caller-pushed ABI
 - fixed-point frontend typing, raw constructors, casts, and diagnostics
+- fixed decimal literal parsing with deterministic raw truncation
 - fixed-point IR lowering through raw integer storage and existing helper paths
+- fixed ROM table lowering through little-endian RETLW byte payloads
 - per-call frame storage for locals and IR temps
 - typed IR call lowering for arbitrary argument counts
 - explicit pointer and frame access through `FSR/INDF`
@@ -50,10 +52,10 @@ Current Phase 22 keeps that split intact while extending:
 - Phase 19 test-only execution validation through an internal PIC16 core emulator fed from generated Intel HEX output
 - Phase 20 optional `pic16-sim` CLI for running HEX files, resolving map symbols, printing state, and tracing instructions
 - Phase 21 controlled 32-bit integer storage, ABI, helpers, and simulator validation
-- Phase 22 explicit fixed-point Q8.8/Q16.16 typing and simulator-validated fixed arithmetic
+- Phase 23 fixed decimal literals, fixed ROM calibration tables, and simulator-validated fixed constant folding/ROM reads
 - PIC16 banking/paging without backend duplication per device
 
-Phase 22 keeps the compiler layering unchanged:
+Phase 23 keeps the compiler layering unchanged:
 
 - frontend still produces typed trees only
 - IR still stays target-aware but encoding-agnostic

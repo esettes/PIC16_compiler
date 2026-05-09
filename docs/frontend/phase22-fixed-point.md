@@ -15,7 +15,7 @@ Fixed values are supported in globals, file-scope statics, static locals, auto l
 
 ## Constants
 
-Phase 22 intentionally does not parse decimal fixed literals. Use raw constructors:
+Phase 22 introduced raw constructors:
 
 - `__q8_8(raw)`
 - `__uq8_8(raw)`
@@ -31,19 +31,22 @@ __fixed8_8 three = (__fixed8_8)3;
 
 Integer-to-fixed casts shift left by the fractional bit count. Fixed-to-integer casts shift right by the fractional bit count.
 
+Phase 23 also accepts explicit decimal fixed literals such as `1.5q8_8` and `0.5uq16_16`; see `phase23-fixed-literals.md`.
+
 ## Operations
 
 Supported:
 
 - Q8.8/UQ8.8: `+`, `-`, `*`, `/`, comparisons, unary `-`, casts
-- Q16.16/UQ16.16: `+`, `-`, comparisons, unary `-`, casts
+- Q16.16/UQ16.16: `+`, `-`, comparisons, unary `-`, casts, constant-folded `*` and `/`
 
 Rejected:
 
-- Q16.16/UQ16.16 `*` and `/`
+- dynamic Q16.16/UQ16.16 `*` and `/`
 - fixed `%`
 - bitwise fixed operators unless the program casts to a raw integer first
-- fixed ROM objects
 - helper-backed fixed operations inside ISR code
+
+Phase 23 supports one-dimensional fixed-point `const __rom` arrays for direct indexing.
 
 Implicit fixed/integer conversions and fixed narrowing warn. Under `-Werror`, unsafe implicit fixed conversions fail.

@@ -11,6 +11,7 @@ Phase status:
 - 8-bit and 16-bit helper behavior is frozen under the Phase 6 stabilization baseline
 - Phase 21 extends the same helper model to 32-bit integer types
 - Phase 22 reuses 32-bit helpers for Q8.8 fixed-point multiply/divide
+- Phase 23 folds Q16.16 fixed multiply/divide constants and rejects dynamic Q16.16 helper-backed forms
 
 Phase 5 adds compiler-generated PIC16 runtime helpers for:
 
@@ -135,5 +136,6 @@ Shifts:
 
 - no runtime trap for dynamic zero divisor
 - no full ISO C promotion lattice yet
+- no dynamic Q16.16 fixed multiply/divide helper path yet
 - recursion still rejected globally because stack depth remains static
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->

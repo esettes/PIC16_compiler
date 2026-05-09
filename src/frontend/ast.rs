@@ -4,7 +4,7 @@ use std::fmt::Write;
 
 use crate::common::source::Span;
 
-use super::types::{IntegerSuffix, StorageClass, StructId, Type, UnionId};
+use super::types::{IntegerSuffix, ScalarType, StorageClass, StructId, Type, UnionId};
 
 #[derive(Clone, Debug)]
 pub struct TranslationUnit {
@@ -159,6 +159,10 @@ pub enum ExprKind {
     IntLiteral {
         value: i64,
         suffix: IntegerSuffix,
+    },
+    FixedLiteral {
+        raw: i64,
+        scalar: ScalarType,
     },
     StringLiteral(Vec<u8>),
     Name(String),
@@ -404,6 +408,7 @@ fn render_stmt(stmt: &Stmt, indent: usize, output: &mut String) {
 fn render_expr(expr: &Expr) -> String {
     match &expr.kind {
         ExprKind::IntLiteral { value, .. } => value.to_string(),
+        ExprKind::FixedLiteral { raw, scalar } => format!("{raw}:{scalar:?}"),
         ExprKind::StringLiteral(bytes) => render_string_literal(bytes),
         ExprKind::Name(name) => name.clone(),
         ExprKind::Cast { ty, expr } => format!("({ty})({})", render_expr(expr)),

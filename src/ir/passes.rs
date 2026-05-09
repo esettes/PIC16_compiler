@@ -166,6 +166,18 @@ pub fn constant_fold(program: &mut IrProgram) -> ConstantFoldStats {
                         };
                         constants.remove(&dst);
                     }
+                    IrInstr::RomRead32 { dst, symbol, index } => {
+                        let resolved = resolve_operand(index, &constants);
+                        if resolved != index {
+                            stats.operands_propagated += 1;
+                        }
+                        *instr = IrInstr::RomRead32 {
+                            dst,
+                            symbol,
+                            index: resolved,
+                        };
+                        constants.remove(&dst);
+                    }
                     IrInstr::Call {
                         dst,
                         function,
@@ -339,7 +351,9 @@ fn collect_instr_operand_temps(instr: &IrInstr, temps: &mut BTreeSet<usize>) {
             collect_operand(*ptr, temps);
             collect_operand(*value, temps);
         }
-        IrInstr::RomRead8 { index, .. } | IrInstr::RomRead16 { index, .. } => {
+        IrInstr::RomRead8 { index, .. }
+        | IrInstr::RomRead16 { index, .. }
+        | IrInstr::RomRead32 { index, .. } => {
             collect_operand(*index, temps);
         }
         IrInstr::Call { args, .. } => {
@@ -395,7 +409,8 @@ fn update_liveness_for_instr(instr: &IrInstr, live: &mut BTreeSet<usize>) -> boo
         | IrInstr::Binary { dst, .. }
         | IrInstr::LoadIndirect { dst, .. }
         | IrInstr::RomRead8 { dst, .. }
-        | IrInstr::RomRead16 { dst, .. } => {
+        | IrInstr::RomRead16 { dst, .. }
+        | IrInstr::RomRead32 { dst, .. } => {
             if live.remove(dst) {
                 collect_instr_operand_temps(instr, live);
                 true
@@ -505,6 +520,10 @@ fn collect_instr_temps(instr: &IrInstr, temps: &mut BTreeSet<usize>) {
             temps.insert(*dst);
             collect_operand(*index, temps);
         }
+        IrInstr::RomRead32 { dst, index, .. } => {
+            temps.insert(*dst);
+            collect_operand(*index, temps);
+        }
         IrInstr::Call { dst, args, .. } => {
             if let Some(dst) = dst {
                 temps.insert(*dst);
@@ -576,6 +595,10 @@ fn remap_block(block: &mut super::model::IrBlock, remap: &BTreeMap<usize, usize>
                 *index = remap_operand(*index, remap);
             }
             IrInstr::RomRead16 { dst, index, .. } => {
+                *dst = remap[dst];
+                *index = remap_operand(*index, remap);
+            }
+            IrInstr::RomRead32 { dst, index, .. } => {
                 *dst = remap[dst];
                 *index = remap_operand(*index, remap);
             }

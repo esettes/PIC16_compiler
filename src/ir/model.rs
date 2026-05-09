@@ -93,6 +93,11 @@ pub enum IrInstr {
         symbol: SymbolId,
         index: Operand,
     },
+    RomRead32 {
+        dst: TempId,
+        symbol: SymbolId,
+        index: Operand,
+    },
     Call {
         dst: Option<TempId>,
         function: SymbolId,
@@ -219,6 +224,9 @@ fn render_instr(instr: &IrInstr) -> String {
         }
         IrInstr::RomRead16 { dst, symbol, index } => {
             format!("t{dst} = rom16 s{symbol}[{}]", render_operand(*index))
+        }
+        IrInstr::RomRead32 { dst, symbol, index } => {
+            format!("t{dst} = rom32 s{symbol}[{}]", render_operand(*index))
         }
         IrInstr::Call {
             dst,

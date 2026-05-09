@@ -2452,11 +2452,32 @@ void main(void) {
 }
 
 #[test]
-/// Verifies Q16.16 multiplication is explicitly deferred instead of lowered incorrectly.
-fn rejects_phase22_q16_16_multiply() {
+/// Verifies Phase 23 lowers Q16.16 multiplication through the fixed runtime helper.
+fn compiles_phase23_q16_16_multiply() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase23-q16-mul.c",
+        "\
+__fixed16_16 a;
+__fixed16_16 b;
+__fixed16_16 result;
+void main(void) {
+    a = 1.5q16_16;
+    b = 2.0q16_16;
+    result = 1.5q16_16 * 2.0q16_16;
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies dynamic Q16.16 helper-backed multiply remains explicitly deferred.
+fn rejects_phase23_dynamic_q16_16_multiply() {
     let error = compile_error(
         "pic16f628a",
-        "phase22-q16-mul.c",
+        "phase23-dynamic-q16-mul.c",
         "\
 __fixed16_16 a;
 __fixed16_16 b;
@@ -2467,7 +2488,7 @@ void main(void) {
 ",
     );
 
-    assert!(error.contains("deferred in phase 22"));
+    assert!(error.contains("dynamic `Multiply`"));
 }
 
 #[test]
@@ -2489,21 +2510,108 @@ void main(void) {
 }
 
 #[test]
-/// Verifies fixed-point ROM objects remain deferred with a clear diagnostic.
-fn rejects_phase22_fixed_rom_objects() {
-    let error = compile_error(
+/// Verifies Phase 23 accepts fixed-point ROM calibration tables.
+fn compiles_phase23_fixed_rom_objects() {
+    let output = compile_source(
         "pic16f628a",
-        "phase22-fixed-rom.c",
+        "phase23-fixed-rom.c",
         "\
-const __rom __fixed8_8 table[] = { __q8_8(0x0100), __q8_8(0x0200) };
+const __rom __fixed8_8 table[] = { 1.0q8_8, 1.5q8_8 };
 __fixed8_8 result;
 void main(void) {
-    result = __q8_8(0);
+    result = table[1];
 }
 ",
     );
 
-    assert!(error.contains("unsupported ROM element type"));
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies fixed decimal literal suffixes and truncating conversion parse in Phase 23.
+fn compiles_phase23_fixed_decimal_literals() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase23-fixed-literals.c",
+        "\
+__fixed8_8 a = 1.5q8_8;
+__ufixed8_8 b = 2.25uq8_8;
+__fixed16_16 c = 10.125q16_16;
+__ufixed16_16 d = 0.5uq16_16;
+void main(void) {
+    a = a + 0.25q8_8;
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies malformed fixed literals diagnose before semantic lowering.
+fn rejects_phase23_malformed_fixed_literal() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase23-malformed-fixed-literal.c",
+        "\
+__fixed8_8 result = 1.q8_8;
+void main(void) {
+}
+",
+    );
+
+    assert!(error.contains("malformed fixed-point literal"));
+}
+
+#[test]
+/// Verifies unsupported fixed literal suffixes diagnose clearly.
+fn rejects_phase23_unsupported_fixed_literal_suffix() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase23-bad-fixed-suffix.c",
+        "\
+__fixed8_8 result = 1.0q4_4;
+void main(void) {
+}
+",
+    );
+
+    assert!(error.contains("unsupported fixed-point literal suffix"));
+}
+
+#[test]
+/// Verifies fixed literals outside the selected raw range diagnose clearly.
+fn rejects_phase23_fixed_literal_out_of_range() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase23-fixed-out-of-range.c",
+        "\
+__fixed8_8 result = 200.0q8_8;
+void main(void) {
+}
+",
+    );
+
+    assert!(error.contains("fixed-point literal is out of range"));
+}
+
+#[test]
+/// Verifies fixed modulo remains unsupported with an explicit diagnostic.
+fn rejects_phase23_fixed_modulo() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase23-fixed-mod.c",
+        "\
+__fixed8_8 a;
+__fixed8_8 b;
+__fixed8_8 result;
+void main(void) {
+    result = a % b;
+}
+",
+    );
+
+    assert!(error.contains("is not supported for fixed-point operands"));
 }
 
 #[test]
@@ -2536,6 +2644,26 @@ fn phase22_examples_compile_via_picc() {
         ("pic16f877a", "examples/pic16f877a/fixed_sensor_scale.c"),
         ("pic16f877a", "examples/pic16f877a/fixed_struct.c"),
         ("pic16f877a", "examples/pic16f877a/fixed_table.c"),
+    ];
+
+    for (target, path) in examples {
+        let output = compile_example(target, path);
+        assert_hex_is_programmable(&output);
+    }
+}
+
+#[test]
+/// Verifies checked-in Phase 23 fixed-point completeness examples compile cleanly.
+fn phase23_examples_compile_via_picc() {
+    let examples = [
+        ("pic16f628a", "examples/pic16f628a/fixed_literals.c"),
+        (
+            "pic16f877a",
+            "examples/pic16f877a/fixed_q16_16_arithmetic.c",
+        ),
+        ("pic16f877a", "examples/pic16f877a/fixed_rom_table.c"),
+        ("pic16f877a", "examples/pic16f877a/fixed_calibration.c"),
+        ("pic16f877a", "examples/pic16f877a/fixed_conversion.c"),
     ];
 
     for (target, path) in examples {
