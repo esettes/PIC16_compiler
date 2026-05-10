@@ -79,9 +79,9 @@ Rules:
 - caller pushes argument bytes left-to-right
 - caller cleans argument bytes after return
 
-### Phase 23 Fixed-Point Completeness
+### Phase 24 Dynamic Q16.16 Helpers
 
-Phase 22/23 add explicit fixed-point scalar types without adding IEEE float:
+Phase 22/23/24 add explicit fixed-point scalar types without adding IEEE float:
 
 - `__fixed8_8` / `__ufixed8_8`: 16-bit raw Q8.8 storage
 - `__fixed16_16` / `__ufixed16_16`: 32-bit raw Q16.16 storage
@@ -90,9 +90,9 @@ Phase 22/23 add explicit fixed-point scalar types without adding IEEE float:
 - decimal fixed literals with explicit suffixes `q8_8`, `uq8_8`, `q16_16`, and `uq16_16`
 - one-dimensional fixed-point `const __rom` calibration tables with direct indexing
 
-Q8.8 add/sub/compare are raw byte-wise operations. Q8.8 multiply/divide lower through 32-bit raw intermediates and the existing Phase 21 helper paths. Q16.16 add/sub/compare/casts are supported; Q16.16 multiply/divide are folded for compile-time constants.
+Q8.8 add/sub/compare are raw byte-wise operations. Q8.8 multiply/divide lower through 32-bit raw intermediates and the existing Phase 21 helper paths. Q16.16 add/sub/compare/casts are supported; Q16.16 multiply/divide are folded for compile-time constants and lower to runtime helpers for dynamic operands.
 
-Q16.16 multiply/divide constants are folded exactly. Dynamic Q16.16 multiply/divide remain rejected in Phase 23 because the correct helper body needs page-safe splitting before it can be emitted safely. Helper-backed fixed operations stay rejected inside ISRs.
+Q16.16 dynamic helpers use private page-safe fixed-point algorithms without exposing public `long long`. Signed helpers normalize signs, run the unsigned core, and restore the final two's-complement sign. Dynamic division by zero returns raw zero, matching the existing integer helper policy; constant division by zero remains a diagnostic. Helper-backed fixed operations stay rejected inside ISRs.
 
 ### Phase 21 32-Bit Integers
 

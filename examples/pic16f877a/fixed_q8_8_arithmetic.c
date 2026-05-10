@@ -9,7 +9,7 @@ __fixed8_8 sum;
 void main(void) {
     ADCON1 = 0x06;
     product = a * b;
-    quotient = product / b;
+    quotient = __q8_8(0x0300) / __q8_8(0x0200);
     sum = quotient + a;
     PORTB = (unsigned char)(int)sum;
 }

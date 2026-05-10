@@ -45,4 +45,4 @@ Diagnostics:
 - values outside the selected raw fixed range
 - implicit unsafe fixed narrowing under `-Werror`
 
-Q16.16 multiply/divide are constant-folded when both operands are compile-time constants. Dynamic Q16.16 multiply/divide remain rejected in Phase 23 until the page-sized runtime helper path is split safely.
+Q16.16 multiply/divide are constant-folded when both operands are compile-time constants. Phase 24 accepts dynamic Q16.16/UQ16.16 multiply/divide outside ISRs and lowers them through runtime helpers.

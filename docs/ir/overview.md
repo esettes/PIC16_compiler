@@ -2,11 +2,11 @@
 
 # IR
 
-Phase 23 keeps the IR shape stable and represents fixed-point values as typed raw integer-width scalars. Fixed decimal literals are raw constants with fixed scalar types, Q8.8 multiply/divide lower before backend codegen into raw 32-bit integer multiply/divide plus fixed scaling shifts, and fixed ROM tables lower to ROM read instructions.
+Phase 24 keeps the IR shape stable and represents fixed-point values as typed raw integer-width scalars. Dynamic Q16.16/UQ16.16 multiply and divide remain ordinary typed binary operations so the backend can lower them to page-safe runtime helpers. Fixed decimal literals are raw constants with fixed scalar types, Q8.8 multiply/divide lower before backend codegen into raw 32-bit integer multiply/divide plus fixed scaling shifts, and fixed ROM tables lower to ROM read instructions.
 
 Phase 21 keeps the same IR shape for 32-bit integers and extends carried `Type` metadata to `I32`/`U32`. Cast instructions include source type metadata so 8/16/32-bit extension and truncation fold and codegen correctly.
 
-See `docs/ir/phase23-fixed-constant-folding.md`, `docs/ir/phase22-fixed-lowering.md`, and `docs/ir/phase21-long-lowering.md`.
+See `docs/ir/phase24-fixed-dynamic-lowering.md`, `docs/ir/phase23-fixed-constant-folding.md`, `docs/ir/phase22-fixed-lowering.md`, and `docs/ir/phase21-long-lowering.md`.
 
 Custom CFG-based IR.
 
@@ -99,14 +99,14 @@ Phase 18 stack-analysis notes:
 - call-graph analysis expands across direct calls, helper-triggering operations, ISR roots, and known function-pointer target groups
 - recursion diagnostics remain semantic; backend stack reports assume acyclic call graphs after semantic validation
 
-Phase 23 fixed-point lowering notes:
+Phase 24 fixed-point lowering notes:
 
 - fixed values use their raw storage width in temps, locals, and argument slots
 - integer-to-fixed casts shift left by the fractional bit count
 - fixed-to-integer casts shift right by the fractional bit count
 - fixed-to-fixed casts adjust raw fractional width and then truncate/extend
 - Q16.16 multiply/divide constants fold before backend emission
-- dynamic Q16.16 multiply/divide are rejected before IR generation
+- dynamic Q16.16 multiply/divide lower as typed helper-backed binary operations outside ISRs
 
 Current Phase 18 limits:
 
@@ -122,8 +122,8 @@ Current Phase 18 limits:
 - no indirect calls inside interrupt handlers
 - no recursion, even with `--stack-check`
 - no IEEE float
-- dynamic Q16.16 multiply/divide remains rejected until the helper path is page-safe
-- no dynamic Q16.16 multiply/divide helper path in Phase 23
+- fixed-point modulo remains unsupported
+- helper-backed fixed operations remain rejected inside interrupt handlers
 
 Current detail:
 
@@ -137,6 +137,7 @@ Current detail:
 - [phase21-long-lowering.md](phase21-long-lowering.md)
 - [phase22-fixed-lowering.md](phase22-fixed-lowering.md)
 - [phase23-fixed-constant-folding.md](phase23-fixed-constant-folding.md)
+- [phase24-fixed-dynamic-lowering.md](phase24-fixed-dynamic-lowering.md)
 - [phase12-pointer-lowering.md](phase12-pointer-lowering.md)
 - [phase13-rom-lowering.md](phase13-rom-lowering.md)
 - [phase14-rom-read-lowering.md](phase14-rom-read-lowering.md)

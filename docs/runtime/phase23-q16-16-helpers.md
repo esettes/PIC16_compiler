@@ -13,8 +13,8 @@ The public C type system still does not expose `long long` or a general 64-bit i
 
 Runtime status:
 
-- dynamic Q16.16 multiply/divide are rejected in semantic analysis in this Phase 23 repository state
-- helper labels are reserved in the backend model as `__rt_mul_q16_16`, `__rt_mul_uq16_16`, `__rt_div_q16_16`, and `__rt_div_uq16_16`
-- the dynamic helper path remains deferred because the correct helper body is large enough to cross PIC14 program pages, and the current local-branch stub strategy must be split or paged before this is safe
+- Phase 23 rejected dynamic Q16.16 multiply/divide in semantic analysis
+- Phase 24 replaces that deferral with runtime helpers named `__rt_mul_q16_16`, `__rt_mul_uq16_16`, `__rt_div_q16_16`, and `__rt_div_uq16_16`
+- the helpers keep the public C type system unchanged; no public `long long` is exposed
 
-This is intentional: Phase 23 must not silently emit incorrect page-crossing helper code. Use Q8.8 runtime multiply/divide, Q16.16 add/sub/compare/casts, or Q16.16 constant expressions until the helper split is implemented.
+See `phase24-q16-16-dynamic-helpers.md` for the page-safe dynamic helper design.

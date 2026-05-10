@@ -15,7 +15,7 @@ Q8.8 multiply/divide use 32-bit raw intermediates and therefore call the existin
 - signed Q8.8 uses signed 32-bit multiply/divide helpers
 - unsigned UQ8.8 uses unsigned 32-bit multiply/divide helpers
 
-Phase 23 folds Q16.16 multiply/divide when both operands are compile-time constants. Dynamic Q16.16 multiply/divide are still rejected before backend emission until the helper body is split into page-safe PIC14 chunks.
+Phase 23 folds Q16.16 multiply/divide when both operands are compile-time constants. Phase 24 emits page-safe runtime helpers for dynamic Q16.16/UQ16.16 multiply/divide outside ISRs.
 
 Phase 23 fixed ROM tables lower through little-endian ROM byte payloads:
 

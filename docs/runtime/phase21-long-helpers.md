@@ -17,4 +17,4 @@ ISR code may use inline-safe 32-bit loads, stores, simple comparisons, and const
 
 Phase 22 fixed-point Q8.8 multiply/divide reuses these 32-bit helper paths by widening raw Q8.8 operands to 32-bit, applying the fixed-point scale shift, and truncating back to 16-bit raw storage.
 
-Phase 23 folds Q16.16 multiply/divide constants exactly. Dynamic Q16.16 multiply/divide remain rejected rather than lowering through these 32-bit helpers, because a correct dynamic result needs a wider/page-safe helper strategy.
+Phase 23 folds Q16.16 multiply/divide constants exactly. Phase 24 adds dedicated page-safe Q16.16/UQ16.16 dynamic helpers rather than reusing these 32-bit integer helpers, because correct fixed-point multiply/divide needs wider intermediate behavior.

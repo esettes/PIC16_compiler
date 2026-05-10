@@ -2196,23 +2196,6 @@ impl<'a> SemanticAnalyzer<'a> {
             BinaryOp::Multiply | BinaryOp::Divide => {
                 self.diagnose_division_rhs(op, &rhs, span, diagnostics);
                 if matches!(lhs_ty.scalar, ScalarType::Q16_16 | ScalarType::UQ16_16) {
-                    if eval_integer_constant_expr(&lhs).is_none()
-                        || eval_integer_constant_expr(&rhs).is_none()
-                    {
-                        diagnostics.error(
-                            "semantic",
-                            Some(span),
-                            format!(
-                                "dynamic `{op:?}` for `{}` is deferred in phase 23",
-                                lhs_ty
-                            ),
-                            Some(
-                                "Q16.16 multiply/divide constants are folded exactly; runtime Q16.16 helpers are kept deferred until the page-sized helper path is split safely"
-                                    .to_string(),
-                            ),
-                        );
-                        return None;
-                    }
                     return Some(TypedExpr {
                         kind: TypedExprKind::Binary {
                             op,

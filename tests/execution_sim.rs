@@ -1132,3 +1132,207 @@ void main(void) {
     assert_eq!(symbol_u32(&core, &map, "long_result"), 2);
     assert_eq!(symbol_u32(&core, &map, "from_int"), 0x0003_0000);
 }
+
+#[test]
+fn executes_phase24_q16_16_dynamic_multiply() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase24-q16-dynamic-mul.c",
+        r#"
+__fixed16_16 a = 1.5q16_16;
+__fixed16_16 b = 2.0q16_16;
+__fixed16_16 c = 0.5q16_16;
+__fixed16_16 d = 0.5q16_16;
+__fixed16_16 result;
+__fixed16_16 quarter;
+
+void main(void) {
+    result = a * b;
+    quarter = c * d;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0x0003_0000);
+    assert_eq!(symbol_u32(&core, &map, "quarter"), 0x0000_4000);
+}
+
+#[test]
+fn executes_phase24_q16_16_dynamic_negative_multiply() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase24-q16-dynamic-neg-mul.c",
+        r#"
+__fixed16_16 a = -1.5q16_16;
+__fixed16_16 b = 2.0q16_16;
+__fixed16_16 result;
+
+void main(void) {
+    result = a * b;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0xFFFD_0000);
+}
+
+#[test]
+fn executes_phase24_uq16_16_dynamic_multiply() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase24-uq16-dynamic-mul.c",
+        r#"
+__ufixed16_16 a = 1.5uq16_16;
+__ufixed16_16 b = 2.0uq16_16;
+__ufixed16_16 result;
+
+void main(void) {
+    result = a * b;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0x0003_0000);
+}
+
+#[test]
+fn executes_phase24_q16_16_dynamic_division() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase24-q16-dynamic-div.c",
+        r#"
+__fixed16_16 a = 3.0q16_16;
+__fixed16_16 b = 2.0q16_16;
+__fixed16_16 result;
+
+void main(void) {
+    result = a / b;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0x0001_8000);
+}
+
+#[test]
+fn executes_phase24_q16_16_dynamic_negative_division() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase24-q16-dynamic-neg-div.c",
+        r#"
+__fixed16_16 a = -3.0q16_16;
+__fixed16_16 b = 2.0q16_16;
+__fixed16_16 result;
+
+void main(void) {
+    result = a / b;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0xFFFE_8000);
+}
+
+#[test]
+fn executes_phase24_uq16_16_dynamic_division() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase24-uq16-dynamic-div.c",
+        r#"
+__ufixed16_16 a = 3.0uq16_16;
+__ufixed16_16 b = 2.0uq16_16;
+__ufixed16_16 result;
+
+void main(void) {
+    result = a / b;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0x0001_8000);
+}
+
+#[test]
+fn executes_phase24_q16_16_dynamic_division_by_zero_returns_zero() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase24-q16-dynamic-div-zero.c",
+        r#"
+__fixed16_16 a = 3.0q16_16;
+__fixed16_16 b = __q16_16(0);
+__fixed16_16 result;
+
+void main(void) {
+    result = a / b;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0);
+}
+
+#[test]
+fn executes_phase24_q16_16_argument_return_operation() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase24-q16-call.c",
+        r#"
+__fixed16_16 result;
+
+__fixed16_16 scale(__fixed16_16 raw) {
+    return raw * 2.0q16_16;
+}
+
+void main(void) {
+    result = scale(1.5q16_16);
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0x0003_0000);
+}
+
+#[test]
+fn executes_phase24_q16_16_struct_field_operation() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase24-q16-struct.c",
+        r#"
+struct Sensor {
+    __fixed16_16 raw;
+    __fixed16_16 gain;
+};
+
+struct Sensor sensor;
+__fixed16_16 result;
+
+void main(void) {
+    sensor.raw = 1.5q16_16;
+    sensor.gain = 2.0q16_16;
+    result = sensor.raw * sensor.gain;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0x0003_0000);
+}
+
+#[test]
+fn executes_phase24_q16_16_array_element_operation() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase24-q16-array.c",
+        r#"
+__fixed16_16 values[2];
+__fixed16_16 result;
+
+void main(void) {
+    values[0] = 1.5q16_16;
+    values[1] = 2.0q16_16;
+    result = values[0] * values[1];
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0x0003_0000);
+}

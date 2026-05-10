@@ -2,9 +2,9 @@
 
 # Testing Guide
 
-Phase 23 runtime validation lives in `tests/execution_sim.rs`. It compiles C programs to HEX, runs them through the simulator, and checks fixed-point RAM results for decimal literals, fixed ROM table reads, fixed casts, Q8.8 arithmetic, UQ8.8 arithmetic, Q16.16 add/subtract/compare, and Q16.16 constant-folded multiply/divide.
+Phase 24 runtime validation lives in `tests/execution_sim.rs`. It compiles C programs to HEX, runs them through the simulator, and checks fixed-point RAM results for decimal literals, fixed ROM table reads, fixed casts, Q8.8 arithmetic, UQ8.8 arithmetic, Q16.16 add/subtract/compare, Q16.16 constant-folded multiply/divide, and dynamic Q16.16/UQ16.16 helper-backed multiply/divide.
 
-Phase 23 diagnostics are covered in `tests/compiler_pipeline.rs` for malformed/unsupported/out-of-range fixed literals, implicit fixed narrowing, bitwise/modulo fixed rejection, dynamic Q16.16 multiply/divide deferral, fixed division by constant zero, ISR helper restrictions, fixed ROM objects, and checked-in fixed examples.
+Phase 24 diagnostics and artifacts are covered in `tests/compiler_pipeline.rs` for malformed/unsupported/out-of-range fixed literals, implicit fixed narrowing, bitwise/modulo fixed rejection, fixed division by constant zero, ISR helper restrictions, fixed ROM objects, dynamic Q16.16 helper map/listing visibility, stack-report helper accounting, and checked-in fixed examples.
 
 Phase 21 runtime and diagnostic coverage remains in the same files for 32-bit integer behavior.
 

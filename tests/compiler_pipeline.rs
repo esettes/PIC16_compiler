@@ -2452,11 +2452,58 @@ void main(void) {
 }
 
 #[test]
-/// Verifies Phase 23 lowers Q16.16 multiplication through the fixed runtime helper.
-fn compiles_phase23_q16_16_multiply() {
-    let output = compile_source(
-        "pic16f628a",
-        "phase23-q16-mul.c",
+/// Verifies Phase 24 lowers dynamic Q16.16 multiply/divide through runtime helpers.
+fn compiles_phase24_dynamic_q16_16_helpers() {
+    let mul_output = compile_source(
+        "pic16f877a",
+        "phase24-q16-dynamic-mul.c",
+        "\
+__fixed16_16 a;
+__fixed16_16 b;
+__fixed16_16 product;
+void main(void) {
+    a = 1.5q16_16;
+    b = 2.0q16_16;
+    product = a * b;
+}
+",
+    );
+
+    assert_hex_is_programmable(&mul_output);
+    let mul_map = read_artifact(&mul_output, "map");
+    let mul_lst = read_artifact(&mul_output, "lst");
+    assert!(mul_map.contains("__rt_mul_q16_16"));
+    assert!(mul_lst.contains("__rt_mul_q16_16"));
+
+    let div_output = compile_source(
+        "pic16f877a",
+        "phase24-q16-dynamic-div.c",
+        "\
+__fixed16_16 numerator;
+__fixed16_16 denominator;
+__fixed16_16 quotient;
+void main(void) {
+    numerator = 3.0q16_16;
+    denominator = 2.0q16_16;
+    quotient = numerator / denominator;
+}
+",
+    );
+
+    assert_hex_is_programmable(&div_output);
+    let div_map = read_artifact(&div_output, "map");
+    let div_lst = read_artifact(&div_output, "lst");
+    assert!(div_map.contains("__rt_div_q16_16"));
+    assert!(div_lst.contains("__rt_div_q16_16"));
+}
+
+#[test]
+/// Verifies stack reports account for Phase 24 Q16.16 helper calls.
+fn phase24_stack_report_accounts_for_q16_helpers() {
+    let input = temp_file("phase24-q16-stack.c");
+    let report = temp_file("phase24-q16.stack");
+    fs::write(
+        &input,
         "\
 __fixed16_16 a;
 __fixed16_16 b;
@@ -2464,31 +2511,33 @@ __fixed16_16 result;
 void main(void) {
     a = 1.5q16_16;
     b = 2.0q16_16;
-    result = 1.5q16_16 * 2.0q16_16;
-}
-",
-    );
-
-    assert_hex_is_programmable(&output);
-}
-
-#[test]
-/// Verifies dynamic Q16.16 helper-backed multiply remains explicitly deferred.
-fn rejects_phase23_dynamic_q16_16_multiply() {
-    let error = compile_error(
-        "pic16f628a",
-        "phase23-dynamic-q16-mul.c",
-        "\
-__fixed16_16 a;
-__fixed16_16 b;
-__fixed16_16 result;
-void main(void) {
     result = a * b;
 }
 ",
-    );
+    )
+    .expect("fixture");
+    execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: "pic16f877a".to_string(),
+            input,
+            output: temp_file("phase24-q16-stack.hex"),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O2,
+            artifacts: OutputArtifacts::default(),
+            verbose: false,
+            opt_report: false,
+            stack_check: true,
+            stack_report: false,
+            stack_report_file: Some(report.clone()),
+            warning_profile: WarningProfile::default(),
+        }),
+    })
+    .expect("compile with stack report file");
 
-    assert!(error.contains("dynamic `Multiply`"));
+    let text = fs::read_to_string(report).expect("stack report");
+    assert!(text.contains("helper_extra="));
+    assert!(text.contains("main"));
 }
 
 #[test]
@@ -2664,6 +2713,24 @@ fn phase23_examples_compile_via_picc() {
         ("pic16f877a", "examples/pic16f877a/fixed_rom_table.c"),
         ("pic16f877a", "examples/pic16f877a/fixed_calibration.c"),
         ("pic16f877a", "examples/pic16f877a/fixed_conversion.c"),
+    ];
+
+    for (target, path) in examples {
+        let output = compile_example(target, path);
+        assert_hex_is_programmable(&output);
+    }
+}
+
+#[test]
+/// Verifies checked-in Phase 24 dynamic Q16.16 examples compile cleanly.
+fn phase24_examples_compile_via_picc() {
+    let examples = [
+        ("pic16f628a", "examples/pic16f628a/fixed_q16_16_dynamic.c"),
+        ("pic16f877a", "examples/pic16f877a/fixed_q16_16_muldiv.c"),
+        (
+            "pic16f877a",
+            "examples/pic16f877a/fixed_q16_16_sensor_scale.c",
+        ),
     ];
 
     for (target, path) in examples {

@@ -2,9 +2,9 @@
 
 # General Architecture
 
-Phase 23 extends the fixed-point layer with explicit decimal literals and fixed-point ROM calibration tables while preserving the Stack-first ABI and PIC16 `midrange14` backend. The compiler treats Q8.8 values as 2-byte raw fixed storage and Q16.16 values as 4-byte raw fixed storage across frontend typing, IR temps, stack frames, globals, aggregates, ROM tables, and simulator validation.
+Phase 24 extends the fixed-point layer with dynamic Q16.16/UQ16.16 multiply and divide helpers while preserving the Stack-first ABI and PIC16 `midrange14` backend. The compiler treats Q8.8 values as 2-byte raw fixed storage and Q16.16 values as 4-byte raw fixed storage across frontend typing, IR temps, stack frames, globals, aggregates, ROM tables, helpers, and simulator validation.
 
-Phase 21 32-bit integers remain the raw intermediate foundation for Q8.8 multiply/divide. Q16.16 multiply/divide constants are folded exactly; dynamic Q16.16 helper-backed operations remain deferred until the helper path is split safely across PIC14 pages.
+Phase 21 32-bit integers remain the raw intermediate foundation for Q8.8 multiply/divide. Q16.16 multiply/divide constants are folded exactly; dynamic Q16.16 helper-backed operations lower through page-safe fixed-point runtime helpers without exposing public `long long`.
 
 `pic16cc` separates:
 
@@ -16,7 +16,7 @@ Phase 21 32-bit integers remain the raw intermediate foundation for Q8.8 multipl
 
 Target backend is classic 14-bit PIC16 mid-range family, not a generic 8-bit CPU model.
 
-Current Phase 23 keeps that split intact while extending:
+Current Phase 24 keeps that split intact while extending:
 
 - stack-first caller-pushed ABI
 - fixed-point frontend typing, raw constructors, casts, and diagnostics
@@ -53,9 +53,10 @@ Current Phase 23 keeps that split intact while extending:
 - Phase 20 optional `pic16-sim` CLI for running HEX files, resolving map symbols, printing state, and tracing instructions
 - Phase 21 controlled 32-bit integer storage, ABI, helpers, and simulator validation
 - Phase 23 fixed decimal literals, fixed ROM calibration tables, and simulator-validated fixed constant folding/ROM reads
+- Phase 24 dynamic Q16.16/UQ16.16 multiply/divide helpers with simulator validation
 - PIC16 banking/paging without backend duplication per device
 
-Phase 23 keeps the compiler layering unchanged:
+Phase 24 keeps the compiler layering unchanged:
 
 - frontend still produces typed trees only
 - IR still stays target-aware but encoding-agnostic

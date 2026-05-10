@@ -33,9 +33,9 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 23: fixed-point completeness and ROM calibration tables on top of Phase 22 fixed-point arithmetic, Phase 21 controlled 32-bit integers, Phase 20 simulator CLI/debugging workflow, Phase 19 emulator-based execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier frontend/backend phases**.
+Current implementation is **Phase 24: dynamic Q16.16 fixed-point helpers on top of Phase 23 fixed literals/ROM tables, Phase 22 fixed-point arithmetic, Phase 21 controlled 32-bit integers, Phase 20 simulator CLI/debugging workflow, Phase 19 emulator-based execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier frontend/backend phases**.
 
-Phase 23 scope:
+Phase 24 scope:
 
 - fixed-point scalar keywords `__fixed8_8`, `__ufixed8_8`, `__fixed16_16`, and `__ufixed16_16`
 - little-endian raw storage: Q8.8/UQ8.8 are 2 bytes; Q16.16/UQ16.16 are 4 bytes
@@ -45,10 +45,11 @@ Phase 23 scope:
 - Q8.8/UQ8.8 add, subtract, compare, multiply, divide, unary negate, and integer/fixed casts
 - fixed-point ROM calibration arrays with direct indexing
 - Q16.16/UQ16.16 add, subtract, compare, casts, storage, and ABI support
-- Q16.16/UQ16.16 multiply/divide constants fold exactly; dynamic helper-backed forms remain deferred
+- Q16.16/UQ16.16 multiply/divide constants fold exactly
+- dynamic Q16.16/UQ16.16 multiply/divide lower through page-safe runtime helpers
 - Q8.8 fixed multiply/divide lower through proven Phase 21 32-bit helper paths; ISR helper restrictions still apply
-- simulator execution tests for casts, fixed decimal literals, fixed ROM reads, Q8.8 arithmetic, calls, aggregates, arrays, UQ8.8 arithmetic, and Q16.16 constant folding
-- conservative diagnostics for unsupported bitwise fixed ops, dynamic Q16.16 helper ops, fixed modulo, fixed division by constant zero, malformed fixed literals, and unsafe implicit fixed conversions
+- simulator execution tests for casts, fixed decimal literals, fixed ROM reads, Q8.8 arithmetic, calls, aggregates, arrays, UQ8.8 arithmetic, Q16.16 constant folding, and dynamic Q16.16 helpers
+- conservative diagnostics for unsupported bitwise fixed ops, fixed modulo, fixed division by constant zero, malformed fixed literals, ISR helper use, and unsafe implicit fixed conversions
 - no IEEE float, recursion, or advanced optimization work
 
 Phase 21 scope:
@@ -202,6 +203,7 @@ What changed from Phase 3:
 - Phase 21 adds controlled 32-bit `long` / `unsigned long` storage, ABI, arithmetic, helpers, and simulator validation
 - Phase 22 adds explicit fixed-point scalar types and simulator-validated Q8.8 arithmetic without enabling IEEE float
 - Phase 23 adds fixed decimal literals, fixed ROM calibration tables, and Q16.16 constant folding
+- Phase 24 adds dynamic Q16.16/UQ16.16 multiply/divide helpers without exposing public `long long`
 - active docs now describe stack-first behavior; old Phase 2/3 docs remain historical
 
 Historical milestone snapshots below describe what each phase introduced at the time. The current supported subset is summarized later under `Supported Subset`, `Current constraints`, and `Current Limits`.
@@ -902,6 +904,7 @@ picc --list-targets
 - [examples/pic16f628a/casts.c](examples/pic16f628a/casts.c)
 - [examples/pic16f628a/function_pointer_basic.c](examples/pic16f628a/function_pointer_basic.c)
 - [examples/pic16f628a/fixed_literals.c](examples/pic16f628a/fixed_literals.c)
+- [examples/pic16f628a/fixed_q16_16_dynamic.c](examples/pic16f628a/fixed_q16_16_dynamic.c)
 - [examples/pic16f628a/pointer_to_pointer.c](examples/pic16f628a/pointer_to_pointer.c)
 - [examples/pic16f628a/rom_index.c](examples/pic16f628a/rom_index.c)
 - [examples/pic16f628a/rom_table.c](examples/pic16f628a/rom_table.c)
@@ -925,6 +928,8 @@ picc --list-targets
 - [examples/pic16f877a/function_pointer_struct.c](examples/pic16f877a/function_pointer_struct.c)
 - [examples/pic16f877a/function_pointer_table.c](examples/pic16f877a/function_pointer_table.c)
 - [examples/pic16f877a/fixed_q16_16_arithmetic.c](examples/pic16f877a/fixed_q16_16_arithmetic.c)
+- [examples/pic16f877a/fixed_q16_16_muldiv.c](examples/pic16f877a/fixed_q16_16_muldiv.c)
+- [examples/pic16f877a/fixed_q16_16_sensor_scale.c](examples/pic16f877a/fixed_q16_16_sensor_scale.c)
 - [examples/pic16f877a/fixed_rom_table.c](examples/pic16f877a/fixed_rom_table.c)
 - [examples/pic16f877a/fixed_calibration.c](examples/pic16f877a/fixed_calibration.c)
 - [examples/pic16f877a/fixed_conversion.c](examples/pic16f877a/fixed_conversion.c)
@@ -993,6 +998,7 @@ picc --list-targets
 - [docs/ir/phase17-indirect-call-lowering.md](docs/ir/phase17-indirect-call-lowering.md)
 - [docs/ir/phase18-call-graph.md](docs/ir/phase18-call-graph.md)
 - [docs/ir/phase23-fixed-constant-folding.md](docs/ir/phase23-fixed-constant-folding.md)
+- [docs/ir/phase24-fixed-dynamic-lowering.md](docs/ir/phase24-fixed-dynamic-lowering.md)
 - [docs/ir/phase9-switch-lowering.md](docs/ir/phase9-switch-lowering.md)
 - [docs/frontend/phase10-string-literals.md](docs/frontend/phase10-string-literals.md)
 - [docs/frontend/phase11-aggregates.md](docs/frontend/phase11-aggregates.md)
@@ -1009,6 +1015,7 @@ picc --list-targets
 - [docs/sim/pic16-core-emulator.md](docs/sim/pic16-core-emulator.md)
 - [docs/runtime/phase5-arithmetic-helpers.md](docs/runtime/phase5-arithmetic-helpers.md)
 - [docs/runtime/phase23-q16-16-helpers.md](docs/runtime/phase23-q16-16-helpers.md)
+- [docs/runtime/phase24-q16-16-dynamic-helpers.md](docs/runtime/phase24-q16-16-dynamic-helpers.md)
 - [docs/migration/phase3-to-phase4-abi.md](docs/migration/phase3-to-phase4-abi.md)
 - [docs/developer-guide/adding-device.md](docs/developer-guide/adding-device.md)
 
@@ -1021,4 +1028,4 @@ picc --list-targets
 
 ## Current Limits
 
-Phase 23 adds fixed decimal literals and fixed ROM calibration tables, but current hard limits remain: no general ROM pointer model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no function-pointer calls inside ISR, no dynamic Q16.16 multiply/divide helper path, no raw computed PIC16 indirect calls, no `float`, and no recursion. The emulator is intentionally core-only: no full peripheral timing model, no asynchronous interrupt scheduling, and no claim of complete PIC16 device emulation.
+Phase 24 adds dynamic Q16.16/UQ16.16 multiply/divide helpers, but current hard limits remain: no general ROM pointer model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no function-pointer calls inside ISR, no fixed-point modulo, no raw computed PIC16 indirect calls, no `float`, and no recursion. Q16.16 helpers are large; small targets can reject helper-heavy call chains through existing stack/program constraints. The emulator is intentionally core-only: no full peripheral timing model, no asynchronous interrupt scheduling, and no claim of complete PIC16 device emulation.

@@ -2,7 +2,7 @@
 
 # Frontend
 
-Phase 23 frontend support adds explicit fixed-point decimal literals and ROM calibration tables on top of the Phase 22 scalar types `__fixed8_8`, `__ufixed8_8`, `__fixed16_16`, and `__ufixed16_16`. Raw constructors `__q8_8(raw)`, `__uq8_8(raw)`, `__q16_16(raw)`, and `__uq16_16(raw)` remain available.
+Phase 24 frontend support accepts dynamic Q16.16/UQ16.16 multiply and divide expressions instead of rejecting them. Phase 23 fixed-point decimal literals and ROM calibration tables remain supported on top of the Phase 22 scalar types `__fixed8_8`, `__ufixed8_8`, `__fixed16_16`, and `__ufixed16_16`. Raw constructors `__q8_8(raw)`, `__uq8_8(raw)`, `__q16_16(raw)`, and `__uq16_16(raw)` remain available.
 
 Phase 21 frontend support remains: `long`, `signed long`, `unsigned long`, and integer suffixes `U`, `L`, `UL`, and `LU`. The semantic model warns on implicit narrowing from 32-bit values and rejects literals outside the supported 32-bit range.
 
@@ -50,7 +50,7 @@ Current Phase 18 frontend surface:
 - rejects fixed bitwise operations unless the program casts to a raw integer type first
 - accepts fixed decimal literals with `q8_8`, `uq8_8`, `q16_16`, and `uq16_16` suffixes
 - accepts one-dimensional fixed-point `const __rom` arrays for direct indexing
-- folds Q16.16 fixed multiply/divide constants and rejects dynamic Q16.16 helper-backed multiply/divide
+- folds Q16.16 fixed multiply/divide constants and accepts dynamic Q16.16 helper-backed multiply/divide outside ISRs
 - validates pointer relational comparisons for compatible data-space pointer types
 - validates pointer subtraction for compatible data-space pointer types with 1-byte or 2-byte elements
 - parses explicit `__rom` declarations for file-scope 8-bit/16-bit integer arrays

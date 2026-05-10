@@ -1,5 +1,6 @@
 /target
 /build
+/.continue
 *.hex
 *.map
 *.lst

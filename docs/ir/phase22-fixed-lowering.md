@@ -50,7 +50,7 @@ wide = raw_a_32 << 8
 raw_result = wide / raw_b_32
 ```
 
-Phase 23 folds Q16.16 multiply/divide constants before backend emission. Dynamic Q16.16 multiply/divide are rejected before IR generation.
+Phase 23 folds Q16.16 multiply/divide constants before backend emission. Phase 24 accepts dynamic Q16.16/UQ16.16 multiply/divide outside ISRs and leaves them as typed helper-backed binary operations for backend lowering.
 
 Phase 23 fixed ROM tables lower direct indexing as:
 

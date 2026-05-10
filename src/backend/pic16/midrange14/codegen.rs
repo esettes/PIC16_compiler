@@ -888,6 +888,7 @@ impl<'a> CodegenContext<'a> {
         self.program
             .push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
         self.program.push(AsmLine::Instr(AsmInstr::Call(label)));
+        self.restore_code_page_after_call();
         self.program.push(AsmLine::Label("__halt".to_string()));
         self.program
             .push(AsmLine::Instr(AsmInstr::SetPage("__halt".to_string())));
@@ -1185,6 +1186,7 @@ impl<'a> CodegenContext<'a> {
         self.program
             .push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
         self.program.push(AsmLine::Instr(AsmInstr::Call(label)));
+        self.restore_code_page_after_call();
 
         if dst.is_some() {
             self.store_w_to_addr(self.layout.helpers.w_save);
@@ -1274,6 +1276,7 @@ impl<'a> CodegenContext<'a> {
         self.program
             .push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
         self.program.push(AsmLine::Instr(AsmInstr::Call(label)));
+        self.restore_code_page_after_call();
 
         if dst.is_some() {
             self.store_w_to_addr(self.layout.helpers.w_save);
@@ -1652,6 +1655,7 @@ impl<'a> CodegenContext<'a> {
         self.program
             .push(AsmLine::Instr(AsmInstr::SetPclPage(label.clone())));
         self.program.push(AsmLine::Instr(AsmInstr::Call(label)));
+        self.restore_code_page_after_call();
     }
 
     /// Returns the flattened ROM byte payload for one declared program-memory object.
@@ -2326,6 +2330,7 @@ impl<'a> CodegenContext<'a> {
             .push(AsmLine::Instr(AsmInstr::SetPage(info.label.to_string())));
         self.program
             .push(AsmLine::Instr(AsmInstr::Call(info.label.to_string())));
+        self.restore_code_page_after_call();
         self.store_w_to_addr(self.layout.helpers.w_save);
         self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(info.arg_bytes));
         self.load_addr_to_w(self.layout.helpers.w_save);
@@ -2882,11 +2887,13 @@ impl<'a> CodegenContext<'a> {
     ) {
         self.prepare_pointer_from_pair(self.layout.helpers.frame_ptr, offset);
         self.select_bank(INDF_ADDR);
+        self.restore_code_page_after_call();
         self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
             f: low7(INDF_ADDR),
             b: bit,
         }));
         self.branch_to_label(set_label);
+        self.restore_code_page_after_call();
         self.branch_to_label(clear_label);
     }
 
@@ -2908,12 +2915,14 @@ impl<'a> CodegenContext<'a> {
     ) {
         for byte in 0..ty.byte_width() {
             self.load_current_frame_byte_to_w(offset + byte as u16);
+            self.restore_code_page_after_call();
             self.program.push(AsmLine::Instr(AsmInstr::Btfss {
                 f: low7(STATUS_ADDR),
                 b: STATUS_Z_BIT,
             }));
             self.branch_to_label(then_label);
         }
+        self.restore_code_page_after_call();
         self.branch_to_label(else_label);
     }
 
@@ -2942,24 +2951,29 @@ impl<'a> CodegenContext<'a> {
             self.compare_current_frame_byte(lhs_offset, rhs_offset, byte);
             if byte != 0 {
                 let next_label = self.unique_label("rt_cmp_next");
+                self.restore_code_page_after_call();
                 self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
                     f: low7(STATUS_ADDR),
                     b: STATUS_Z_BIT,
                 }));
                 self.branch_to_label(&next_label);
+                self.restore_code_page_after_call();
                 self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
                     f: low7(STATUS_ADDR),
                     b: STATUS_C_BIT,
                 }));
                 self.branch_to_label(ge_label);
+                self.restore_code_page_after_call();
                 self.branch_to_label(lt_label);
                 self.program.push(AsmLine::Label(next_label));
             } else {
+                self.restore_code_page_after_call();
                 self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
                     f: low7(STATUS_ADDR),
                     b: STATUS_C_BIT,
                 }));
                 self.branch_to_label(ge_label);
+                self.restore_code_page_after_call();
                 self.branch_to_label(lt_label);
             }
         }
@@ -3018,6 +3032,7 @@ impl<'a> CodegenContext<'a> {
             if byte != 0 {
                 let no_borrow = self.unique_label("rt_sub_no_borrow");
                 self.clear_addr(self.layout.helpers.scratch1);
+                self.restore_code_page_after_call();
                 self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
                     f: low7(STATUS_ADDR),
                     b: STATUS_C_BIT,
@@ -3064,6 +3079,7 @@ impl<'a> CodegenContext<'a> {
             if byte != 0 {
                 let no_borrow = self.unique_label("rt_neg_no_borrow");
                 self.clear_addr(self.layout.helpers.scratch1);
+                self.restore_code_page_after_call();
                 self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
                     f: low7(STATUS_ADDR),
                     b: STATUS_C_BIT,
@@ -3471,6 +3487,14 @@ impl<'a> CodegenContext<'a> {
         self.program
             .push(AsmLine::Instr(AsmInstr::Goto(label.to_string())));
         self.program.push(AsmLine::Label(after_label));
+    }
+
+    /// Restores PCLATH page bits to the next local instruction after a CALL returns.
+    fn restore_code_page_after_call(&mut self) {
+        let label = self.unique_label("after_call");
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage(label.clone())));
+        self.program.push(AsmLine::Label(label));
     }
 
     /// Updates STATUS bank bits when an address lives outside the current bank.
@@ -4024,11 +4048,13 @@ impl<'a> CodegenContext<'a> {
         let arg0_offset = 0u16;
         let arg1_offset = ty.byte_width() as u16;
         let result32_offset = local_base;
-        let lhs32_offset = result32_offset + 4;
-        let rhs32_offset = lhs32_offset + 4;
-        let work32_offset = rhs32_offset + 4;
+        let multiplicand32_offset = result32_offset + 4;
+        let multiplier16_offset = multiplicand32_offset + 4;
+        let work32_offset = multiplier16_offset + 2;
         let count_offset = work32_offset + 4;
         let flag_offset = count_offset + 1;
+        let core_label = self.unique_label("rt_q16mul16_core");
+        let done_label = self.unique_label("rt_q16mul_done");
 
         if signed {
             self.clear_current_frame_slot(flag_offset, Type::new(ScalarType::U8));
@@ -4040,50 +4066,60 @@ impl<'a> CodegenContext<'a> {
             arg0_offset,
             arg1_offset,
             -16,
-            lhs32_offset,
-            rhs32_offset,
+            multiplicand32_offset,
+            multiplier16_offset,
             work32_offset,
-            count_offset,
+            &core_label,
             result32_offset,
         );
         self.emit_fixed_q16_16_mul_partial(
             arg0_offset + 2,
             arg1_offset,
             0,
-            lhs32_offset,
-            rhs32_offset,
+            multiplicand32_offset,
+            multiplier16_offset,
             work32_offset,
-            count_offset,
+            &core_label,
             result32_offset,
         );
         self.emit_fixed_q16_16_mul_partial(
             arg0_offset,
             arg1_offset + 2,
             0,
-            lhs32_offset,
-            rhs32_offset,
+            multiplicand32_offset,
+            multiplier16_offset,
             work32_offset,
-            count_offset,
+            &core_label,
             result32_offset,
         );
         self.emit_fixed_q16_16_mul_partial(
             arg0_offset + 2,
             arg1_offset + 2,
             16,
-            lhs32_offset,
-            rhs32_offset,
+            multiplicand32_offset,
+            multiplier16_offset,
             work32_offset,
-            count_offset,
+            &core_label,
             result32_offset,
         );
         if signed {
             let negate_label = self.unique_label("rt_q16mul_neg");
-            let done_label = self.unique_label("rt_q16mul_done");
-            self.branch_on_current_frame_bit(flag_offset, 0, &negate_label, &done_label);
+            let sign_done_label = self.unique_label("rt_q16mul_sign_done");
+            self.restore_code_page_after_call();
+            self.branch_on_current_frame_bit(flag_offset, 0, &negate_label, &sign_done_label);
             self.program.push(AsmLine::Label(negate_label));
             self.negate_current_frame_value(result32_offset, ty);
-            self.program.push(AsmLine::Label(done_label));
+            self.program.push(AsmLine::Label(sign_done_label));
         }
+        self.branch_to_label(&done_label);
+        self.program.push(AsmLine::Label(core_label));
+        self.emit_fixed_q16_16_mul16_core(
+            multiplicand32_offset,
+            multiplier16_offset,
+            work32_offset,
+            count_offset,
+        );
+        self.program.push(AsmLine::Label(done_label));
         self.emit_return_current_frame_value(result32_offset, ty);
     }
 
@@ -4094,37 +4130,71 @@ impl<'a> CodegenContext<'a> {
         lhs_src_offset: u16,
         rhs_src_offset: u16,
         product_shift: i8,
-        lhs32_offset: u16,
-        rhs32_offset: u16,
+        multiplicand32_offset: u16,
+        multiplier16_offset: u16,
         work32_offset: u16,
-        count_offset: u16,
+        core_label: &str,
         result32_offset: u16,
     ) {
         let work_ty = Type::new(ScalarType::U32);
-        self.clear_current_frame_slot(lhs32_offset, work_ty);
-        self.clear_current_frame_slot(rhs32_offset, work_ty);
-        self.clear_current_frame_slot(work32_offset, work_ty);
-        self.copy_current_frame_bytes(lhs_src_offset, lhs32_offset, 2);
-        self.copy_current_frame_bytes(rhs_src_offset, rhs32_offset, 2);
-        self.emit_const_to_w(16);
-        self.store_w_to_current_frame_byte(count_offset);
-        self.emit_unsigned_mul_core(
-            lhs32_offset,
-            rhs32_offset,
-            work32_offset,
-            count_offset,
-            work_ty,
-        );
+        self.clear_current_frame_slot(multiplicand32_offset, work_ty);
+        self.clear_current_frame_slot(multiplier16_offset, Type::new(ScalarType::U16));
+        self.copy_current_frame_bytes(lhs_src_offset, multiplicand32_offset, 2);
+        self.copy_current_frame_bytes(rhs_src_offset, multiplier16_offset, 2);
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage(core_label.to_string())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Call(core_label.to_string())));
+        self.restore_code_page_after_call();
+        self.current_bank = UNKNOWN_BANK;
         if product_shift < 0 {
-            for _ in 0..(-product_shift) {
-                self.shift_current_frame_value_right(work32_offset, work_ty, false);
-            }
+            self.shift_current_frame_value_right_16(work32_offset);
         } else {
-            for _ in 0..product_shift {
-                self.shift_current_frame_value_left(work32_offset, work_ty);
+            for _ in 0..product_shift / 16 {
+                self.shift_current_frame_value_left_16(work32_offset);
             }
         }
         self.add_current_frame_value_into_slot(work32_offset, result32_offset, work_ty);
+    }
+
+    /// Local helper subroutine: 16x16 unsigned multiply into one 32-bit work slot.
+    fn emit_fixed_q16_16_mul16_core(
+        &mut self,
+        multiplicand32_offset: u16,
+        multiplier16_offset: u16,
+        work32_offset: u16,
+        count_offset: u16,
+    ) {
+        let work_ty = Type::new(ScalarType::U32);
+        let multiplier_ty = Type::new(ScalarType::U16);
+        let loop_label = self.unique_label("rt_q16mul16_loop");
+        let body_label = self.unique_label("rt_q16mul16_body");
+        let add_label = self.unique_label("rt_q16mul16_add");
+        let next_label = self.unique_label("rt_q16mul16_next");
+        let done_label = self.unique_label("rt_q16mul16_done");
+
+        self.clear_current_frame_slot(work32_offset, work_ty);
+        self.emit_const_to_w(16);
+        self.store_w_to_current_frame_byte(count_offset);
+        self.program.push(AsmLine::Label(loop_label.clone()));
+        self.emit_current_frame_nonzero_branch(
+            count_offset,
+            Type::new(ScalarType::U8),
+            &body_label,
+            &done_label,
+        );
+        self.program.push(AsmLine::Label(body_label));
+        self.branch_on_current_frame_bit(multiplier16_offset, 0, &add_label, &next_label);
+        self.program.push(AsmLine::Label(add_label));
+        self.add_current_frame_value_into_slot(multiplicand32_offset, work32_offset, work_ty);
+        self.program.push(AsmLine::Label(next_label));
+        self.shift_current_frame_value_left(multiplicand32_offset, work_ty);
+        self.shift_current_frame_value_right(multiplier16_offset, multiplier_ty, false);
+        self.decrement_current_frame_value(count_offset, Type::new(ScalarType::U8));
+        self.restore_code_page_after_call();
+        self.branch_to_label(&loop_label);
+        self.program.push(AsmLine::Label(done_label));
+        self.program.push(AsmLine::Instr(AsmInstr::Return));
     }
 
     /// Emits Q16.16 fixed divide using a 32-bit divide plus 16 fractional restoring steps.
@@ -4167,7 +4237,19 @@ impl<'a> CodegenContext<'a> {
         self.clear_current_frame_slot(remainder32_offset, work_ty);
         self.branch_to_label(&finish_label);
         self.program.push(AsmLine::Label(fraction_label));
-        for _ in 0..16 {
+        self.emit_const_to_w(16);
+        self.store_w_to_current_frame_byte(count_offset);
+        let loop_label = self.unique_label("rt_q16div_frac_loop");
+        let body_label = self.unique_label("rt_q16div_frac_body");
+        self.program.push(AsmLine::Label(loop_label.clone()));
+        self.emit_current_frame_nonzero_branch(
+            count_offset,
+            Type::new(ScalarType::U8),
+            &body_label,
+            &finish_label,
+        );
+        self.program.push(AsmLine::Label(body_label));
+        {
             self.shift_current_frame_value_left(quotient32_offset, work_ty);
             self.shift_current_frame_value_left(remainder32_offset, work_ty);
             let subtract_label = self.unique_label("rt_q16div_sub");
@@ -4189,6 +4271,8 @@ impl<'a> CodegenContext<'a> {
             self.set_current_frame_bit(quotient32_offset, 0);
             self.program.push(AsmLine::Label(next_label));
         }
+        self.decrement_current_frame_value(count_offset, Type::new(ScalarType::U8));
+        self.branch_to_label(&loop_label);
         self.program.push(AsmLine::Label(finish_label));
         if signed {
             let negate_label = self.unique_label("rt_q16div_neg");
@@ -4199,6 +4283,30 @@ impl<'a> CodegenContext<'a> {
             self.program.push(AsmLine::Label(done_label));
         }
         self.emit_return_current_frame_value(quotient32_offset, ty);
+    }
+
+    /// Applies a 16-bit logical left shift to one 32-bit frame slot using byte moves.
+    fn shift_current_frame_value_left_16(&mut self, offset: u16) {
+        self.load_current_frame_byte_to_w(offset + 1);
+        self.store_w_to_current_frame_byte(offset + 3);
+        self.load_current_frame_byte_to_w(offset);
+        self.store_w_to_current_frame_byte(offset + 2);
+        self.emit_const_to_w(0);
+        self.store_w_to_current_frame_byte(offset);
+        self.emit_const_to_w(0);
+        self.store_w_to_current_frame_byte(offset + 1);
+    }
+
+    /// Applies a 16-bit logical right shift to one 32-bit frame slot using byte moves.
+    fn shift_current_frame_value_right_16(&mut self, offset: u16) {
+        self.load_current_frame_byte_to_w(offset + 2);
+        self.store_w_to_current_frame_byte(offset);
+        self.load_current_frame_byte_to_w(offset + 3);
+        self.store_w_to_current_frame_byte(offset + 1);
+        self.emit_const_to_w(0);
+        self.store_w_to_current_frame_byte(offset + 2);
+        self.emit_const_to_w(0);
+        self.store_w_to_current_frame_byte(offset + 3);
     }
 
     /// Copies contiguous bytes inside the active helper frame.
@@ -4539,6 +4647,7 @@ impl<'a> CodegenContext<'a> {
                     .push(AsmLine::Instr(AsmInstr::SetPage(callee_label.clone())));
                 self.program
                     .push(AsmLine::Instr(AsmInstr::Call(callee_label)));
+                self.restore_code_page_after_call();
                 self.branch_to_label(&done_label);
                 self.program.push(AsmLine::Label(next_label));
             }

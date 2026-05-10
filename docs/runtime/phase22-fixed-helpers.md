@@ -29,4 +29,9 @@ Phase 23 updates:
 - fixed decimal literals are parsed and folded before helper lowering
 - fixed-point ROM tables are supported through direct indexing
 - Q16.16 multiply/divide constants are folded exactly
-- dynamic Q16.16 multiply/divide remain rejected until the helper body can be split into page-safe PIC14 chunks
+
+Phase 24 updates:
+
+- dynamic Q16.16/UQ16.16 multiply and divide lower to page-safe runtime helpers
+- signed Q16.16 helpers normalize signs, use the unsigned core, and restore the final sign
+- dynamic fixed division by zero returns raw zero, matching integer helper policy

@@ -22,4 +22,4 @@ Folded operations:
 
 Division by constant fixed zero is diagnosed before lowering.
 
-Dynamic Q16.16 multiply/divide do not lower to IR helper calls in Phase 23. The semantic pass rejects them explicitly to avoid emitting oversized page-crossing helper code.
+Phase 24 adds dynamic Q16.16/UQ16.16 helper lowering for non-constant operands. Constant folding still runs first, so compile-time expressions do not emit helper calls.
