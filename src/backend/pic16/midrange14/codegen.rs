@@ -217,6 +217,7 @@ enum ResourceContributionKind {
     Function,
     RuntimeHelper,
     FixedPointHelper,
+    FloatHelper,
     ShiftHelper,
     FunctionPointerDispatcher,
     RomTable,
@@ -230,6 +231,7 @@ impl Display for ResourceContributionKind {
             Self::Function => "function",
             Self::RuntimeHelper => "runtime helper",
             Self::FixedPointHelper => "fixed-point helper",
+            Self::FloatHelper => "float helper",
             Self::ShiftHelper => "shift helper",
             Self::FunctionPointerDispatcher => "function pointer dispatcher",
             Self::RomTable => "ROM RETLW table",
@@ -265,11 +267,23 @@ fn type_has_32bit_scalar(ty: Type) -> bool {
     if ty.is_function_pointer() {
         return matches!(
             ty.function_return_scalar(),
-            Some(ScalarType::I32 | ScalarType::U32 | ScalarType::Q16_16 | ScalarType::UQ16_16)
+            Some(
+                ScalarType::I32
+                    | ScalarType::U32
+                    | ScalarType::F32
+                    | ScalarType::Q16_16
+                    | ScalarType::UQ16_16,
+            )
         ) || (0..ty.function_param_len().unwrap_or(0)).any(|index| {
             matches!(
                 ty.function_param_scalar(index),
-                Some(ScalarType::I32 | ScalarType::U32 | ScalarType::Q16_16 | ScalarType::UQ16_16)
+                Some(
+                    ScalarType::I32
+                        | ScalarType::U32
+                        | ScalarType::F32
+                        | ScalarType::Q16_16
+                        | ScalarType::UQ16_16,
+                )
             )
         });
     }
@@ -279,7 +293,11 @@ fn type_has_32bit_scalar(ty: Type) -> bool {
     ty.pointer_depth == 0
         && matches!(
             ty.scalar,
-            ScalarType::I32 | ScalarType::U32 | ScalarType::Q16_16 | ScalarType::UQ16_16
+            ScalarType::I32
+                | ScalarType::U32
+                | ScalarType::F32
+                | ScalarType::Q16_16
+                | ScalarType::UQ16_16
         )
 }
 
@@ -1083,7 +1101,25 @@ impl<'a> CodegenContext<'a> {
             IrInstr::Binary { dst, op, lhs, rhs } => {
                 let dst_ty = function.temp_types[*dst];
                 match op {
+                    BinaryOp::Add if dst_ty.is_float() => self.emit_runtime_binary_call(
+                        function,
+                        *op,
+                        *lhs,
+                        *rhs,
+                        dst_ty,
+                        *dst,
+                        diagnostics,
+                    ),
                     BinaryOp::Add => self.emit_add(function.symbol, *lhs, *rhs, dst_ty, *dst),
+                    BinaryOp::Sub if dst_ty.is_float() => self.emit_runtime_binary_call(
+                        function,
+                        *op,
+                        *lhs,
+                        *rhs,
+                        dst_ty,
+                        *dst,
+                        diagnostics,
+                    ),
                     BinaryOp::Sub => self.emit_sub(function.symbol, *lhs, *rhs, dst_ty, *dst),
                     BinaryOp::BitAnd => {
                         self.emit_per_byte_binary(
@@ -2193,6 +2229,16 @@ impl<'a> CodegenContext<'a> {
 
     /// Emits two's-complement negation for the requested integer width.
     fn emit_negate(&mut self, function_symbol: SymbolId, src: Operand, ty: Type, dst_temp: usize) {
+        if ty.is_float() {
+            for byte in 0..ty.byte_width() {
+                self.load_operand_byte_to_w(function_symbol, src, ty, byte);
+                if byte == 3 {
+                    self.program.push(AsmLine::Instr(AsmInstr::Xorlw(0x80)));
+                }
+                self.store_w_to_temp_byte(function_symbol, dst_temp, byte);
+            }
+            return;
+        }
         for byte in 0..ty.byte_width() {
             self.clear_addr(self.layout.helpers.scratch0);
             self.load_operand_byte_to_w(function_symbol, src, ty, byte);
@@ -2252,6 +2298,58 @@ impl<'a> CodegenContext<'a> {
         let function_symbol = function.symbol;
         let lhs_const = constant_operand_value(lhs, ty);
         let rhs_const = constant_operand_value(rhs, ty);
+
+        if ty.is_float() {
+            match op {
+                BinaryOp::Multiply => {
+                    if lhs_const == Some(0) || rhs_const == Some(0) {
+                        self.clear_temp(function_symbol, dst_temp, ty);
+                        self.helper_calls_avoided += 1;
+                        return;
+                    }
+                    if lhs_const == Some(0x3F80_0000) {
+                        self.copy_operand_to_temp(function_symbol, rhs, ty, dst_temp);
+                        self.helper_calls_avoided += 1;
+                        return;
+                    }
+                    if rhs_const == Some(0x3F80_0000) {
+                        self.copy_operand_to_temp(function_symbol, lhs, ty, dst_temp);
+                        self.helper_calls_avoided += 1;
+                        return;
+                    }
+                    if lhs_const == Some(0x4000_0000) {
+                        self.emit_float_scale_by_power_of_two(function_symbol, rhs, dst_temp, 1);
+                        self.helper_calls_avoided += 1;
+                        return;
+                    }
+                    if rhs_const == Some(0x4000_0000) {
+                        self.emit_float_scale_by_power_of_two(function_symbol, lhs, dst_temp, 1);
+                        self.helper_calls_avoided += 1;
+                        return;
+                    }
+                }
+                BinaryOp::Divide => {
+                    if lhs_const == Some(0) {
+                        self.clear_temp(function_symbol, dst_temp, ty);
+                        self.helper_calls_avoided += 1;
+                        return;
+                    }
+                    if rhs_const == Some(0x3F80_0000) {
+                        self.copy_operand_to_temp(function_symbol, lhs, ty, dst_temp);
+                        self.helper_calls_avoided += 1;
+                        return;
+                    }
+                    if rhs_const == Some(0x4000_0000) {
+                        self.emit_float_scale_by_power_of_two(function_symbol, lhs, dst_temp, -1);
+                        self.helper_calls_avoided += 1;
+                        return;
+                    }
+                }
+                _ => {}
+            }
+            self.emit_runtime_binary_call(function, op, lhs, rhs, ty, dst_temp, diagnostics);
+            return;
+        }
 
         if ty.is_fixed() {
             self.emit_runtime_binary_call(function, op, lhs, rhs, ty, dst_temp, diagnostics);
@@ -2383,6 +2481,69 @@ impl<'a> CodegenContext<'a> {
             }
             self.store_w_to_temp_byte(function_symbol, dst_temp, byte);
         }
+    }
+
+    /// Applies a narrow finite f32 exponent delta used for common `* 2.0f` and `/ 2.0f`.
+    fn emit_float_scale_by_power_of_two(
+        &mut self,
+        function_symbol: SymbolId,
+        src: Operand,
+        dst_temp: usize,
+        exponent_delta: i8,
+    ) {
+        let ty = Type::new(ScalarType::F32);
+        self.copy_operand_to_temp(function_symbol, src, ty, dst_temp);
+        let offset = self.temp_offset(function_symbol, dst_temp);
+        let byte2 = offset + 2;
+        let byte3 = offset + 3;
+        let set_low_label = self.unique_label("f32_exp_set_low");
+        let adjust_high_label = self.unique_label("f32_exp_adjust_high");
+        let done_label = self.unique_label("f32_exp_done");
+
+        self.prepare_pointer_from_pair(self.layout.helpers.frame_ptr, byte2);
+        self.select_bank(INDF_ADDR);
+        if exponent_delta > 0 {
+            self.program.push(AsmLine::Instr(AsmInstr::Btfss {
+                f: low7(INDF_ADDR),
+                b: 7,
+            }));
+            self.branch_to_label(&set_low_label);
+            self.program.push(AsmLine::Instr(AsmInstr::Bcf {
+                f: low7(INDF_ADDR),
+                b: 7,
+            }));
+            self.branch_to_label(&adjust_high_label);
+            self.program.push(AsmLine::Label(set_low_label));
+            self.program.push(AsmLine::Instr(AsmInstr::Bsf {
+                f: low7(INDF_ADDR),
+                b: 7,
+            }));
+            self.branch_to_label(&done_label);
+            self.program.push(AsmLine::Label(adjust_high_label));
+            self.load_frame_byte_to_w(function_symbol, byte3);
+            self.program.push(AsmLine::Instr(AsmInstr::Addlw(1)));
+            self.store_w_to_frame_byte(function_symbol, byte3);
+        } else {
+            self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
+                f: low7(INDF_ADDR),
+                b: 7,
+            }));
+            self.branch_to_label(&adjust_high_label);
+            self.program.push(AsmLine::Instr(AsmInstr::Bsf {
+                f: low7(INDF_ADDR),
+                b: 7,
+            }));
+            self.load_frame_byte_to_w(function_symbol, byte3);
+            self.program.push(AsmLine::Instr(AsmInstr::Addlw(0xFF)));
+            self.store_w_to_frame_byte(function_symbol, byte3);
+            self.branch_to_label(&done_label);
+            self.program.push(AsmLine::Label(adjust_high_label));
+            self.program.push(AsmLine::Instr(AsmInstr::Bcf {
+                f: low7(INDF_ADDR),
+                b: 7,
+            }));
+        }
+        self.program.push(AsmLine::Label(done_label));
     }
 
     /// Emits one helper call for a Phase 5 arithmetic operation under the stack-first ABI.
@@ -3844,6 +4005,12 @@ impl<'a> CodegenContext<'a> {
         self.emit_runtime_prologue(info);
 
         match helper {
+            RuntimeHelper::F32Add
+            | RuntimeHelper::F32Sub
+            | RuntimeHelper::F32Mul
+            | RuntimeHelper::F32Div => {
+                self.emit_float_f32_binary_helper(helper, local_base);
+            }
             RuntimeHelper::MulQ8_8 | RuntimeHelper::MulUQ8_8 => {
                 self.emit_fixed_q8_8_mul_helper(
                     ty,
@@ -4038,6 +4205,295 @@ impl<'a> CodegenContext<'a> {
 
         self.emit_runtime_epilogue(info);
         self.program.push(AsmLine::Instr(AsmInstr::Return));
+    }
+
+    /// Emits Phase 27 finite f32 arithmetic through an internal Q16.16 work format.
+    fn emit_float_f32_binary_helper(&mut self, helper: RuntimeHelper, local_base: u16) {
+        let f32_ty = Type::new(ScalarType::F32);
+        let q_ty = Type::new(ScalarType::I32);
+        let q0_offset = local_base;
+        let q1_offset = q0_offset + 4;
+        let mant_offset = q1_offset + 4;
+        let exp_offset = mant_offset + 4;
+        let count_offset = exp_offset + 1;
+        let const_offset = count_offset + 1;
+        let flag_offset = const_offset + 1;
+        let main_label = self.unique_label("rt_f32_main");
+        let convert_label = self.unique_label("rt_f32_to_q16_call");
+
+        self.branch_to_label(&main_label);
+        self.program.push(AsmLine::Label(convert_label.clone()));
+        self.emit_float_to_q16_frame(
+            0,
+            q1_offset,
+            mant_offset,
+            exp_offset,
+            count_offset,
+            const_offset,
+            flag_offset,
+        );
+        self.program.push(AsmLine::Instr(AsmInstr::Return));
+
+        self.program.push(AsmLine::Label(main_label));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage(convert_label.clone())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Call(convert_label.clone())));
+        self.restore_code_page_after_call();
+        self.copy_current_frame_bytes(q1_offset, q0_offset, 4);
+        self.copy_current_frame_bytes(4, 0, 4);
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage(convert_label.clone())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Call(convert_label)));
+        self.restore_code_page_after_call();
+
+        match helper {
+            RuntimeHelper::F32Add => {
+                self.add_current_frame_value_into_slot(q1_offset, q0_offset, q_ty);
+            }
+            RuntimeHelper::F32Sub => {
+                self.sub_current_frame_value_from_slot(q1_offset, q0_offset, q_ty);
+            }
+            RuntimeHelper::F32Mul => {
+                self.copy_current_frame_bytes(q0_offset, 0, 4);
+                self.copy_current_frame_bytes(q1_offset, 4, 4);
+                self.emit_fixed_q16_16_mul_helper(Type::new(ScalarType::Q16_16), local_base, true);
+                self.store_w_to_current_frame_byte(q0_offset);
+                for byte in 1..4 {
+                    self.load_return_byte_to_w(byte);
+                    self.store_w_to_current_frame_byte(q0_offset + byte as u16);
+                }
+            }
+            RuntimeHelper::F32Div => {
+                self.copy_current_frame_bytes(q0_offset, 0, 4);
+                self.copy_current_frame_bytes(q1_offset, 4, 4);
+                self.emit_fixed_q16_16_div_helper(Type::new(ScalarType::Q16_16), local_base, true);
+                self.store_w_to_current_frame_byte(q0_offset);
+                for byte in 1..4 {
+                    self.load_return_byte_to_w(byte);
+                    self.store_w_to_current_frame_byte(q0_offset + byte as u16);
+                }
+            }
+            _ => unreachable!("float helper"),
+        }
+
+        self.emit_q16_to_float_frame(
+            q0_offset,
+            0,
+            mant_offset,
+            exp_offset,
+            count_offset,
+            flag_offset,
+        );
+        self.emit_return_current_frame_value(0, f32_ty);
+    }
+
+    /// Converts raw little-endian IEEE f32 at `raw_offset` to signed Q16.16 at `q_offset`.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_float_to_q16_frame(
+        &mut self,
+        raw_offset: u16,
+        q_offset: u16,
+        _mant_offset: u16,
+        exp_offset: u16,
+        count_offset: u16,
+        const_offset: u16,
+        flag_offset: u16,
+    ) {
+        let q_ty = Type::new(ScalarType::I32);
+        let u8_ty = Type::new(ScalarType::U8);
+        let nonzero_label = self.unique_label("rt_f32_to_q16_nonzero");
+        let done_label = self.unique_label("rt_f32_to_q16_done");
+        let sign_label = self.unique_label("rt_f32_to_q16_sign");
+        let sign_done_label = self.unique_label("rt_f32_to_q16_sign_done");
+        let exp_low_label = self.unique_label("rt_f32_to_q16_exp_low");
+        let exp_done_label = self.unique_label("rt_f32_to_q16_exp_done");
+        let left_label = self.unique_label("rt_f32_to_q16_left");
+        let right_label = self.unique_label("rt_f32_to_q16_right");
+        let shift_done_label = self.unique_label("rt_f32_to_q16_shift_done");
+        let negate_label = self.unique_label("rt_f32_to_q16_neg");
+        let finish_label = self.unique_label("rt_f32_to_q16_finish");
+
+        self.clear_current_frame_slot(q_offset, q_ty);
+        self.clear_current_frame_slot(flag_offset, u8_ty);
+        self.emit_current_frame_nonzero_branch(
+            raw_offset,
+            Type::new(ScalarType::F32),
+            &nonzero_label,
+            &done_label,
+        );
+        self.program.push(AsmLine::Label(nonzero_label));
+
+        self.branch_on_current_frame_bit(raw_offset + 3, 7, &sign_label, &sign_done_label);
+        self.program.push(AsmLine::Label(sign_label));
+        self.set_current_frame_bit(flag_offset, 0);
+        self.program.push(AsmLine::Label(sign_done_label));
+
+        self.load_current_frame_byte_to_w(raw_offset + 3);
+        self.program.push(AsmLine::Instr(AsmInstr::Andlw(0x7F)));
+        self.store_w_to_current_frame_byte(exp_offset);
+        self.shift_current_frame_value_left(exp_offset, u8_ty);
+        self.branch_on_current_frame_bit(raw_offset + 2, 7, &exp_low_label, &exp_done_label);
+        self.program.push(AsmLine::Label(exp_low_label));
+        self.set_current_frame_bit(exp_offset, 0);
+        self.program.push(AsmLine::Label(exp_done_label));
+
+        self.copy_current_frame_bytes(raw_offset, q_offset, 2);
+        self.load_current_frame_byte_to_w(raw_offset + 2);
+        self.program.push(AsmLine::Instr(AsmInstr::Andlw(0x7F)));
+        self.program.push(AsmLine::Instr(AsmInstr::Iorlw(0x80)));
+        self.store_w_to_current_frame_byte(q_offset + 2);
+        self.emit_const_to_w(0);
+        self.store_w_to_current_frame_byte(q_offset + 3);
+
+        self.emit_const_to_w(134);
+        self.store_w_to_current_frame_byte(const_offset);
+        self.emit_current_frame_unsigned_ge_branch(
+            exp_offset,
+            const_offset,
+            u8_ty,
+            &left_label,
+            &right_label,
+        );
+
+        self.program.push(AsmLine::Label(left_label));
+        self.copy_current_frame_bytes(exp_offset, count_offset, 1);
+        self.sub_current_frame_value_from_slot(const_offset, count_offset, u8_ty);
+        self.emit_shift_current_frame_by_count(
+            q_offset,
+            q_ty,
+            count_offset,
+            false,
+            &shift_done_label,
+        );
+
+        self.program.push(AsmLine::Label(right_label));
+        self.copy_current_frame_bytes(const_offset, count_offset, 1);
+        self.sub_current_frame_value_from_slot(exp_offset, count_offset, u8_ty);
+        self.emit_shift_current_frame_by_count(
+            q_offset,
+            q_ty,
+            count_offset,
+            true,
+            &shift_done_label,
+        );
+
+        self.program.push(AsmLine::Label(shift_done_label));
+        self.branch_on_current_frame_bit(flag_offset, 0, &negate_label, &finish_label);
+        self.program.push(AsmLine::Label(negate_label));
+        self.negate_current_frame_value(q_offset, q_ty);
+        self.program.push(AsmLine::Label(finish_label));
+        self.program.push(AsmLine::Label(done_label));
+    }
+
+    /// Converts signed Q16.16 at `q_offset` to raw little-endian IEEE f32 at `raw_offset`.
+    fn emit_q16_to_float_frame(
+        &mut self,
+        q_offset: u16,
+        raw_offset: u16,
+        mant_offset: u16,
+        exp_offset: u16,
+        count_offset: u16,
+        flag_offset: u16,
+    ) {
+        let q_ty = Type::new(ScalarType::I32);
+        let u8_ty = Type::new(ScalarType::U8);
+        let nonzero_label = self.unique_label("rt_q16_to_f32_nonzero");
+        let done_label = self.unique_label("rt_q16_to_f32_done");
+        let sign_label = self.unique_label("rt_q16_to_f32_sign");
+        let sign_done_label = self.unique_label("rt_q16_to_f32_sign_done");
+        let pack_label = self.unique_label("rt_q16_to_f32_pack");
+        let high_loop_label = self.unique_label("rt_q16_to_f32_high_loop");
+        let high_body_label = self.unique_label("rt_q16_to_f32_high_body");
+        let low_loop_label = self.unique_label("rt_q16_to_f32_low_loop");
+        let low_body_label = self.unique_label("rt_q16_to_f32_low_body");
+
+        self.clear_current_frame_slot(raw_offset, Type::new(ScalarType::F32));
+        self.clear_current_frame_slot(flag_offset, u8_ty);
+        self.emit_current_frame_nonzero_branch(q_offset, q_ty, &nonzero_label, &done_label);
+        self.program.push(AsmLine::Label(nonzero_label));
+        self.branch_on_current_frame_bit(q_offset + 3, 7, &sign_label, &sign_done_label);
+        self.program.push(AsmLine::Label(sign_label));
+        self.set_current_frame_bit(flag_offset, 0);
+        self.negate_current_frame_value(q_offset, q_ty);
+        self.program.push(AsmLine::Label(sign_done_label));
+
+        self.copy_current_frame_bytes(q_offset, mant_offset, 4);
+        self.emit_const_to_w(134);
+        self.store_w_to_current_frame_byte(exp_offset);
+
+        self.program.push(AsmLine::Label(high_loop_label.clone()));
+        self.emit_current_frame_nonzero_branch(
+            mant_offset + 3,
+            u8_ty,
+            &high_body_label,
+            &low_loop_label,
+        );
+        self.program.push(AsmLine::Label(high_body_label));
+        self.shift_current_frame_value_right(mant_offset, q_ty, false);
+        self.emit_const_to_w(1);
+        self.store_w_to_current_frame_byte(count_offset);
+        self.add_current_frame_value_into_slot(count_offset, exp_offset, u8_ty);
+        self.branch_to_label(&high_loop_label);
+
+        self.program.push(AsmLine::Label(low_loop_label.clone()));
+        self.branch_on_current_frame_bit(mant_offset + 2, 7, &pack_label, &low_body_label);
+        self.program.push(AsmLine::Label(low_body_label));
+        self.shift_current_frame_value_left(mant_offset, q_ty);
+        self.decrement_current_frame_value(exp_offset, u8_ty);
+        self.branch_to_label(&low_loop_label);
+
+        self.program.push(AsmLine::Label(pack_label));
+        self.copy_current_frame_bytes(mant_offset, raw_offset, 2);
+        self.load_current_frame_byte_to_w(mant_offset + 2);
+        self.program.push(AsmLine::Instr(AsmInstr::Andlw(0x7F)));
+        self.store_w_to_current_frame_byte(raw_offset + 2);
+        let exp_low_label = self.unique_label("rt_q16_to_f32_exp_low");
+        let exp_done_label = self.unique_label("rt_q16_to_f32_exp_done");
+        self.branch_on_current_frame_bit(exp_offset, 0, &exp_low_label, &exp_done_label);
+        self.program.push(AsmLine::Label(exp_low_label));
+        self.set_current_frame_bit(raw_offset + 2, 7);
+        self.program.push(AsmLine::Label(exp_done_label));
+        self.copy_current_frame_bytes(exp_offset, count_offset, 1);
+        self.shift_current_frame_value_right(count_offset, u8_ty, false);
+        self.load_current_frame_byte_to_w(count_offset);
+        self.store_w_to_current_frame_byte(raw_offset + 3);
+        let sign_set_label = self.unique_label("rt_q16_to_f32_sign_set");
+        let sign_finish_label = self.unique_label("rt_q16_to_f32_sign_finish");
+        self.branch_on_current_frame_bit(flag_offset, 0, &sign_set_label, &sign_finish_label);
+        self.program.push(AsmLine::Label(sign_set_label));
+        self.set_current_frame_bit(raw_offset + 3, 7);
+        self.program.push(AsmLine::Label(sign_finish_label));
+        self.program.push(AsmLine::Label(done_label));
+    }
+
+    /// Shifts one frame value until an 8-bit count reaches zero.
+    fn emit_shift_current_frame_by_count(
+        &mut self,
+        offset: u16,
+        ty: Type,
+        count_offset: u16,
+        right: bool,
+        done_label: &str,
+    ) {
+        let loop_label = self.unique_label("rt_shift_count_loop");
+        let body_label = self.unique_label("rt_shift_count_body");
+        self.program.push(AsmLine::Label(loop_label.clone()));
+        self.emit_current_frame_nonzero_branch(
+            count_offset,
+            Type::new(ScalarType::U8),
+            &body_label,
+            done_label,
+        );
+        self.program.push(AsmLine::Label(body_label));
+        if right {
+            self.shift_current_frame_value_right(offset, ty, false);
+        } else {
+            self.shift_current_frame_value_left(offset, ty);
+        }
+        self.decrement_current_frame_value(count_offset, Type::new(ScalarType::U8));
+        self.branch_to_label(&loop_label);
     }
 
     /// Emits Q8.8 fixed multiply: `(raw_a * raw_b) >> 8`, returning the low 16 result bytes.
@@ -4790,6 +5246,7 @@ fn function_pointer_dispatch_label(signature: Type) -> String {
             ScalarType::U16 => "u16",
             ScalarType::I32 => "i32",
             ScalarType::U32 => "u32",
+            ScalarType::F32 => "f32",
             ScalarType::Q8_8 => "q8_8",
             ScalarType::UQ8_8 => "uq8_8",
             ScalarType::Q16_16 => "q16_16",
@@ -4816,6 +5273,7 @@ fn function_pointer_dispatch_label(signature: Type) -> String {
                     ScalarType::U16 => "u16",
                     ScalarType::I32 => "i32",
                     ScalarType::U32 => "u32",
+                    ScalarType::F32 => "f32",
                     ScalarType::Q8_8 => "q8_8",
                     ScalarType::UQ8_8 => "uq8_8",
                     ScalarType::Q16_16 => "q16_16",
@@ -5203,6 +5661,7 @@ fn build_resource_report(
                 item.kind,
                 ResourceContributionKind::RuntimeHelper
                     | ResourceContributionKind::FixedPointHelper
+                    | ResourceContributionKind::FloatHelper
                     | ResourceContributionKind::ShiftHelper
             )
         })
@@ -5464,6 +5923,7 @@ fn render_memory_report(
                 item.kind,
                 ResourceContributionKind::RuntimeHelper
                     | ResourceContributionKind::FixedPointHelper
+                    | ResourceContributionKind::FloatHelper
                     | ResourceContributionKind::ShiftHelper
             )
         })
@@ -5690,6 +6150,10 @@ fn runtime_helper_resource_kind(helper: RuntimeHelper) -> ResourceContributionKi
         | RuntimeHelper::DivUQ8_8
         | RuntimeHelper::DivQ16_16
         | RuntimeHelper::DivUQ16_16 => ResourceContributionKind::FixedPointHelper,
+        RuntimeHelper::F32Add
+        | RuntimeHelper::F32Sub
+        | RuntimeHelper::F32Mul
+        | RuntimeHelper::F32Div => ResourceContributionKind::FloatHelper,
         RuntimeHelper::Shl8
         | RuntimeHelper::Shl16
         | RuntimeHelper::Shl32

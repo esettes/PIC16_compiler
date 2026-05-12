@@ -5776,4 +5776,159 @@ fn phase26_hardware_smoke_examples_compile() {
         assert_makefile_shape(makefile);
     }
 }
+
+#[test]
+/// Verifies Phase 27 float declarations, helpers, reports, and artifacts compile.
+fn phase27_float_helpers_and_reports_compile() {
+    let input = temp_file("phase27-float-report.c");
+    fs::write(
+        &input,
+        r#"
+float a = 1.5f;
+float b = 2.0f;
+float result;
+
+void main(void) {
+    result = a + b;
+}
+"#,
+    )
+    .expect("fixture");
+    let output = temp_file("phase27-float-report.hex");
+    let report = temp_file("phase27-float-report.mem");
+    execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: "pic16f877a".to_string(),
+            input,
+            output: output.clone(),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O2,
+            artifacts: OutputArtifacts {
+                map: true,
+                list_file: true,
+                memory_report: true,
+                memory_report_file: Some(report.clone()),
+                ..OutputArtifacts::default()
+            },
+            verbose: false,
+            opt_report: false,
+            stack_check: true,
+            stack_report: true,
+            stack_report_file: None,
+            warning_profile: WarningProfile::default(),
+        }),
+    })
+    .expect("compile float fixture");
+
+    let map = fs::read_to_string(output.with_extension("map")).expect("map");
+    let lst = fs::read_to_string(output.with_extension("lst")).expect("lst");
+    let memory_report = fs::read_to_string(report).expect("memory report");
+    assert!(map.contains("__rt_f32_add"));
+    assert!(lst.contains("__rt_f32_add"));
+    assert!(memory_report.contains("float helper"));
+    assert!(memory_report.contains("__rt_f32_add"));
+}
+
+#[test]
+/// Verifies malformed or unsupported Phase 27 float forms diagnose clearly.
+fn phase27_float_diagnostics() {
+    let bad_suffix = compile_error(
+        "pic16f877a",
+        "phase27-bad-float-suffix.c",
+        "float result = 1.0d;",
+    );
+    assert!(bad_suffix.contains("unsupported float literal suffix"));
+
+    let mixed = compile_error(
+        "pic16f877a",
+        "phase27-mixed-float.c",
+        r#"
+float a;
+unsigned int b;
+float result;
+void main(void) {
+    result = a + b;
+}
+"#,
+    );
+    assert!(mixed.contains("requires both operands to be `float`"));
+
+    let div_zero = compile_error(
+        "pic16f877a",
+        "phase27-float-div-zero.c",
+        r#"
+float result;
+void main(void) {
+    result = 1.0f / 0.0f;
+}
+"#,
+    );
+    assert!(div_zero.contains("float division by constant zero"));
+
+    let bitwise = compile_error(
+        "pic16f877a",
+        "phase27-float-bitwise.c",
+        r#"
+float a;
+float b;
+unsigned long result;
+void main(void) {
+    result = a & b;
+}
+"#,
+    );
+    assert!(bitwise.contains("is not supported for float operands"));
+}
+
+#[test]
+/// Verifies float helper-backed work remains rejected inside interrupt handlers.
+fn phase27_rejects_float_helper_inside_isr() {
+    let error = compile_error(
+        "pic16f877a",
+        "phase27-float-isr.c",
+        r#"
+float a;
+float b;
+float result;
+void __interrupt isr(void) {
+    result = a + b;
+}
+void main(void) {}
+"#,
+    );
+
+    assert!(error.contains("cannot use `Add` when it would lower through a runtime helper"));
+}
+
+#[test]
+/// Verifies ROM float tables are explicitly deferred.
+fn phase27_rejects_rom_float_tables() {
+    let error = compile_error(
+        "pic16f877a",
+        "phase27-rom-float.c",
+        "const __rom float table[] = { 1.0f, 2.0f };",
+    );
+
+    assert!(error.contains("unsupported ROM element type `const __rom float`"));
+}
+
+#[test]
+/// Verifies checked-in Phase 27 float examples compile cleanly on PIC16F877A.
+fn phase27_float_examples_compile_via_picc() {
+    for example in [
+        "examples/pic16f877a/float_basic.c",
+        "examples/pic16f877a/float_arithmetic.c",
+        "examples/pic16f877a/float_casts.c",
+        "examples/pic16f877a/float_struct.c",
+        "examples/pic16f877a/float_sensor_scale.c",
+    ] {
+        let output = compile_example_via_picc_cli_with_extra_args(
+            "pic16f877a",
+            example,
+            &["--size", "--verify-hex"],
+        );
+        assert_hex_is_programmable(&output);
+    }
+}
 // SPDX-License-Identifier: GPL-3.0-or-later

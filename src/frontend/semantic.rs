@@ -1061,6 +1061,12 @@ impl<'a> SemanticAnalyzer<'a> {
                 span: expr.span,
                 value_category: ValueCategory::RValue,
             },
+            ExprKind::FloatLiteral { bits } => TypedExpr {
+                kind: TypedExprKind::IntLiteral(i64::from(*bits)),
+                ty: Type::new(ScalarType::F32),
+                span: expr.span,
+                value_category: ValueCategory::RValue,
+            },
             ExprKind::StringLiteral(bytes) => self.analyze_string_literal_expr(bytes, expr.span),
             ExprKind::Name(name) => self.analyze_name(name, expr.span, diagnostics)?,
             ExprKind::Cast { ty, expr: value } => {
@@ -1381,14 +1387,24 @@ impl<'a> SemanticAnalyzer<'a> {
                 })
             }
             UnaryOp::Negate => {
-                if !value.ty.is_integer() && !value.ty.is_fixed() {
+                if !value.ty.is_integer() && !value.ty.is_fixed() && !value.ty.is_float() {
                     diagnostics.error(
                         "semantic",
                         Some(span),
-                        "unary negate requires an integer or fixed-point operand",
+                        "unary negate requires an integer, fixed-point, or float operand",
                         None,
                     );
                     return None;
+                }
+                if value.ty.is_float()
+                    && let TypedExprKind::IntLiteral(bits) = &value.kind
+                {
+                    return Some(TypedExpr {
+                        kind: TypedExprKind::IntLiteral(*bits ^ 0x8000_0000),
+                        ty: value.ty,
+                        span,
+                        value_category: ValueCategory::RValue,
+                    });
                 }
                 Some(TypedExpr {
                     kind: TypedExprKind::Unary {
@@ -1573,6 +1589,10 @@ impl<'a> SemanticAnalyzer<'a> {
         let value = self.analyze_expr(expr, diagnostics)?;
         if value.ty == target_ty {
             return Some(value);
+        }
+
+        if value.ty.is_float() || target_ty.is_float() {
+            return Some(self.coerce_float_expr(value, target_ty, diagnostics, "explicit cast"));
         }
 
         if (value.ty.is_fixed() || target_ty.is_fixed())
@@ -1874,6 +1894,9 @@ impl<'a> SemanticAnalyzer<'a> {
                 if lhs.ty.is_pointer() || rhs.ty.is_pointer() {
                     return self.analyze_pointer_relational_expr(op, lhs, rhs, span, diagnostics);
                 }
+                if lhs.ty.is_float() || rhs.ty.is_float() {
+                    return self.analyze_float_binary_expr(op, lhs, rhs, span, diagnostics);
+                }
                 if lhs.ty.is_fixed() || rhs.ty.is_fixed() {
                     return self.analyze_fixed_binary_expr(op, lhs, rhs, span, diagnostics);
                 }
@@ -1901,6 +1924,9 @@ impl<'a> SemanticAnalyzer<'a> {
                     );
                     return None;
                 }
+                if lhs.ty.is_float() || rhs.ty.is_float() {
+                    return self.analyze_float_binary_expr(op, lhs, rhs, span, diagnostics);
+                }
                 if lhs.ty.is_fixed() || rhs.ty.is_fixed() {
                     return self.analyze_fixed_binary_expr(op, lhs, rhs, span, diagnostics);
                 }
@@ -1909,6 +1935,15 @@ impl<'a> SemanticAnalyzer<'a> {
             BinaryOp::ShiftLeft | BinaryOp::ShiftRight => {
                 let lhs = self.analyze_expr(lhs, diagnostics)?;
                 let rhs = self.analyze_expr(rhs, diagnostics)?;
+                if lhs.ty.is_float() || rhs.ty.is_float() {
+                    diagnostics.error(
+                        "semantic",
+                        Some(span),
+                        "float values cannot be shifted in phase 27",
+                        Some("cast to an integer raw representation only if byte-level work is intentional".to_string()),
+                    );
+                    return None;
+                }
                 self.analyze_shift_expr(op, lhs, rhs, span, diagnostics)
             }
             BinaryOp::BitAnd
@@ -1919,6 +1954,9 @@ impl<'a> SemanticAnalyzer<'a> {
             | BinaryOp::Modulo => {
                 let lhs = self.analyze_expr(lhs, diagnostics)?;
                 let rhs = self.analyze_expr(rhs, diagnostics)?;
+                if lhs.ty.is_float() || rhs.ty.is_float() {
+                    return self.analyze_float_binary_expr(op, lhs, rhs, span, diagnostics);
+                }
                 if lhs.ty.is_fixed() || rhs.ty.is_fixed() {
                     return self.analyze_fixed_binary_expr(op, lhs, rhs, span, diagnostics);
                 }
@@ -1960,6 +1998,10 @@ impl<'a> SemanticAnalyzer<'a> {
                 span,
                 value_category: ValueCategory::RValue,
             });
+        }
+
+        if lhs.ty.is_float() || rhs.ty.is_float() {
+            return self.analyze_float_binary_expr(op, lhs, rhs, span, diagnostics);
         }
 
         if lhs.ty.is_fixed() || rhs.ty.is_fixed() {
@@ -2114,6 +2156,113 @@ impl<'a> SemanticAnalyzer<'a> {
             span,
             value_category: ValueCategory::RValue,
         })
+    }
+
+    /// Analyzes Phase 27 float arithmetic over explicit float-only operands.
+    fn analyze_float_binary_expr(
+        &mut self,
+        op: BinaryOp,
+        lhs: TypedExpr,
+        rhs: TypedExpr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        if !lhs.ty.is_float() || !rhs.ty.is_float() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!("`{op:?}` requires both operands to be `float` in phase 27"),
+                Some("cast integer or fixed-point operands to `float` explicitly before float arithmetic".to_string()),
+            );
+            return None;
+        }
+
+        match op {
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Multiply | BinaryOp::Divide => {
+                self.diagnose_float_division_rhs(op, &rhs, span, diagnostics);
+                if let (Some(lhs_value), Some(rhs_value)) = (
+                    eval_integer_constant_expr(&lhs),
+                    eval_integer_constant_expr(&rhs),
+                ) {
+                    return Some(TypedExpr {
+                        kind: TypedExprKind::IntLiteral(eval_binary(
+                            op, lhs_value, rhs_value, lhs.ty, lhs.ty,
+                        )),
+                        ty: lhs.ty,
+                        span,
+                        value_category: ValueCategory::RValue,
+                    });
+                }
+                Some(TypedExpr {
+                    kind: TypedExprKind::Binary {
+                        op,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    },
+                    ty: Type::new(ScalarType::F32),
+                    span,
+                    value_category: ValueCategory::RValue,
+                })
+            }
+            BinaryOp::Equal
+            | BinaryOp::NotEqual
+            | BinaryOp::Less
+            | BinaryOp::LessEqual
+            | BinaryOp::Greater
+            | BinaryOp::GreaterEqual => {
+                if let (Some(lhs_value), Some(rhs_value)) = (
+                    eval_integer_constant_expr(&lhs),
+                    eval_integer_constant_expr(&rhs),
+                ) {
+                    return Some(TypedExpr {
+                        kind: TypedExprKind::IntLiteral(eval_binary(
+                            op,
+                            lhs_value,
+                            rhs_value,
+                            lhs.ty,
+                            Type::new(ScalarType::U8),
+                        )),
+                        ty: Type::new(ScalarType::U8),
+                        span,
+                        value_category: ValueCategory::RValue,
+                    });
+                }
+                Some(TypedExpr {
+                    kind: TypedExprKind::Binary {
+                        op,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    },
+                    ty: Type::new(ScalarType::U8),
+                    span,
+                    value_category: ValueCategory::RValue,
+                })
+            }
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Modulo
+            | BinaryOp::ShiftLeft
+            | BinaryOp::ShiftRight => {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    format!("`{op:?}` is not supported for float operands in phase 27"),
+                    Some("cast to an integer raw representation only if byte-level work is intentional".to_string()),
+                );
+                None
+            }
+            BinaryOp::LogicalAnd | BinaryOp::LogicalOr => Some(TypedExpr {
+                kind: TypedExprKind::Binary {
+                    op,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+                ty: Type::new(ScalarType::U8),
+                span,
+                value_category: ValueCategory::RValue,
+            }),
+        }
     }
 
     /// Analyzes Phase 22 fixed-point arithmetic over explicit matching formats.
@@ -2476,6 +2625,18 @@ impl<'a> SemanticAnalyzer<'a> {
                         "direct ROM indexing does not support 32-bit ROM element type `{element_ty}` in phase 21"
                     ),
                     Some("keep 32-bit objects in data memory; ROM long tables are deferred".to_string()),
+                );
+                None
+            }
+            ScalarType::F32 => {
+                diagnostics.error(
+                    "semantic",
+                    Some(base.span),
+                    "direct ROM indexing does not support float ROM elements in phase 27",
+                    Some(
+                        "keep float values in data memory; ROM float tables are deferred"
+                            .to_string(),
+                    ),
                 );
                 None
             }
@@ -4590,6 +4751,29 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
+    /// Emits Phase 27 diagnostics for float division by literal zero.
+    fn diagnose_float_division_rhs(
+        &self,
+        op: BinaryOp,
+        rhs: &TypedExpr,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        if op != BinaryOp::Divide {
+            return;
+        }
+        if let Some(value) = eval_integer_constant_expr(rhs)
+            && (normalize_value(value, rhs.ty) as u32 & 0x7FFF_FFFF) == 0
+        {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "float division by constant zero",
+                Some("guard the divisor or change the constant expression".to_string()),
+            );
+        }
+    }
+
     /// Emits constant diagnostics for unsupported shift counts in the current Phase 5 model.
     fn diagnose_shift_rhs(
         &self,
@@ -5143,6 +5327,9 @@ impl<'a> SemanticAnalyzer<'a> {
             );
             return expr;
         }
+        if expr.ty.is_float() || target_ty.is_float() {
+            return self.coerce_float_expr(expr, target_ty, diagnostics, context);
+        }
         if expr.ty.is_fixed() || target_ty.is_fixed() {
             return self.coerce_fixed_expr(expr, target_ty, diagnostics, context, warn_on_truncate);
         }
@@ -5202,6 +5389,104 @@ impl<'a> SemanticAnalyzer<'a> {
             span,
             value_category: ValueCategory::RValue,
         }
+    }
+
+    /// Inserts Phase 27 conservative float casts. Dynamic non-float conversions are deferred.
+    fn coerce_float_expr(
+        &mut self,
+        expr: TypedExpr,
+        target_ty: Type,
+        diagnostics: &mut DiagnosticBag,
+        context: &str,
+    ) -> TypedExpr {
+        let span = expr.span;
+        if expr.ty == target_ty {
+            return expr;
+        }
+        if !(expr.ty.is_float() || target_ty.is_float()) {
+            return expr;
+        }
+        if !(expr.ty.is_float() || expr.ty.is_integer() || expr.ty.is_fixed())
+            || !(target_ty.is_float() || target_ty.is_integer() || target_ty.is_fixed())
+        {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!(
+                    "unsupported float cast from `{}` to `{}` in {context}",
+                    expr.ty, target_ty
+                ),
+                None,
+            );
+            return expr;
+        }
+
+        if let Some(value) = eval_integer_constant_expr(&expr) {
+            let converted = Self::eval_float_conversion_constant(value, expr.ty, target_ty);
+            return TypedExpr {
+                kind: TypedExprKind::IntLiteral(converted),
+                ty: target_ty,
+                span,
+                value_category: ValueCategory::RValue,
+            };
+        }
+
+        if expr.ty.is_float()
+            && target_ty.is_float()
+            && expr.ty.bit_width() == target_ty.bit_width()
+        {
+            return self.build_bitcast_expr(expr, target_ty);
+        }
+
+        diagnostics.error(
+            "semantic",
+            Some(span),
+            format!(
+                "dynamic float conversion from `{}` to `{}` is not supported in phase 27",
+                expr.ty, target_ty
+            ),
+            Some(
+                "use explicit casts on constants, or keep runtime conversion in integer/fixed-point form"
+                    .to_string(),
+            ),
+        );
+        expr
+    }
+
+    /// Evaluates constant casts between finite float, integer, and fixed-point values.
+    fn eval_float_conversion_constant(value: i64, source_ty: Type, target_ty: Type) -> i64 {
+        if source_ty.is_float() && target_ty.is_float() {
+            return normalize_value(value, target_ty);
+        }
+
+        let float_value = if source_ty.is_float() {
+            f32::from_bits(normalize_value(value, source_ty) as u32)
+        } else if source_ty.is_fixed() {
+            let raw = if source_ty.is_signed() {
+                signed_value(value, source_ty) as f32
+            } else {
+                normalize_value(value, source_ty) as f32
+            };
+            raw / ((1_u32 << source_ty.fixed_fraction_bits().unwrap_or(0)) as f32)
+        } else if source_ty.is_signed() {
+            signed_value(value, source_ty) as f32
+        } else {
+            normalize_value(value, source_ty) as f32
+        };
+
+        if target_ty.is_float() {
+            return i64::from(float_value.to_bits());
+        }
+        if target_ty.is_fixed() {
+            let scaled = (float_value
+                * ((1_u32 << target_ty.fixed_fraction_bits().unwrap_or(0)) as f32))
+                .trunc() as i64;
+            return normalize_value(scaled, target_ty);
+        }
+        if target_ty.is_integer() {
+            return normalize_value(float_value.trunc() as i64, target_ty);
+        }
+        0
     }
 
     /// Inserts Phase 22 fixed-point casts with explicit raw scaling.
@@ -6662,6 +6947,21 @@ impl<'a> SemanticAnalyzer<'a> {
         if ty.is_fixed() {
             return matches!(op, BinaryOp::Multiply | BinaryOp::Divide);
         }
+        if ty.is_float() || lhs.ty.is_float() || rhs.ty.is_float() {
+            return matches!(
+                op,
+                BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Multiply
+                    | BinaryOp::Divide
+                    | BinaryOp::Equal
+                    | BinaryOp::NotEqual
+                    | BinaryOp::Less
+                    | BinaryOp::LessEqual
+                    | BinaryOp::Greater
+                    | BinaryOp::GreaterEqual
+            );
+        }
 
         let lhs_const = eval_integer_constant_expr(lhs).map(|value| normalize_value(value, ty));
         let rhs_const = eval_integer_constant_expr(rhs).map(|value| normalize_value(value, ty));
@@ -6988,6 +7288,7 @@ fn integer_value_range(ty: Type) -> Option<(i64, i64)> {
         | ScalarType::UQ8_8
         | ScalarType::Q16_16
         | ScalarType::UQ16_16
+        | ScalarType::F32
         | ScalarType::Void => None,
     }
 }

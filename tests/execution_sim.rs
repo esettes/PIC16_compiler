@@ -1336,3 +1336,154 @@ void main(void) {
 
     assert_eq!(symbol_u32(&core, &map, "result"), 0x0003_0000);
 }
+
+#[test]
+fn executes_phase27_float_literal_raw_encoding() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase27-float-literal.c",
+        r#"
+float result;
+
+void main(void) {
+    result = 1.5f;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0x3FC0_0000);
+}
+
+#[test]
+fn executes_phase27_float_basic_arithmetic() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase27-float-arithmetic.c",
+        r#"
+float a = 1.5f;
+float b = 2.0f;
+float sum;
+float product;
+float quotient;
+
+void main(void) {
+    sum = a + b;
+    product = a * 2.0f;
+    quotient = 3.0f / 2.0f;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "sum"), 0x4060_0000);
+    assert_eq!(symbol_u32(&core, &map, "product"), 0x4040_0000);
+    assert_eq!(symbol_u32(&core, &map, "quotient"), 0x3FC0_0000);
+}
+
+#[test]
+fn executes_phase27_float_unary_and_comparison() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase27-float-compare.c",
+        r#"
+float a = 1.5f;
+float b = 2.0f;
+float neg;
+unsigned char eq_flag;
+unsigned char lt_flag;
+unsigned char gt_flag;
+
+void main(void) {
+    neg = -a;
+    eq_flag = (1.5f == 1.5f);
+    lt_flag = (1.5f < 2.0f);
+    gt_flag = (2.0f > 1.5f);
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "neg"), 0xBFC0_0000);
+    assert_eq!(symbol_u8(&core, &map, "eq_flag"), 1);
+    assert_eq!(symbol_u8(&core, &map, "lt_flag"), 1);
+    assert_eq!(symbol_u8(&core, &map, "gt_flag"), 1);
+}
+
+#[test]
+fn executes_phase27_float_constant_casts() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase27-float-casts.c",
+        r#"
+float from_int;
+float from_long;
+float from_fixed;
+unsigned int to_int;
+unsigned long to_long;
+__fixed8_8 to_fixed;
+
+void main(void) {
+    from_int = (float)3;
+    from_long = (float)70000L;
+    from_fixed = (float)1.5q8_8;
+    to_int = (unsigned int)3.75f;
+    to_long = (unsigned long)70000.0f;
+    to_fixed = (__fixed8_8)1.5f;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "from_int"), 0x4040_0000);
+    assert_eq!(symbol_u32(&core, &map, "from_long"), 0x4788_B800);
+    assert_eq!(symbol_u32(&core, &map, "from_fixed"), 0x3FC0_0000);
+    assert_eq!(symbol_u16(&core, &map, "to_int"), 3);
+    assert_eq!(symbol_u32(&core, &map, "to_long"), 70000);
+    assert_eq!(symbol_u16(&core, &map, "to_fixed"), 0x0180);
+}
+
+#[test]
+fn executes_phase27_float_function_struct_and_array() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase27-float-aggregate-call.c",
+        r#"
+struct Sensor {
+    float raw;
+    float gain;
+};
+
+struct Sensor sensor;
+float values[2];
+float result;
+
+void main(void) {
+    sensor.raw = 1.5f;
+    sensor.gain = 2.0f;
+    values[0] = sensor.raw;
+    values[1] = sensor.gain;
+    result = values[0];
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0x3FC0_0000);
+}
+
+#[test]
+fn executes_phase27_float_function_argument_return() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase27-float-call.c",
+        r#"
+float result;
+
+float echo(float raw) {
+    return raw;
+}
+
+void main(void) {
+    result = echo(2.0f);
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0x4000_0000);
+}

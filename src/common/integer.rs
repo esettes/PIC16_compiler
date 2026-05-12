@@ -74,6 +74,10 @@ pub fn value_byte(value: i64, ty: Type, byte_index: usize) -> u8 {
 
 /// Evaluates a unary integer operation using Phase 2 width and signedness rules.
 pub fn eval_unary(op: UnaryOp, value: i64, operand_ty: Type, result_ty: Type) -> i64 {
+    if operand_ty.is_float() {
+        return eval_float_unary(op, value, result_ty);
+    }
+
     let operand = normalize_value(value, operand_ty);
     match op {
         UnaryOp::Negate => normalize_value(-signed_value(operand, operand_ty), result_ty),
@@ -84,6 +88,10 @@ pub fn eval_unary(op: UnaryOp, value: i64, operand_ty: Type, result_ty: Type) ->
 
 /// Evaluates an integer binary operation with PIC16-compatible width truncation.
 pub fn eval_binary(op: BinaryOp, lhs: i64, rhs: i64, operand_ty: Type, result_ty: Type) -> i64 {
+    if operand_ty.is_float() {
+        return eval_float_binary(op, lhs, rhs, result_ty);
+    }
+
     if operand_ty.is_fixed() {
         return eval_fixed_binary(op, lhs, rhs, operand_ty, result_ty);
     }
@@ -201,6 +209,20 @@ fn normalize_i128(value: i128, ty: Type) -> i64 {
 
 /// Applies signed or unsigned relational semantics for the supplied operand type.
 pub fn compare_rel(op: BinaryOp, lhs: i64, rhs: i64, ty: Type) -> bool {
+    if ty.is_float() {
+        let lhs = f32::from_bits(normalize_value(lhs, ty) as u32);
+        let rhs = f32::from_bits(normalize_value(rhs, ty) as u32);
+        return match op {
+            BinaryOp::Equal => lhs == rhs,
+            BinaryOp::NotEqual => lhs != rhs,
+            BinaryOp::Less => lhs < rhs,
+            BinaryOp::LessEqual => lhs <= rhs,
+            BinaryOp::Greater => lhs > rhs,
+            BinaryOp::GreaterEqual => lhs >= rhs,
+            _ => unreachable!("relational operator"),
+        };
+    }
+
     let lhs_unsigned = normalize_value(lhs, ty);
     let rhs_unsigned = normalize_value(rhs, ty);
     let lhs_signed = signed_value(lhs, ty);
@@ -239,6 +261,44 @@ pub fn compare_rel(op: BinaryOp, lhs: i64, rhs: i64, ty: Type) -> bool {
         }
         _ => unreachable!("relational operator"),
     }
+}
+
+/// Evaluates a Phase 27 finite software-float unary operation on raw IEEE f32 bits.
+pub fn eval_float_unary(op: UnaryOp, value: i64, result_ty: Type) -> i64 {
+    let bits = normalize_value(value, Type::new(ScalarType::F32)) as u32;
+    let result = match op {
+        UnaryOp::Negate => bits ^ 0x8000_0000,
+        UnaryOp::LogicalNot => return i64::from((bits & 0x7FFF_FFFF) == 0),
+        UnaryOp::BitwiseNot => 0,
+    };
+    normalize_value(i64::from(result), result_ty)
+}
+
+/// Evaluates Phase 27 finite software-float binary operations on raw IEEE f32 bits.
+pub fn eval_float_binary(op: BinaryOp, lhs: i64, rhs: i64, result_ty: Type) -> i64 {
+    let lhs_value = f32::from_bits(normalize_value(lhs, Type::new(ScalarType::F32)) as u32);
+    let rhs_value = f32::from_bits(normalize_value(rhs, Type::new(ScalarType::F32)) as u32);
+    let value = match op {
+        BinaryOp::Add => return i64::from((lhs_value + rhs_value).to_bits()),
+        BinaryOp::Sub => return i64::from((lhs_value - rhs_value).to_bits()),
+        BinaryOp::Multiply => return i64::from((lhs_value * rhs_value).to_bits()),
+        BinaryOp::Divide => return i64::from((lhs_value / rhs_value).to_bits()),
+        BinaryOp::Equal => u8::from(lhs_value == rhs_value),
+        BinaryOp::NotEqual => u8::from(lhs_value != rhs_value),
+        BinaryOp::Less => u8::from(lhs_value < rhs_value),
+        BinaryOp::LessEqual => u8::from(lhs_value <= rhs_value),
+        BinaryOp::Greater => u8::from(lhs_value > rhs_value),
+        BinaryOp::GreaterEqual => u8::from(lhs_value >= rhs_value),
+        BinaryOp::LogicalAnd => u8::from(lhs_value != 0.0 && rhs_value != 0.0),
+        BinaryOp::LogicalOr => u8::from(lhs_value != 0.0 || rhs_value != 0.0),
+        BinaryOp::Modulo
+        | BinaryOp::ShiftLeft
+        | BinaryOp::ShiftRight
+        | BinaryOp::BitAnd
+        | BinaryOp::BitOr
+        | BinaryOp::BitXor => 0,
+    };
+    normalize_value(i64::from(value), result_ty)
 }
 
 #[cfg(test)]

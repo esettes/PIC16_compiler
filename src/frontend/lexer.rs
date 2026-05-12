@@ -11,6 +11,7 @@ pub enum TokenKind {
     Identifier(String),
     Number { value: i64, suffix: IntegerSuffix },
     FixedNumber { raw: i64, scalar: ScalarType },
+    FloatNumber { bits: u32 },
     StringLiteral(Vec<u8>),
     Keyword(Keyword),
     Symbol(Symbol),
@@ -32,6 +33,7 @@ pub enum Keyword {
     If,
     Int,
     Interrupt,
+    Float,
     Long,
     Fixed8_8,
     Ufixed8_8,
@@ -241,7 +243,7 @@ impl<'a> Lexer<'a> {
 
         let digits_end = self.index;
         if !is_hex && self.index < bytes.len() && bytes[self.index] == b'.' {
-            return self.lex_fixed_number(start, digits_end);
+            return self.lex_decimal_number(start, digits_end);
         }
 
         while self.index < bytes.len() {
@@ -283,8 +285,8 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Scans a decimal fixed-point literal with a required explicit fixed suffix.
-    fn lex_fixed_number(&mut self, start: usize, integer_end: usize) -> Token {
+    /// Scans a decimal Phase 23 fixed literal or Phase 27 float literal.
+    fn lex_decimal_number(&mut self, start: usize, integer_end: usize) -> Token {
         let bytes = self.source.text.as_bytes();
         self.index += 1;
         let fraction_start = self.index;
@@ -300,7 +302,79 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
-        let suffix_text = &self.source.text[fraction_end..self.index];
+        let suffix_text = self.source.text[fraction_end..self.index].to_string();
+        if matches!(
+            suffix_text.as_str(),
+            "q8_8" | "uq8_8" | "q16_16" | "uq16_16"
+        ) || suffix_text.starts_with('q')
+            || suffix_text.starts_with("uq")
+        {
+            return self.lex_fixed_number_from_parts(
+                start,
+                integer_end,
+                fraction_start,
+                fraction_end,
+                &suffix_text,
+            );
+        }
+
+        let span = Span::new(start, self.index);
+        let bits = if fraction_start == fraction_end {
+            self.diagnostics.error(
+                "lexer",
+                Some(span),
+                "malformed float literal",
+                Some("write an explicit fractional part, for example `1.0f`".to_string()),
+            );
+            0
+        } else if suffix_text.is_empty() || suffix_text == "f" || suffix_text == "F" {
+            let literal = &self.source.text[start..self.index - suffix_text.len()];
+            match literal.parse::<f32>() {
+                Ok(value) if value.is_finite() => value.to_bits(),
+                Ok(_) => {
+                    self.diagnostics.error(
+                        "lexer",
+                        Some(span),
+                        "float literal is out of the finite Phase 27 range",
+                        Some("use a finite 32-bit float value".to_string()),
+                    );
+                    0
+                }
+                Err(_) => {
+                    self.diagnostics.error(
+                        "lexer",
+                        Some(span),
+                        "malformed float literal",
+                        Some("write decimal literals such as `1.5` or `1.5f`".to_string()),
+                    );
+                    0
+                }
+            }
+        } else {
+            self.diagnostics.error(
+                "lexer",
+                Some(Span::new(fraction_end, self.index)),
+                format!("unsupported float literal suffix `{suffix_text}`"),
+                Some("Phase 27 supports no suffix or `f` for float literals".to_string()),
+            );
+            0
+        };
+
+        Token {
+            kind: TokenKind::FloatNumber { bits },
+            span,
+        }
+    }
+
+    /// Builds a decimal fixed-point literal from already-scanned decimal pieces.
+    fn lex_fixed_number_from_parts(
+        &mut self,
+        start: usize,
+        integer_end: usize,
+        fraction_start: usize,
+        fraction_end: usize,
+        suffix_text: &str,
+    ) -> Token {
         let scalar = self.parse_fixed_suffix(suffix_text, Span::new(fraction_end, self.index));
         let raw = if fraction_start == fraction_end {
             self.diagnostics.error(
@@ -642,6 +716,7 @@ fn keyword_or_ident(text: &str) -> TokenKind {
         "if" => Some(Keyword::If),
         "int" => Some(Keyword::Int),
         "__interrupt" => Some(Keyword::Interrupt),
+        "float" => Some(Keyword::Float),
         "long" => Some(Keyword::Long),
         "__fixed8_8" => Some(Keyword::Fixed8_8),
         "__ufixed8_8" => Some(Keyword::Ufixed8_8),

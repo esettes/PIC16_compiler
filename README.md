@@ -33,7 +33,19 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 26: device configuration, HEX validation, and programmer workflow on top of Phase 25 target resource limits, Phase 24 dynamic Q16.16 fixed-point helpers, Phase 23 fixed literals/ROM tables, Phase 22 fixed-point arithmetic, Phase 21 controlled 32-bit integers, Phase 20 simulator CLI/debugging workflow, Phase 19 emulator-based execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier frontend/backend phases**.
+Current implementation is **Phase 27: basic finite software `float` support on top of Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, Phase 24 dynamic Q16.16 fixed-point helpers, Phase 23 fixed literals/ROM tables, Phase 22 fixed-point arithmetic, Phase 21 controlled 32-bit integers, Phase 20 simulator CLI/debugging workflow, Phase 19 emulator-based execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier frontend/backend phases**.
+
+Phase 27 scope:
+
+- `float` as a 4-byte little-endian scalar with IEEE-754 single-precision storage bits
+- decimal float literals such as `1.5` and `1.5f`
+- float globals, statics, locals, parameters, returns, arrays, structs, unions, and data pointers
+- finite-only constant folding for literals, unary minus, arithmetic, comparisons, and constant casts
+- dynamic float add/sub helpers that convert through an internal Q16.16 work format
+- inline fast paths for common finite `* 2.0f` and `/ 2.0f`
+- simulator execution tests for raw literals, assignment, arithmetic, unary minus, constant comparisons, casts, calls, structs, and arrays
+- resource reports classify emitted float helpers as `float helper`
+- no `double`, math library, recursion, ROM float tables, or full IEEE special-value compliance
 
 Phase 26 scope:
 
@@ -46,7 +58,7 @@ Phase 26 scope:
 - `--print-program-command`, `--program`, and `--program-cmd <cmd>` for external programmer workflows
 - Makefile `make size`, `make sim`, `make flash`, `FLASH_CMD`, and `FLASH_ARGS`
 - hardware smoke examples under `examples/hardware/`
-- no IEEE float, recursion, or advanced optimization work
+- no recursion or advanced optimization work
 
 Phase 25 scope:
 
@@ -228,6 +240,7 @@ What changed from Phase 3:
 - Phase 22 adds explicit fixed-point scalar types and simulator-validated Q8.8 arithmetic without enabling IEEE float
 - Phase 23 adds fixed decimal literals, fixed ROM calibration tables, and Q16.16 constant folding
 - Phase 24 adds dynamic Q16.16/UQ16.16 multiply/divide helpers without exposing public `long long`
+- Phase 27 adds basic finite 32-bit software `float` storage, literals, constant folding, limited helpers, simulator validation, and resource reporting
 - active docs now describe stack-first behavior; old Phase 2/3 docs remain historical
 
 Historical milestone snapshots below describe what each phase introduced at the time. The current supported subset is summarized later under `Supported Subset`, `Current constraints`, and `Current Limits`.
@@ -1040,6 +1053,8 @@ picc --list-targets
 - [docs/runtime/phase5-arithmetic-helpers.md](docs/runtime/phase5-arithmetic-helpers.md)
 - [docs/runtime/phase23-q16-16-helpers.md](docs/runtime/phase23-q16-16-helpers.md)
 - [docs/runtime/phase24-q16-16-dynamic-helpers.md](docs/runtime/phase24-q16-16-dynamic-helpers.md)
+- [docs/frontend/phase27-float.md](docs/frontend/phase27-float.md)
+- [docs/runtime/phase27-float-helpers.md](docs/runtime/phase27-float-helpers.md)
 - [docs/migration/phase3-to-phase4-abi.md](docs/migration/phase3-to-phase4-abi.md)
 - [docs/developer-guide/adding-device.md](docs/developer-guide/adding-device.md)
 
@@ -1052,4 +1067,4 @@ picc --list-targets
 
 ## Current Limits
 
-Phase 24 adds dynamic Q16.16/UQ16.16 multiply/divide helpers, but current hard limits remain: no general ROM pointer model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no function-pointer calls inside ISR, no fixed-point modulo, no raw computed PIC16 indirect calls, no `float`, and no recursion. Q16.16 helpers are large; small targets can reject helper-heavy call chains through existing stack/program constraints. The emulator is intentionally core-only: no full peripheral timing model, no asynchronous interrupt scheduling, and no claim of complete PIC16 device emulation.
+Phase 27 adds finite software `float`, but current hard limits remain: no `double`, no math library (`sin`, `cos`, `sqrt`, etc.), no full IEEE NaN/Inf/subnormal compliance, no ROM float tables, no dynamic mixed float/integer arithmetic, no dynamic float/integer casts beyond supported constant casts, no general ROM pointer model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no function-pointer calls inside ISR, no fixed-point modulo, no raw computed PIC16 indirect calls, and no recursion. Float helpers are large; resource fitting can reject helper-heavy programs on real targets. The emulator is intentionally core-only: no full peripheral timing model, no asynchronous interrupt scheduling, and no claim of complete PIC16 device emulation.

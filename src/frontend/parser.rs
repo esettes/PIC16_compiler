@@ -840,6 +840,13 @@ impl<'a> Parser<'a> {
                 span: Span::new(start, self.previous_span().end),
             };
         }
+        if let TokenKind::FloatNumber { bits } = self.current().kind.clone() {
+            self.advance();
+            return Expr {
+                kind: ExprKind::FloatLiteral { bits },
+                span: Span::new(start, self.previous_span().end),
+            };
+        }
         if let TokenKind::StringLiteral(bytes) = self.current().kind.clone() {
             self.advance();
             return Expr {
@@ -980,6 +987,23 @@ impl<'a> Parser<'a> {
                     });
                     self.advance();
                 }
+                TokenKind::Keyword(Keyword::Float) => {
+                    if scalar.is_some()
+                        || explicit_type.is_some()
+                        || saw_long
+                        || saw_signed
+                        || saw_unsigned
+                    {
+                        self.diagnostics.error(
+                            "parser",
+                            Some(self.current_span()),
+                            "`float` cannot be combined with other type specifiers",
+                            None,
+                        );
+                    }
+                    scalar = Some(ScalarType::F32);
+                    self.advance();
+                }
                 TokenKind::Keyword(Keyword::Struct) => {
                     if scalar.is_some() || explicit_type.is_some() {
                         self.diagnostics.error(
@@ -1102,7 +1126,7 @@ impl<'a> Parser<'a> {
                     Some(self.current_span()),
                     "expected type specifier",
                     Some(
-                        "supported types: void, char, unsigned char, int, unsigned int, long, unsigned long, typedef names, enum, struct, union"
+                        "supported types: void, char, unsigned char, int, unsigned int, long, unsigned long, float, fixed-point types, typedef names, enum, struct, union"
                             .to_string(),
                     ),
                 );
@@ -1623,6 +1647,7 @@ impl<'a> Parser<'a> {
         match &expr.kind {
             ExprKind::IntLiteral { value, .. } => Some(*value),
             ExprKind::FixedLiteral { .. } => None,
+            ExprKind::FloatLiteral { .. } => None,
             ExprKind::StringLiteral(_) => None,
             ExprKind::Name(name) => self.enum_constant_by_name.get(name).copied(),
             ExprKind::Cast { expr, .. } => self.eval_enum_const_expr(expr),
@@ -1840,6 +1865,7 @@ impl<'a> Parser<'a> {
                 TokenKind::Keyword(Keyword::Void)
                 | TokenKind::Keyword(Keyword::Char)
                 | TokenKind::Keyword(Keyword::Int)
+                | TokenKind::Keyword(Keyword::Float)
                 | TokenKind::Keyword(Keyword::Long)
                 | TokenKind::Keyword(Keyword::Fixed8_8)
                 | TokenKind::Keyword(Keyword::Ufixed8_8)
@@ -2103,6 +2129,7 @@ impl<'a> Parser<'a> {
                 | TokenKind::Keyword(Keyword::Void)
                 | TokenKind::Keyword(Keyword::Char)
                 | TokenKind::Keyword(Keyword::Int)
+                | TokenKind::Keyword(Keyword::Float)
                 | TokenKind::Keyword(Keyword::Long)
                 | TokenKind::Keyword(Keyword::Fixed8_8)
                 | TokenKind::Keyword(Keyword::Ufixed8_8)

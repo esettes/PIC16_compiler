@@ -40,6 +40,10 @@ pub enum RuntimeHelper {
     ShrI16,
     ShrU32,
     ShrI32,
+    F32Add,
+    F32Sub,
+    F32Mul,
+    F32Div,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -88,6 +92,10 @@ impl RuntimeHelper {
         RuntimeHelper::ShrI16,
         RuntimeHelper::ShrU32,
         RuntimeHelper::ShrI32,
+        RuntimeHelper::F32Add,
+        RuntimeHelper::F32Sub,
+        RuntimeHelper::F32Mul,
+        RuntimeHelper::F32Div,
     ];
 
     pub const fn info(self) -> RuntimeHelperInfo {
@@ -337,6 +345,34 @@ impl RuntimeHelper {
                 local_bytes: 0,
                 frame_bytes: 2,
             },
+            Self::F32Add => RuntimeHelperInfo {
+                label: "__rt_f32_add",
+                operand_ty: Type::new(ScalarType::F32),
+                arg_bytes: 8,
+                local_bytes: 16,
+                frame_bytes: 18,
+            },
+            Self::F32Sub => RuntimeHelperInfo {
+                label: "__rt_f32_sub",
+                operand_ty: Type::new(ScalarType::F32),
+                arg_bytes: 8,
+                local_bytes: 16,
+                frame_bytes: 18,
+            },
+            Self::F32Mul => RuntimeHelperInfo {
+                label: "__rt_f32_mul",
+                operand_ty: Type::new(ScalarType::F32),
+                arg_bytes: 8,
+                local_bytes: 16,
+                frame_bytes: 18,
+            },
+            Self::F32Div => RuntimeHelperInfo {
+                label: "__rt_f32_div",
+                operand_ty: Type::new(ScalarType::F32),
+                arg_bytes: 8,
+                local_bytes: 16,
+                frame_bytes: 18,
+            },
         }
     }
 
@@ -346,11 +382,15 @@ impl RuntimeHelper {
 }
 
 pub fn binary_helper(op: BinaryOp, ty: Type) -> Option<RuntimeHelper> {
-    if !ty.is_integer() && !ty.is_fixed() {
+    if !ty.is_integer() && !ty.is_fixed() && !ty.is_float() {
         return None;
     }
 
     match (op, ty.scalar) {
+        (BinaryOp::Add, ScalarType::F32) => Some(RuntimeHelper::F32Add),
+        (BinaryOp::Sub, ScalarType::F32) => Some(RuntimeHelper::F32Sub),
+        (BinaryOp::Multiply, ScalarType::F32) => Some(RuntimeHelper::F32Mul),
+        (BinaryOp::Divide, ScalarType::F32) => Some(RuntimeHelper::F32Div),
         (BinaryOp::Multiply, ScalarType::U8) => Some(RuntimeHelper::MulU8),
         (BinaryOp::Multiply, ScalarType::I8) => Some(RuntimeHelper::MulI8),
         (BinaryOp::Multiply, ScalarType::U16) => Some(RuntimeHelper::MulU16),

@@ -144,6 +144,14 @@ Phase 7 optimization responsibilities:
 - preserve page-selection correctness while dropping duplicate `setpage`
 - improve `.map` readability by grouping user code, helpers, vectors, ABI/stack data, and ISR context
 
+Phase 27 float backend responsibilities:
+
+- store `float` as 4-byte little-endian f32 bits
+- reuse the existing 32-bit return slots
+- emit finite float helpers as `float helper` resource contributions
+- inline common `* 2.0f` and `/ 2.0f` exponent adjustments
+- let resource fitting reject helper-heavy float programs that do not fit a target
+
 Phase 7 backend docs:
 
 - [optimization.md](optimization.md)
@@ -169,6 +177,7 @@ Phase 11-18 backend docs:
 - [phase16-aggregate-layout.md](phase16-aggregate-layout.md)
 - [phase17-dispatcher.md](phase17-dispatcher.md)
 - [phase18-stack-safety.md](phase18-stack-safety.md)
+- [phase27-float-codegen.md](phase27-float-codegen.md)
 
 Phase 19 execution-validation docs:
 

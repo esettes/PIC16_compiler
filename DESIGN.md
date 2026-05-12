@@ -102,9 +102,24 @@ Rules:
 - caller pushes argument bytes left-to-right
 - caller cleans argument bytes after return
 
+### Phase 27 Basic Software Float
+
+Phase 27 adds a conservative `float` scalar without adding `double` or a math library:
+
+- storage is 32-bit little-endian IEEE-754 single-precision bits
+- ABI width is the existing 32-bit Stack-first convention (`W`, `return_high`, `return_upper0`, `return_upper1`)
+- supported literals are finite decimal forms with optional `f` suffix
+- constant folding uses Rust `f32` encoding for finite constants
+- runtime float add/sub helpers convert operands to an internal Q16.16 work format, operate there, and convert back to f32 bits
+- common `* 2.0f` and `/ 2.0f` lower inline by exponent adjustment to avoid large helper pulls
+- helper-backed float work is rejected inside ISRs
+- ROM float tables, `double`, NaN/Inf semantics, subnormal completeness, and math functions remain deferred
+
+This is intentionally finite-only software float support. It is not a claim of full IEEE-754 runtime compliance.
+
 ### Phase 24 Dynamic Q16.16 Helpers
 
-Phase 22/23/24 add explicit fixed-point scalar types without adding IEEE float:
+Phase 22/23/24 add explicit fixed-point scalar types:
 
 - `__fixed8_8` / `__ufixed8_8`: 16-bit raw Q8.8 storage
 - `__fixed16_16` / `__ufixed16_16`: 32-bit raw Q16.16 storage

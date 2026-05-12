@@ -24,6 +24,7 @@ pub enum ScalarType {
     U16,
     I32,
     U32,
+    F32,
     Q8_8,
     UQ8_8,
     Q16_16,
@@ -370,6 +371,7 @@ impl Type {
                 | ScalarType::U16
                 | ScalarType::I32
                 | ScalarType::U32
+                | ScalarType::F32
                 | ScalarType::Q8_8
                 | ScalarType::UQ8_8
                 | ScalarType::Q16_16
@@ -408,9 +410,19 @@ impl Type {
             )
     }
 
+    /// Returns true when this type is the Phase 27 software `float` scalar value.
+    pub fn is_float(self) -> bool {
+        !self.is_pointer()
+            && !self.is_function_pointer()
+            && !self.is_array()
+            && !self.has_struct_base()
+            && !self.has_union_base()
+            && matches!(self.scalar, ScalarType::F32)
+    }
+
     /// Returns true when this type is an integer or fixed-point scalar.
     pub fn is_numeric(self) -> bool {
-        self.is_integer() || self.is_fixed()
+        self.is_integer() || self.is_fixed() || self.is_float()
     }
 
     /// Returns true when this type is a scalar value that fits in registers or temps.
@@ -519,7 +531,11 @@ impl Type {
             ScalarType::Void => 0,
             ScalarType::I8 | ScalarType::U8 => 1,
             ScalarType::I16 | ScalarType::U16 | ScalarType::Q8_8 | ScalarType::UQ8_8 => 2,
-            ScalarType::I32 | ScalarType::U32 | ScalarType::Q16_16 | ScalarType::UQ16_16 => 4,
+            ScalarType::I32
+            | ScalarType::U32
+            | ScalarType::F32
+            | ScalarType::Q16_16
+            | ScalarType::UQ16_16 => 4,
         }
     }
 
@@ -685,6 +701,7 @@ const fn scalar_name(scalar: ScalarType) -> &'static str {
         ScalarType::U16 => "unsigned int",
         ScalarType::I32 => "long",
         ScalarType::U32 => "unsigned long",
+        ScalarType::F32 => "float",
         ScalarType::Q8_8 => "__fixed8_8",
         ScalarType::UQ8_8 => "__ufixed8_8",
         ScalarType::Q16_16 => "__fixed16_16",

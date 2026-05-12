@@ -51,6 +51,8 @@ Current Phase 18 frontend surface:
 - accepts fixed decimal literals with `q8_8`, `uq8_8`, `q16_16`, and `uq16_16` suffixes
 - accepts one-dimensional fixed-point `const __rom` arrays for direct indexing
 - folds Q16.16 fixed multiply/divide constants and accepts dynamic Q16.16 helper-backed multiply/divide outside ISRs
+- accepts `float` declarations, finite decimal float literals, and constant float casts/comparisons/arithmetic
+- rejects implicit mixed float/integer arithmetic, float ROM tables, float bitfields, float switch expressions, and helper-backed float work in ISRs
 - validates pointer relational comparisons for compatible data-space pointer types
 - validates pointer subtraction for compatible data-space pointer types with 1-byte or 2-byte elements
 - parses explicit `__rom` declarations for file-scope 8-bit/16-bit integer arrays
@@ -85,3 +87,4 @@ Current detail:
 - [phase21-long-types.md](phase21-long-types.md)
 - [phase22-fixed-point.md](phase22-fixed-point.md)
 - [phase23-fixed-literals.md](phase23-fixed-literals.md)
+- [phase27-float.md](phase27-float.md)

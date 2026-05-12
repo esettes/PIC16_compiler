@@ -164,6 +164,9 @@ pub enum ExprKind {
         raw: i64,
         scalar: ScalarType,
     },
+    FloatLiteral {
+        bits: u32,
+    },
     StringLiteral(Vec<u8>),
     Name(String),
     Cast {
@@ -409,6 +412,7 @@ fn render_expr(expr: &Expr) -> String {
     match &expr.kind {
         ExprKind::IntLiteral { value, .. } => value.to_string(),
         ExprKind::FixedLiteral { raw, scalar } => format!("{raw}:{scalar:?}"),
+        ExprKind::FloatLiteral { bits } => format!("0x{bits:08X}:float"),
         ExprKind::StringLiteral(bytes) => render_string_literal(bytes),
         ExprKind::Name(name) => name.clone(),
         ExprKind::Cast { ty, expr } => format!("({ty})({})", render_expr(expr)),

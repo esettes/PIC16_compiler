@@ -35,6 +35,7 @@ picc --target pic16f877a -I include --memory-report-file build/app.mem -o build/
 - ROM table region
 - program sections
 - helper contribution with stack frame cost
+- float helper contribution when `__rt_f32_*` helpers are emitted
 - largest program-memory contributors
 
 The report is deterministic so generated files can be diffed in CI.
@@ -67,3 +68,7 @@ Use `--verify-hex` with `--memory-report` when preparing a hardware build:
 ```bash
 picc --target pic16f628a -I include --size --memory-report --verify-hex -o build/app.hex app.c
 ```
+
+## Phase 27 Float Interaction
+
+Float helpers are reported as `float helper`. Generic helpers are large; prefer `--size` before hardware builds and expect resource fitting to reject programs that pull several float helpers on small targets.

@@ -35,3 +35,5 @@ Restrictions:
 - fixed modulo remains unsupported
 - helper-backed fixed operations remain rejected inside ISRs
 - helper-heavy programs can exceed small-device stack or program-memory limits and are diagnosed through existing stack/program constraints
+
+Phase 27 float helpers reuse the same resource-reporting and stack-accounting paths. They store public values as f32 bits but use an internal Q16.16 work format, so helper-heavy float programs may also exceed target limits.

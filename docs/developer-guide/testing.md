@@ -100,6 +100,7 @@ Use execution tests when output shape is not enough to prove behavior, especiall
 
 - arithmetic helpers
 - fixed-point scaling and helper-backed Q8.8 arithmetic
+- finite float literals, float helper paths, and float ABI behavior
 - stack-first calls and nested calls
 - pointer dereference and `FSR/INDF`
 - function-pointer dispatch
@@ -114,6 +115,7 @@ Keep fixtures small and deterministic.
 - make `main` finish through the normal generated `__halt` path
 - use constant expected values instead of relying on timing or peripherals
 - use `pic16f628a` unless the scenario needs the larger `pic16f877a`
+- use `pic16f877a` for float helper cases; generic float helpers are large and resource fitting may reject helper-heavy fixtures
 - if a case needs stack checks, compile with `stack_check: true`
 
 Good pattern:

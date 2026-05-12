@@ -108,6 +108,14 @@ Phase 24 fixed-point lowering notes:
 - Q16.16 multiply/divide constants fold before backend emission
 - dynamic Q16.16 multiply/divide lower as typed helper-backed binary operations outside ISRs
 
+Phase 27 float lowering notes:
+
+- `float` values are 32-bit raw f32-bit scalar temps
+- finite float literals lower as raw-bit constants
+- constant float arithmetic and comparisons fold before backend codegen
+- dynamic float arithmetic lowers to typed binary IR and the backend chooses helper or inline fast path
+- implicit mixed float/integer arithmetic is intentionally not inserted
+
 Current Phase 18 limits:
 
 - no incomplete-struct/union pointers
@@ -121,7 +129,7 @@ Current Phase 18 limits:
 - no function-pointer arithmetic or relational comparisons
 - no indirect calls inside interrupt handlers
 - no recursion, even with `--stack-check`
-- no IEEE float
+- no `double`, math library, ROM float tables, or full IEEE special-value runtime model
 - fixed-point modulo remains unsupported
 - helper-backed fixed operations remain rejected inside interrupt handlers
 
@@ -138,6 +146,7 @@ Current detail:
 - [phase22-fixed-lowering.md](phase22-fixed-lowering.md)
 - [phase23-fixed-constant-folding.md](phase23-fixed-constant-folding.md)
 - [phase24-fixed-dynamic-lowering.md](phase24-fixed-dynamic-lowering.md)
+- [phase27-float-lowering.md](phase27-float-lowering.md)
 - [phase12-pointer-lowering.md](phase12-pointer-lowering.md)
 - [phase13-rom-lowering.md](phase13-rom-lowering.md)
 - [phase14-rom-read-lowering.md](phase14-rom-read-lowering.md)

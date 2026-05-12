@@ -56,9 +56,10 @@ Current Phase 26 keeps that split intact while extending:
 - Phase 24 dynamic Q16.16/UQ16.16 multiply/divide helpers with simulator validation
 - Phase 25 target memory descriptors, final resource validation, `--size`, and `--memory-report`
 - Phase 26 config-word descriptors, `#pragma config`, raw `__config`, `--verify-hex`, and external programmer command workflow
+- Phase 27 finite 32-bit software `float` storage, literals, helpers, resource reporting, and simulator validation
 - PIC16 banking/paging without backend duplication per device
 
-Phase 26 keeps the compiler layering unchanged:
+Phase 27 keeps the compiler layering unchanged:
 
 - frontend still produces typed trees only
 - IR still stays target-aware but encoding-agnostic
@@ -68,6 +69,7 @@ Phase 26 keeps the compiler layering unchanged:
 - resource fitting runs after final encoding so code, helpers, dispatchers, traps, and ROM tables all have concrete addresses
 - HEX validation runs after config resolution and Intel HEX emission
 - external programming remains a user-supplied command, not a built-in hardware protocol
+- float helpers are ordinary backend runtime helpers and remain visible to resource fitting
 
 Execution-validation layer:
 
@@ -89,4 +91,5 @@ See:
 - [Memory Report](../developer-guide/memory-report.md)
 - [Programming PIC16 Devices](../developer-guide/programming-pic16.md)
 - [Hardware Smoke Tests](../developer-guide/hardware-smoke-tests.md)
+- [Phase 27 Float](../frontend/phase27-float.md)
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
