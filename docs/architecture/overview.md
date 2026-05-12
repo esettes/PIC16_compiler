@@ -2,7 +2,7 @@
 
 # General Architecture
 
-Phase 24 extends the fixed-point layer with dynamic Q16.16/UQ16.16 multiply and divide helpers while preserving the Stack-first ABI and PIC16 `midrange14` backend. The compiler treats Q8.8 values as 2-byte raw fixed storage and Q16.16 values as 4-byte raw fixed storage across frontend typing, IR temps, stack frames, globals, aggregates, ROM tables, helpers, and simulator validation.
+Phase 25 adds target-aware resource fitting and size reports while preserving the Stack-first ABI and PIC16 `midrange14` backend. Phase 24 dynamic Q16.16/UQ16.16 multiply/divide helpers remain unchanged; Phase 25 makes their program-memory and stack cost visible.
 
 Phase 21 32-bit integers remain the raw intermediate foundation for Q8.8 multiply/divide. Q16.16 multiply/divide constants are folded exactly; dynamic Q16.16 helper-backed operations lower through page-safe fixed-point runtime helpers without exposing public `long long`.
 
@@ -16,7 +16,7 @@ Phase 21 32-bit integers remain the raw intermediate foundation for Q8.8 multipl
 
 Target backend is classic 14-bit PIC16 mid-range family, not a generic 8-bit CPU model.
 
-Current Phase 24 keeps that split intact while extending:
+Current Phase 25 keeps that split intact while extending:
 
 - stack-first caller-pushed ABI
 - fixed-point frontend typing, raw constructors, casts, and diagnostics
@@ -54,15 +54,17 @@ Current Phase 24 keeps that split intact while extending:
 - Phase 21 controlled 32-bit integer storage, ABI, helpers, and simulator validation
 - Phase 23 fixed decimal literals, fixed ROM calibration tables, and simulator-validated fixed constant folding/ROM reads
 - Phase 24 dynamic Q16.16/UQ16.16 multiply/divide helpers with simulator validation
+- Phase 25 target memory descriptors, final resource validation, `--size`, and `--memory-report`
 - PIC16 banking/paging without backend duplication per device
 
-Phase 24 keeps the compiler layering unchanged:
+Phase 25 keeps the compiler layering unchanged:
 
 - frontend still produces typed trees only
 - IR still stays target-aware but encoding-agnostic
 - backend still owns all real PIC16 code generation
 - emulator reads backend-produced HEX artifacts after compilation; it does not replace codegen
 - `pic16-sim` is optional tooling and does not alter normal `picc` behavior
+- resource fitting runs after final encoding so code, helpers, dispatchers, traps, and ROM tables all have concrete addresses
 
 Execution-validation layer:
 
@@ -80,4 +82,6 @@ See:
 - [Testing: Phase 19 Emulator](../testing/phase19-emulator.md)
 - [PIC16 Core Emulator](../sim/pic16-core-emulator.md)
 - [PIC16 Simulator CLI](../sim/pic16-sim-cli.md)
+- [PIC16 Memory Limits](pic16-memory-limits.md)
+- [Memory Report](../developer-guide/memory-report.md)
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->

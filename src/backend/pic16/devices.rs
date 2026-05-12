@@ -13,6 +13,11 @@ impl MemoryRange {
     pub const fn size(self) -> u16 {
         self.end - self.start + 1
     }
+
+    /// Returns true when an address is inside the inclusive range.
+    pub const fn contains(self, address: u16) -> bool {
+        address >= self.start && address <= self.end
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -38,8 +43,12 @@ pub struct TargetDevice {
     pub eeprom_bytes: u16,
     pub bank_count: u8,
     pub vectors: DeviceVectors,
+    pub program_memory: MemoryRange,
     pub allocatable_gpr: &'static [MemoryRange],
     pub shared_gpr: &'static [MemoryRange],
+    pub reserved_ram: &'static [MemoryRange],
+    pub default_stack_region: MemoryRange,
+    pub rom_table_region: MemoryRange,
     pub sfrs: &'static [DeviceRegister],
     pub default_config_word: u16,
     pub capabilities: &'static [&'static str],
@@ -60,6 +69,21 @@ impl TargetDevice {
             .iter()
             .map(|register| (register.name.to_string(), register.address))
             .collect()
+    }
+
+    /// Returns bytes in the backend-modeled allocatable data ranges.
+    pub fn allocatable_ram_bytes(&self) -> u16 {
+        self.allocatable_gpr.iter().map(|range| range.size()).sum()
+    }
+
+    /// Returns bytes in allocatable plus shared backend-modeled GPR ranges.
+    pub fn modeled_data_ram_bytes(&self) -> u16 {
+        self.allocatable_ram_bytes()
+            + self
+                .shared_gpr
+                .iter()
+                .map(|range| range.size())
+                .sum::<u16>()
     }
 }
 
@@ -107,6 +131,42 @@ const SHARED_GPR: [MemoryRange; 1] = [MemoryRange {
     start: 0x70,
     end: 0x7F,
 }];
+const F628A_RESERVED_RAM: [MemoryRange; 4] = [
+    MemoryRange {
+        start: 0x0000,
+        end: 0x001F,
+    },
+    MemoryRange {
+        start: 0x0080,
+        end: 0x009F,
+    },
+    MemoryRange {
+        start: 0x0100,
+        end: 0x011F,
+    },
+    MemoryRange {
+        start: 0x0180,
+        end: 0x019F,
+    },
+];
+const F877A_RESERVED_RAM: [MemoryRange; 4] = [
+    MemoryRange {
+        start: 0x0000,
+        end: 0x001F,
+    },
+    MemoryRange {
+        start: 0x0080,
+        end: 0x009F,
+    },
+    MemoryRange {
+        start: 0x0100,
+        end: 0x011F,
+    },
+    MemoryRange {
+        start: 0x0180,
+        end: 0x019F,
+    },
+];
 
 const F628A_SFRS: [DeviceRegister; 17] = [
     DeviceRegister {
@@ -269,8 +329,18 @@ fn pic16f628a() -> TargetDevice {
             interrupt: 0x0004,
             config_word: 0x2007,
         },
+        program_memory: MemoryRange {
+            start: 0x0000,
+            end: 0x07FF,
+        },
         allocatable_gpr: &F628A_GPR,
         shared_gpr: &SHARED_GPR,
+        reserved_ram: &F628A_RESERVED_RAM,
+        default_stack_region: F628A_GPR[0],
+        rom_table_region: MemoryRange {
+            start: 0x0005,
+            end: 0x07FF,
+        },
         sfrs: &F628A_SFRS,
         default_config_word: 0x3F30,
         capabilities: &[
@@ -299,8 +369,18 @@ fn pic16f877a() -> TargetDevice {
             interrupt: 0x0004,
             config_word: 0x2007,
         },
+        program_memory: MemoryRange {
+            start: 0x0000,
+            end: 0x1FFF,
+        },
         allocatable_gpr: &F877A_GPR,
         shared_gpr: &SHARED_GPR,
+        reserved_ram: &F877A_RESERVED_RAM,
+        default_stack_region: F877A_GPR[0],
+        rom_table_region: MemoryRange {
+            start: 0x0005,
+            end: 0x1FFF,
+        },
         sfrs: &F877A_SFRS,
         default_config_word: 0x3F32,
         capabilities: &[
@@ -311,6 +391,39 @@ fn pic16f877a() -> TargetDevice {
             "single interrupt vector",
             "ports a-e",
         ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DeviceRegistry;
+
+    #[test]
+    fn pic16f628a_resource_descriptor_is_explicit() {
+        let registry = DeviceRegistry::new();
+        let device = registry.device("pic16f628a").expect("descriptor");
+        assert_eq!(device.program_memory.start, 0x0000);
+        assert_eq!(device.program_memory.end, 0x07FF);
+        assert_eq!(device.vectors.reset, 0x0000);
+        assert_eq!(device.vectors.interrupt, 0x0004);
+        assert_eq!(device.vectors.config_word, 0x2007);
+        assert!(!device.allocatable_gpr.is_empty());
+        assert!(!device.reserved_ram.is_empty());
+        assert!(device.rom_table_region.contains(0x07FF));
+    }
+
+    #[test]
+    fn pic16f877a_resource_descriptor_is_explicit() {
+        let registry = DeviceRegistry::new();
+        let device = registry.device("pic16f877a").expect("descriptor");
+        assert_eq!(device.program_memory.start, 0x0000);
+        assert_eq!(device.program_memory.end, 0x1FFF);
+        assert_eq!(device.vectors.reset, 0x0000);
+        assert_eq!(device.vectors.interrupt, 0x0004);
+        assert_eq!(device.vectors.config_word, 0x2007);
+        assert!(!device.allocatable_gpr.is_empty());
+        assert!(!device.reserved_ram.is_empty());
+        assert!(device.rom_table_region.contains(0x1FFF));
     }
 }
 // SPDX-License-Identifier: GPL-3.0-or-later

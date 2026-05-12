@@ -57,10 +57,11 @@ pub fn execute(options: CliOptions) -> StageResult<CompilationOutput> {
             let mut lines = Vec::new();
             for device in registry.devices() {
                 lines.push(format!(
-                    "{name:12} program={program}w ram={ram}b eeprom={eeprom}b banks={banks}",
+                    "{name:12} program={program}w ram={ram}b modeled_gpr={modeled}b eeprom={eeprom}b banks={banks}",
                     name = device.name,
                     program = device.program_words,
                     ram = device.data_ram_bytes,
+                    modeled = device.modeled_data_ram_bytes(),
                     eeprom = device.eeprom_bytes,
                     banks = device.bank_count
                 ));
@@ -185,6 +186,9 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
         &ir_program,
         &BackendOptions {
             stack_check: command.stack_check,
+            enforce_resource_limits: command.artifacts.size
+                || command.artifacts.memory_report
+                || command.artifacts.memory_report_file.is_some(),
         },
         &mut diagnostics,
     );
@@ -221,7 +225,15 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
     }
 
     if let Some(path) = &listing_path {
-        fs::write(path, render_listing(&assembled.program, &assembled.words)).map_err(|error| {
+        fs::write(
+            path,
+            render_listing(
+                &assembled.program,
+                &assembled.words,
+                Some(&assembled.resource_report.size_text),
+            ),
+        )
+        .map_err(|error| {
             DiagnosticBag::single(
                 Severity::Error,
                 "io",
@@ -262,6 +274,31 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
         })?;
     }
 
+    if let Some(path) = &command.artifacts.memory_report_file {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                DiagnosticBag::single(
+                    Severity::Error,
+                    "io",
+                    format!(
+                        "failed to create memory report directory `{}`: {error}",
+                        parent.display()
+                    ),
+                )
+            })?;
+        }
+        fs::write(path, &assembled.resource_report.text).map_err(|error| {
+            DiagnosticBag::single(
+                Severity::Error,
+                "io",
+                format!(
+                    "failed to write memory report `{}`: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+    }
+
     let hex_records =
         IntelHexWriter::new(target).emit(&assembled.words, target.default_config_word);
     fs::write(&command.output, hex_records).map_err(|error| {
@@ -290,6 +327,14 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
         println!("{}", assembled.stack_report.text);
     }
 
+    if command.artifacts.size {
+        print!("{}", assembled.resource_report.size_text);
+    }
+
+    if command.artifacts.memory_report {
+        println!("{}", assembled.resource_report.text);
+    }
+
     let mut generated_files = vec![command.output.clone()];
     if let Some(path) = map_path {
         generated_files.push(path);
@@ -298,6 +343,9 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
         generated_files.push(path);
     }
     if let Some(path) = command.stack_report_file.clone() {
+        generated_files.push(path);
+    }
+    if let Some(path) = command.artifacts.memory_report_file.clone() {
         generated_files.push(path);
     }
 

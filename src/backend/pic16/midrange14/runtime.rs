@@ -52,6 +52,44 @@ pub struct RuntimeHelperInfo {
 }
 
 impl RuntimeHelper {
+    pub const ALL: &'static [RuntimeHelper] = &[
+        RuntimeHelper::MulU8,
+        RuntimeHelper::MulI8,
+        RuntimeHelper::MulU16,
+        RuntimeHelper::MulI16,
+        RuntimeHelper::MulU32,
+        RuntimeHelper::MulI32,
+        RuntimeHelper::MulQ8_8,
+        RuntimeHelper::MulUQ8_8,
+        RuntimeHelper::MulQ16_16,
+        RuntimeHelper::MulUQ16_16,
+        RuntimeHelper::DivU8,
+        RuntimeHelper::DivI8,
+        RuntimeHelper::DivU16,
+        RuntimeHelper::DivI16,
+        RuntimeHelper::DivU32,
+        RuntimeHelper::DivI32,
+        RuntimeHelper::DivQ8_8,
+        RuntimeHelper::DivUQ8_8,
+        RuntimeHelper::DivQ16_16,
+        RuntimeHelper::DivUQ16_16,
+        RuntimeHelper::ModU8,
+        RuntimeHelper::ModI8,
+        RuntimeHelper::ModU16,
+        RuntimeHelper::ModI16,
+        RuntimeHelper::ModU32,
+        RuntimeHelper::ModI32,
+        RuntimeHelper::Shl8,
+        RuntimeHelper::Shl16,
+        RuntimeHelper::Shl32,
+        RuntimeHelper::ShrU8,
+        RuntimeHelper::ShrI8,
+        RuntimeHelper::ShrU16,
+        RuntimeHelper::ShrI16,
+        RuntimeHelper::ShrU32,
+        RuntimeHelper::ShrI32,
+    ];
+
     pub const fn info(self) -> RuntimeHelperInfo {
         match self {
             Self::MulU8 => RuntimeHelperInfo {

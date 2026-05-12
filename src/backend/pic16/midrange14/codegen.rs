@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::{Display, Formatter, Write};
 
 use crate::backend::pic16::devices::{MemoryRange, TargetDevice};
 use crate::common::integer::{
@@ -37,6 +38,7 @@ pub struct BackendOutput {
     pub map: MapFile,
     pub optimization: BackendOptimizationReport,
     pub stack_report: StackReport,
+    pub resource_report: ResourceReport,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -48,12 +50,40 @@ pub struct BackendOptimizationReport {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct BackendOptions {
     pub stack_check: bool,
+    pub enforce_resource_limits: bool,
 }
 
 #[derive(Clone, Debug)]
 pub struct StackReport {
     pub summary: StackReportSummary,
     pub text: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResourceReport {
+    pub summary: ResourceSummary,
+    pub size_text: String,
+    pub text: String,
+    pub map_lines: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ResourceSummary {
+    pub program_words_used: u16,
+    pub program_words_available: u16,
+    pub highest_program_word: u16,
+    pub data_ram_used: u16,
+    pub modeled_data_ram_available: u16,
+    pub device_data_ram_available: u16,
+    pub static_data_bytes: u16,
+    pub abi_slot_bytes: u16,
+    pub isr_context_bytes: u16,
+    pub stack_capacity: u16,
+    pub estimated_max_stack: u16,
+    pub rom_table_words: u16,
+    pub helpers_included: u16,
+    pub function_pointer_dispatchers: u16,
+    pub unknown_function_pointer_target_sets: u16,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -172,6 +202,43 @@ struct StackAnalysis {
     summary: StackReportSummary,
 }
 
+#[derive(Clone, Debug)]
+struct ResourceContribution {
+    name: String,
+    kind: ResourceContributionKind,
+    start: u16,
+    words: u16,
+    stack_frame: Option<u16>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResourceContributionKind {
+    VectorStartup,
+    Function,
+    RuntimeHelper,
+    FixedPointHelper,
+    ShiftHelper,
+    FunctionPointerDispatcher,
+    RomTable,
+    Internal,
+}
+
+impl Display for ResourceContributionKind {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            Self::VectorStartup => "vectors/startup",
+            Self::Function => "function",
+            Self::RuntimeHelper => "runtime helper",
+            Self::FixedPointHelper => "fixed-point helper",
+            Self::ShiftHelper => "shift helper",
+            Self::FunctionPointerDispatcher => "function pointer dispatcher",
+            Self::RomTable => "ROM RETLW table",
+            Self::Internal => "internal",
+        };
+        formatter.write_str(text)
+    }
+}
+
 fn program_needs_32bit_return_slots(typed_program: &TypedProgram, ir_program: &IrProgram) -> bool {
     typed_program.symbols.iter().any(|symbol| {
         type_has_32bit_scalar(symbol.ty)
@@ -245,17 +312,41 @@ pub fn compile_program(
     }
 
     let encoded = encode_program(&codegen.program, diagnostics)?;
-    let map = build_map(typed_program, &layout, &encoded.labels);
     let stack_report = StackReport {
         summary: stack_analysis.summary,
         text: render_stack_report(target, typed_program, &layout, &stack_analysis, *options),
     };
+    let resource_report = build_resource_report(
+        target,
+        typed_program,
+        &layout,
+        &encoded.words,
+        &encoded.labels,
+        &stack_report.summary,
+    );
+    validate_resource_fit(
+        target,
+        &resource_report,
+        &encoded.words,
+        *options,
+        diagnostics,
+    );
+    if diagnostics.has_errors() {
+        return None;
+    }
+    let map = build_map(
+        typed_program,
+        &layout,
+        &encoded.labels,
+        resource_report.map_lines.clone(),
+    );
     Some(BackendOutput {
         program: codegen.program,
         words: encoded.words,
         map,
         optimization,
         stack_report,
+        resource_report,
     })
 }
 
@@ -525,7 +616,10 @@ impl<'a> StorageAllocator<'a> {
                     diagnostics.error(
                         "backend",
                         None,
-                        format!("not enough allocatable RAM for symbol `{}`", symbol.name),
+                        format!(
+                            "data RAM overflow: not enough allocatable RAM for symbol `{}`",
+                            symbol.name
+                        ),
                         None,
                     );
                     return None;
@@ -587,7 +681,7 @@ impl<'a> StorageAllocator<'a> {
             diagnostics.error(
                 "backend",
                 None,
-                "not enough RAM left for the Phase 4 software stack",
+                "stack region overflow: not enough RAM left for the Phase 4 software stack",
                 None,
             );
             return None;
@@ -600,7 +694,7 @@ impl<'a> StorageAllocator<'a> {
                 "backend",
                 None,
                 format!(
-                    "Phase 4 software stack needs {max_stack_depth} bytes but only {stack_capacity} bytes remain"
+                    "stack region overflow: Phase 4 software stack needs {max_stack_depth} bytes but only {stack_capacity} bytes remain"
                 ),
                 Some("reduce local storage, call depth, or argument count for this target".to_string()),
             );
@@ -3671,7 +3765,10 @@ impl<'a> CodegenContext<'a> {
                     diagnostics.error(
                         "backend",
                         None,
-                        format!("not enough program memory for ROM object `{}`", symbol.name),
+                        format!(
+                            "program memory overflow: not enough program memory for ROM object `{}`",
+                            symbol.name
+                        ),
                         Some("reduce code size or ROM table size for this target".to_string()),
                     );
                     break;
@@ -3688,7 +3785,7 @@ impl<'a> CodegenContext<'a> {
                         "backend",
                         None,
                         format!(
-                            "ROM object `{}` would overlap generated code at 0x{:04X}",
+                            "ROM table/code overlap: ROM object `{}` would overlap generated code at 0x{:04X}",
                             symbol.name, start
                         ),
                         Some("reduce code size or shrink ROM data for this target".to_string()),
@@ -5063,6 +5160,614 @@ fn call_depth_for_function(
     depth
 }
 
+/// Builds deterministic target resource usage data for `--size`, maps, and reports.
+fn build_resource_report(
+    target: &TargetDevice,
+    typed_program: &TypedProgram,
+    layout: &StorageLayout,
+    words: &BTreeMap<u16, u16>,
+    labels: &BTreeMap<String, u16>,
+    stack: &StackReportSummary,
+) -> ResourceReport {
+    let contributions =
+        collect_resource_contributions(target, typed_program, layout, words, labels);
+    let program_words_used = u16::try_from(
+        words
+            .keys()
+            .filter(|addr| target.program_memory.contains(**addr))
+            .count(),
+    )
+    .unwrap_or(u16::MAX);
+    let highest_program_word = words
+        .keys()
+        .copied()
+        .filter(|addr| target.program_memory.contains(*addr))
+        .max()
+        .unwrap_or(target.program_memory.start);
+    let static_data_bytes = static_data_bytes(typed_program, layout);
+    let abi_slot_bytes = u16::try_from(abi_slot_addresses(layout).len()).unwrap_or(u16::MAX);
+    let isr_context_bytes = u16::try_from(interrupt_context_addresses(layout).len()).unwrap_or(0);
+    let data_ram_used = static_data_bytes
+        .saturating_add(abi_slot_bytes)
+        .saturating_add(isr_context_bytes)
+        .saturating_add(layout.stack_capacity);
+    let rom_table_words = contributions
+        .iter()
+        .filter(|item| item.kind == ResourceContributionKind::RomTable)
+        .map(|item| item.words)
+        .sum();
+    let helpers_included = contributions
+        .iter()
+        .filter(|item| {
+            matches!(
+                item.kind,
+                ResourceContributionKind::RuntimeHelper
+                    | ResourceContributionKind::FixedPointHelper
+                    | ResourceContributionKind::ShiftHelper
+            )
+        })
+        .count();
+    let function_pointer_dispatchers = contributions
+        .iter()
+        .filter(|item| item.kind == ResourceContributionKind::FunctionPointerDispatcher)
+        .count();
+
+    let summary = ResourceSummary {
+        program_words_used,
+        program_words_available: target.program_words,
+        highest_program_word,
+        data_ram_used,
+        modeled_data_ram_available: target.modeled_data_ram_bytes(),
+        device_data_ram_available: target.data_ram_bytes,
+        static_data_bytes,
+        abi_slot_bytes,
+        isr_context_bytes,
+        stack_capacity: layout.stack_capacity,
+        estimated_max_stack: layout.max_stack_depth,
+        rom_table_words,
+        helpers_included: u16::try_from(helpers_included).unwrap_or(u16::MAX),
+        function_pointer_dispatchers: u16::try_from(function_pointer_dispatchers)
+            .unwrap_or(u16::MAX),
+        unknown_function_pointer_target_sets: stack.unknown_function_pointer_target_sets,
+    };
+
+    ResourceReport {
+        summary,
+        size_text: render_size_summary(target, &summary),
+        text: render_memory_report(target, layout, stack, &summary, &contributions),
+        map_lines: render_resource_map_lines(target, &summary),
+    }
+}
+
+/// Validates target fit after all code, helpers, dispatchers, and ROM tables are placed.
+fn validate_resource_fit(
+    target: &TargetDevice,
+    report: &ResourceReport,
+    words: &BTreeMap<u16, u16>,
+    options: BackendOptions,
+    diagnostics: &mut DiagnosticBag,
+) {
+    if target.program_memory.size() != target.program_words {
+        diagnostics.error(
+            "backend",
+            None,
+            format!(
+                "memory descriptor for target {} has inconsistent program range",
+                target.name
+            ),
+            Some("program_memory range size must match program_words".to_string()),
+        );
+    }
+    if !target.program_memory.contains(target.vectors.reset)
+        || !target.program_memory.contains(target.vectors.interrupt)
+    {
+        diagnostics.error(
+            "backend",
+            None,
+            format!(
+                "memory descriptor for target {} has vector outside program memory",
+                target.name
+            ),
+            None,
+        );
+    }
+    if target.allocatable_gpr.is_empty() {
+        diagnostics.error(
+            "backend",
+            None,
+            format!(
+                "memory descriptor for target {} lacks allocatable RAM ranges",
+                target.name
+            ),
+            None,
+        );
+    }
+
+    if options.enforce_resource_limits
+        && let Some(highest) = words
+            .keys()
+            .copied()
+            .filter(|addr| *addr != target.vectors.config_word)
+            .max()
+        && !target.program_memory.contains(highest)
+    {
+        diagnostics.error(
+            "backend",
+            None,
+            format!("program memory overflow for target {}", target.name),
+            Some(format!(
+                "highest used word: 0x{highest:04X}; available range: 0x{:04X}..0x{:04X}",
+                target.program_memory.start, target.program_memory.end
+            )),
+        );
+    }
+
+    if options.enforce_resource_limits && words.contains_key(&target.vectors.config_word) {
+        diagnostics.error(
+            "backend",
+            None,
+            format!(
+                "program code overlaps config word 0x{:04X} for target {}",
+                target.vectors.config_word, target.name
+            ),
+            Some(
+                "move code/ROM tables below normal program memory; config is emitted separately"
+                    .to_string(),
+            ),
+        );
+    }
+
+    if report.summary.data_ram_used > report.summary.modeled_data_ram_available {
+        diagnostics.error(
+            "backend",
+            None,
+            format!("data RAM overflow for target {}", target.name),
+            Some(format!(
+                "reserved {} byte(s), modeled GPR capacity {} byte(s)",
+                report.summary.data_ram_used, report.summary.modeled_data_ram_available
+            )),
+        );
+    }
+
+    if report.summary.estimated_max_stack > report.summary.stack_capacity {
+        diagnostics.error(
+            "backend",
+            None,
+            format!("stack region overflow for target {}", target.name),
+            Some(format!(
+                "estimated max stack {} byte(s), stack region {} byte(s)",
+                report.summary.estimated_max_stack, report.summary.stack_capacity
+            )),
+        );
+    }
+}
+
+fn render_size_summary(target: &TargetDevice, summary: &ResourceSummary) -> String {
+    let mut output = String::new();
+    let _ = writeln!(output, "Target: {}", target.name.to_ascii_uppercase());
+    let _ = writeln!(
+        output,
+        "Program words: {} / {}",
+        summary.program_words_used, summary.program_words_available
+    );
+    let _ = writeln!(
+        output,
+        "Data RAM: {} / {} bytes modeled (device total: {} bytes)",
+        summary.data_ram_used,
+        summary.modeled_data_ram_available,
+        summary.device_data_ram_available
+    );
+    let _ = writeln!(output, "Static data: {} bytes", summary.static_data_bytes);
+    let _ = writeln!(
+        output,
+        "Software stack region: {} bytes",
+        summary.stack_capacity
+    );
+    let _ = writeln!(
+        output,
+        "Estimated max stack: {} bytes",
+        summary.estimated_max_stack
+    );
+    let _ = writeln!(output, "ROM table words: {}", summary.rom_table_words);
+    let _ = writeln!(output, "Helpers included: {}", summary.helpers_included);
+    output
+}
+
+fn render_memory_report(
+    target: &TargetDevice,
+    layout: &StorageLayout,
+    stack: &StackReportSummary,
+    summary: &ResourceSummary,
+    contributions: &[ResourceContribution],
+) -> String {
+    let mut output = String::new();
+    let _ = writeln!(output, "Memory report");
+    let _ = writeln!(output, "-------------");
+    let _ = writeln!(output, "target: {}", target.name);
+    let _ = writeln!(
+        output,
+        "program range: 0x{:04X}..0x{:04X} ({} words)",
+        target.program_memory.start, target.program_memory.end, target.program_words
+    );
+    let _ = writeln!(
+        output,
+        "vectors: reset=0x{:04X} interrupt=0x{:04X} config=0x{:04X}",
+        target.vectors.reset, target.vectors.interrupt, target.vectors.config_word
+    );
+    let _ = writeln!(
+        output,
+        "program words: {} / {} highest=0x{:04X}",
+        summary.program_words_used, summary.program_words_available, summary.highest_program_word
+    );
+    let _ = writeln!(
+        output,
+        "data RAM: {} / {} bytes modeled (device total: {} bytes)",
+        summary.data_ram_used,
+        summary.modeled_data_ram_available,
+        summary.device_data_ram_available
+    );
+    let _ = writeln!(
+        output,
+        "data breakdown: static={} abi/runtime={} isr_context={} stack_region={}",
+        summary.static_data_bytes,
+        summary.abi_slot_bytes,
+        summary.isr_context_bytes,
+        summary.stack_capacity
+    );
+    let _ = writeln!(
+        output,
+        "stack: base=0x{:04X} limit=0x{:04X} capacity={} estimated_max={} check={}",
+        layout.stack_base,
+        layout.stack_limit,
+        layout.stack_capacity,
+        summary.estimated_max_stack,
+        if stack.stack_check { "on" } else { "off" }
+    );
+    let _ = writeln!(
+        output,
+        "function pointers: groups={} targets={} unknown_target_sets={}",
+        stack.function_pointer_groups,
+        stack.function_pointer_targets,
+        stack.unknown_function_pointer_target_sets
+    );
+    let _ = writeln!(output);
+    render_memory_ranges(&mut output, "allocatable GPR", target.allocatable_gpr);
+    render_memory_ranges(&mut output, "shared GPR", target.shared_gpr);
+    render_memory_ranges(&mut output, "reserved/SFR RAM", target.reserved_ram);
+    let _ = writeln!(
+        output,
+        "ROM table region: 0x{:04X}..0x{:04X}",
+        target.rom_table_region.start, target.rom_table_region.end
+    );
+    let _ = writeln!(
+        output,
+        "default stack candidate: 0x{:04X}..0x{:04X}",
+        target.default_stack_region.start, target.default_stack_region.end
+    );
+
+    let _ = writeln!(output);
+    let _ = writeln!(output, "Program sections");
+    let _ = writeln!(output, "----------------");
+    for item in contributions {
+        let end = item.start.saturating_add(item.words.saturating_sub(1));
+        let _ = writeln!(
+            output,
+            "0x{:04X}..0x{:04X}  {:>4} words  {:<27} {}",
+            item.start, end, item.words, item.kind, item.name
+        );
+    }
+
+    let helpers = contributions
+        .iter()
+        .filter(|item| {
+            matches!(
+                item.kind,
+                ResourceContributionKind::RuntimeHelper
+                    | ResourceContributionKind::FixedPointHelper
+                    | ResourceContributionKind::ShiftHelper
+            )
+        })
+        .collect::<Vec<_>>();
+    if !helpers.is_empty() {
+        let _ = writeln!(output);
+        let _ = writeln!(output, "Runtime helper contribution");
+        let _ = writeln!(output, "---------------------------");
+        for helper in helpers {
+            let frame = helper.stack_frame.unwrap_or(0);
+            let _ = writeln!(
+                output,
+                "{}: {} words, frame {} bytes",
+                helper.name, helper.words, frame
+            );
+        }
+    }
+
+    let mut largest = contributions.to_vec();
+    largest.sort_by(|lhs, rhs| {
+        rhs.words
+            .cmp(&lhs.words)
+            .then_with(|| lhs.name.cmp(&rhs.name))
+    });
+    let _ = writeln!(output);
+    let _ = writeln!(output, "Largest contributors");
+    let _ = writeln!(output, "--------------------");
+    for item in largest.into_iter().take(8) {
+        let _ = writeln!(
+            output,
+            "{}: {} words ({})",
+            item.name, item.words, item.kind
+        );
+    }
+
+    output
+}
+
+fn render_resource_map_lines(target: &TargetDevice, summary: &ResourceSummary) -> Vec<String> {
+    vec![
+        format!("Target: {}", target.name.to_ascii_uppercase()),
+        format!(
+            "Program words: {} / {}",
+            summary.program_words_used, summary.program_words_available
+        ),
+        format!(
+            "Data RAM: {} / {} bytes modeled (device total: {} bytes)",
+            summary.data_ram_used,
+            summary.modeled_data_ram_available,
+            summary.device_data_ram_available
+        ),
+        format!("Static data: {} bytes", summary.static_data_bytes),
+        format!("Software stack region: {} bytes", summary.stack_capacity),
+        format!("Estimated max stack: {} bytes", summary.estimated_max_stack),
+        format!("ROM table words: {}", summary.rom_table_words),
+        format!("Helpers included: {}", summary.helpers_included),
+        format!(
+            "Function pointer dispatchers: {}",
+            summary.function_pointer_dispatchers
+        ),
+        format!(
+            "Unknown function pointer target sets: {}",
+            summary.unknown_function_pointer_target_sets
+        ),
+    ]
+}
+
+fn render_memory_ranges(output: &mut String, title: &str, ranges: &[MemoryRange]) {
+    if ranges.is_empty() {
+        let _ = writeln!(output, "{title}: (none)");
+        return;
+    }
+    let joined = ranges
+        .iter()
+        .map(|range| format!("0x{:04X}..0x{:04X}", range.start, range.end))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let bytes = ranges.iter().map(|range| range.size()).sum::<u16>();
+    let _ = writeln!(output, "{title}: {joined} ({bytes} bytes)");
+}
+
+fn collect_resource_contributions(
+    target: &TargetDevice,
+    typed_program: &TypedProgram,
+    layout: &StorageLayout,
+    words: &BTreeMap<u16, u16>,
+    labels: &BTreeMap<String, u16>,
+) -> Vec<ResourceContribution> {
+    let mut starts = Vec::<(u16, String, ResourceContributionKind, Option<u16>)>::new();
+    push_label_if_present(
+        &mut starts,
+        labels,
+        "__reset_vector",
+        ResourceContributionKind::VectorStartup,
+        None,
+    );
+    push_label_if_present(
+        &mut starts,
+        labels,
+        "__interrupt_vector",
+        ResourceContributionKind::VectorStartup,
+        None,
+    );
+    push_label_if_present(
+        &mut starts,
+        labels,
+        "__start",
+        ResourceContributionKind::VectorStartup,
+        None,
+    );
+    push_label_if_present(
+        &mut starts,
+        labels,
+        "__stack_overflow_trap",
+        ResourceContributionKind::Internal,
+        None,
+    );
+
+    for function in &typed_program.functions {
+        let name = &typed_program.symbols[function.symbol].name;
+        let label = function_label(name);
+        let frame = layout
+            .frames
+            .get(&function.symbol)
+            .map(|frame| frame.frame_bytes);
+        push_label_if_present(
+            &mut starts,
+            labels,
+            &label,
+            ResourceContributionKind::Function,
+            frame,
+        );
+    }
+
+    for group in &typed_program.function_pointer_groups {
+        let label = function_pointer_dispatch_label(group.ty);
+        push_label_if_present(
+            &mut starts,
+            labels,
+            &label,
+            ResourceContributionKind::FunctionPointerDispatcher,
+            None,
+        );
+    }
+
+    for helper in RuntimeHelper::ALL {
+        let info = helper.info();
+        push_label_if_present(
+            &mut starts,
+            labels,
+            info.label,
+            runtime_helper_resource_kind(*helper),
+            Some(info.frame_bytes),
+        );
+    }
+
+    for symbol in typed_program
+        .symbols
+        .iter()
+        .filter(|symbol| symbol.ty.is_rom())
+    {
+        let label = rom_object_label(symbol.id);
+        if let Some(addr) = labels.get(&label).copied() {
+            starts.push((
+                addr,
+                format_rom_symbol_name(symbol),
+                ResourceContributionKind::RomTable,
+                None,
+            ));
+        }
+    }
+
+    starts.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0).then_with(|| lhs.1.cmp(&rhs.1)));
+    starts.dedup_by(|lhs, rhs| lhs.0 == rhs.0 && lhs.1 == rhs.1);
+    let program_end = words
+        .keys()
+        .copied()
+        .filter(|addr| target.program_memory.contains(*addr))
+        .max()
+        .map(|addr| addr.saturating_add(1))
+        .unwrap_or(target.program_memory.start);
+
+    starts
+        .iter()
+        .enumerate()
+        .map(|(index, (start, name, kind, frame))| {
+            let end = starts
+                .iter()
+                .skip(index + 1)
+                .map(|(addr, _, _, _)| *addr)
+                .find(|addr| *addr > *start)
+                .unwrap_or(program_end);
+            ResourceContribution {
+                name: name.clone(),
+                kind: *kind,
+                start: *start,
+                words: end.saturating_sub(*start),
+                stack_frame: *frame,
+            }
+        })
+        .filter(|item| item.words > 0)
+        .collect()
+}
+
+fn push_label_if_present(
+    starts: &mut Vec<(u16, String, ResourceContributionKind, Option<u16>)>,
+    labels: &BTreeMap<String, u16>,
+    label: &str,
+    kind: ResourceContributionKind,
+    frame: Option<u16>,
+) {
+    if let Some(addr) = labels.get(label).copied() {
+        starts.push((addr, label.to_string(), kind, frame));
+    }
+}
+
+fn runtime_helper_resource_kind(helper: RuntimeHelper) -> ResourceContributionKind {
+    match helper {
+        RuntimeHelper::MulQ8_8
+        | RuntimeHelper::MulUQ8_8
+        | RuntimeHelper::MulQ16_16
+        | RuntimeHelper::MulUQ16_16
+        | RuntimeHelper::DivQ8_8
+        | RuntimeHelper::DivUQ8_8
+        | RuntimeHelper::DivQ16_16
+        | RuntimeHelper::DivUQ16_16 => ResourceContributionKind::FixedPointHelper,
+        RuntimeHelper::Shl8
+        | RuntimeHelper::Shl16
+        | RuntimeHelper::Shl32
+        | RuntimeHelper::ShrU8
+        | RuntimeHelper::ShrI8
+        | RuntimeHelper::ShrU16
+        | RuntimeHelper::ShrI16
+        | RuntimeHelper::ShrU32
+        | RuntimeHelper::ShrI32 => ResourceContributionKind::ShiftHelper,
+        _ => ResourceContributionKind::RuntimeHelper,
+    }
+}
+
+fn static_data_bytes(typed_program: &TypedProgram, layout: &StorageLayout) -> u16 {
+    typed_program
+        .symbols
+        .iter()
+        .filter(|symbol| symbol.fixed_address.is_none())
+        .filter(|symbol| !symbol.ty.is_rom())
+        .filter(|symbol| {
+            symbol.kind == SymbolKind::Global
+                || symbol.kind == SymbolKind::StringLiteral
+                || (symbol.kind == SymbolKind::Local
+                    && symbol.storage_class == StorageClass::Static)
+        })
+        .filter(|symbol| {
+            matches!(
+                layout.symbol_storage.get(&symbol.id),
+                Some(SymbolStorage::Absolute(_))
+            )
+        })
+        .fold(0u16, |sum, symbol| {
+            sum.saturating_add(u16::try_from(symbol.ty.byte_width()).unwrap_or(u16::MAX))
+        })
+}
+
+fn abi_slot_addresses(layout: &StorageLayout) -> BTreeSet<u16> {
+    [
+        layout.helpers.stack_ptr.lo,
+        layout.helpers.stack_ptr.hi,
+        layout.helpers.frame_ptr.lo,
+        layout.helpers.frame_ptr.hi,
+        layout.helpers.return_high,
+        layout.helpers.return_upper0,
+        layout.helpers.return_upper1,
+        layout.helpers.scratch0,
+        layout.helpers.scratch1,
+        layout.helpers.flag_save,
+        layout.helpers.w_save,
+    ]
+    .into_iter()
+    .collect()
+}
+
+fn interrupt_context_addresses(layout: &StorageLayout) -> BTreeSet<u16> {
+    let mut addresses = BTreeSet::new();
+    if let Some(interrupt) = layout.interrupt {
+        addresses.extend([
+            interrupt.w,
+            interrupt.status,
+            interrupt.pclath,
+            interrupt.fsr,
+            interrupt.return_high,
+            interrupt.return_upper0,
+            interrupt.return_upper1,
+            interrupt.scratch0,
+            interrupt.scratch1,
+            interrupt.flag_save,
+            interrupt.w_save,
+            interrupt.stack_ptr.lo,
+            interrupt.stack_ptr.hi,
+            interrupt.frame_ptr.lo,
+            interrupt.frame_ptr.hi,
+        ]);
+    }
+    addresses
+}
+
 /// Renders human-readable Phase 18 stack report text.
 fn render_stack_report(
     target: &TargetDevice,
@@ -5174,6 +5879,7 @@ fn build_map(
     typed_program: &TypedProgram,
     layout: &StorageLayout,
     labels: &BTreeMap<String, u16>,
+    resource_lines: Vec<String>,
 ) -> MapFile {
     let rom_label_names = typed_program
         .symbols
@@ -5283,6 +5989,7 @@ fn build_map(
     rom_symbols.sort_by_key(|(_, addr)| *addr);
 
     MapFile {
+        resource_lines,
         code_symbols,
         data_symbols,
         rom_symbols,

@@ -2,6 +2,8 @@
 
 # Testing Guide
 
+Phase 25 resource-report validation lives in `tests/compiler_pipeline.rs`. It checks target descriptors, `--size`, `--memory-report`, `--memory-report-file`, map/listing resource summaries, helper contribution reporting, ROM-table contribution reporting, data-RAM overflow diagnostics, and stack-region overflow diagnostics.
+
 Phase 24 runtime validation lives in `tests/execution_sim.rs`. It compiles C programs to HEX, runs them through the simulator, and checks fixed-point RAM results for decimal literals, fixed ROM table reads, fixed casts, Q8.8 arithmetic, UQ8.8 arithmetic, Q16.16 add/subtract/compare, Q16.16 constant-folded multiply/divide, and dynamic Q16.16/UQ16.16 helper-backed multiply/divide.
 
 Phase 24 diagnostics and artifacts are covered in `tests/compiler_pipeline.rs` for malformed/unsupported/out-of-range fixed literals, implicit fixed narrowing, bitwise/modulo fixed rejection, fixed division by constant zero, ISR helper restrictions, fixed ROM objects, dynamic Q16.16 helper map/listing visibility, stack-report helper accounting, and checked-in fixed examples.
@@ -24,6 +26,20 @@ cargo test --test execution_sim
 cargo test --test sim_cli
 cargo clippy --all-targets -- -D warnings
 ```
+
+## Memory Report Tests
+
+Use compiler-pipeline tests for:
+
+- `--size`
+- `--memory-report`
+- `--memory-report-file`
+- `.map` `Memory Summary`
+- `.lst` resource summary comments
+- helper-heavy programs showing `__rt_mul_q16_16` / `__rt_div_q16_16`
+- ROM-table programs showing ROM table contribution
+- artificial large globals causing data-RAM overflow
+- local/argument pressure causing stack-region overflow
 
 ## Simulator CLI Tests
 

@@ -33,7 +33,18 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 24: dynamic Q16.16 fixed-point helpers on top of Phase 23 fixed literals/ROM tables, Phase 22 fixed-point arithmetic, Phase 21 controlled 32-bit integers, Phase 20 simulator CLI/debugging workflow, Phase 19 emulator-based execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier frontend/backend phases**.
+Current implementation is **Phase 25: target resource limits, memory fitting, and size reports on top of Phase 24 dynamic Q16.16 fixed-point helpers, Phase 23 fixed literals/ROM tables, Phase 22 fixed-point arithmetic, Phase 21 controlled 32-bit integers, Phase 20 simulator CLI/debugging workflow, Phase 19 emulator-based execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier frontend/backend phases**.
+
+Phase 25 scope:
+
+- explicit program/data memory descriptors for `PIC16F628A` and `PIC16F877A`
+- target fit validation for encoded program words, config-word overlap, data RAM layout, and software-stack capacity
+- clearer diagnostics for program memory overflow, data RAM overflow, stack region overflow, ROM table/code overlap, and descriptor mistakes
+- user-facing `--size`, `--memory-report`, and `--memory-report-file <path>` options
+- `.map` memory summary and `.lst` resource-summary comments
+- runtime-helper contribution reporting, including large Q16.16 fixed-point helpers
+- examples for small firmware size, fixed-helper cost, and ROM-table contribution
+- no IEEE float, recursion, or advanced optimization work
 
 Phase 24 scope:
 

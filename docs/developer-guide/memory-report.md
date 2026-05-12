@@ -1,0 +1,59 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
+# Memory Report
+
+Phase 25 adds three compiler options:
+
+```bash
+picc --target pic16f877a -I include --size -o build/app.hex app.c
+picc --target pic16f877a -I include --memory-report -o build/app.hex app.c
+picc --target pic16f877a -I include --memory-report-file build/app.mem -o build/app.hex app.c
+```
+
+## Compact Size Output
+
+`--size` prints:
+
+- target
+- used/available program words
+- modeled data RAM usage and total device RAM
+- static data bytes
+- reserved software stack region
+- estimated max stack
+- ROM table words
+- runtime helper count
+
+## Detailed Report
+
+`--memory-report` and `--memory-report-file` include:
+
+- program range and vector/config addresses
+- data RAM breakdown
+- stack bounds and estimate
+- function-pointer uncertainty
+- allocatable/shared/reserved RAM ranges
+- ROM table region
+- program sections
+- helper contribution with stack frame cost
+- largest program-memory contributors
+
+The report is deterministic so generated files can be diffed in CI.
+
+## Map And Listing
+
+When `--map` is enabled, the map begins with `Memory Summary`.
+
+When `--list-file` is enabled, the listing begins with comment-form resource summary lines before the word dump.
+
+## Diagnostics
+
+Phase 25 adds clearer failures for:
+
+- program memory overflow
+- data RAM overflow
+- stack region overflow
+- ROM table/code overlap
+- config word overlap
+- missing descriptor ranges
+
+Existing ROM page-size and ISR/helper diagnostics remain unchanged.

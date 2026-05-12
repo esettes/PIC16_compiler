@@ -5374,4 +5374,174 @@ fn phase16_examples_compile_via_picc() {
         assert!(output.with_extension("lst").exists());
     }
 }
+
+#[test]
+/// Verifies Phase 25 resource summaries are embedded in map and listing artifacts.
+fn phase25_map_and_listing_include_resource_summary() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase25-resource-summary.c",
+        "\
+unsigned char result;
+void main(void) {
+    result = 5;
+}
+",
+    );
+
+    let map = read_artifact(&output, "map");
+    let listing = read_artifact(&output, "lst");
+    assert!(map.contains("Memory Summary"));
+    assert!(map.contains("Program words:"));
+    assert!(map.contains("Data RAM:"));
+    assert!(listing.contains("; Resource summary"));
+    assert!(listing.contains("; Program words:"));
+}
+
+#[test]
+/// Verifies `--size`, `--memory-report`, and `--memory-report-file` expose helper cost.
+fn phase25_resource_report_cli_outputs_helper_contribution() {
+    let out_dir = temp_dir_path("phase25-memory-report");
+    fs::create_dir_all(&out_dir).expect("out dir");
+    let out_hex = out_dir.join("fixed.hex");
+    let report_path = out_dir.join("fixed.mem");
+    let output = Command::new(picc_bin())
+        .current_dir(repo("."))
+        .args([
+            "--target",
+            "pic16f877a",
+            "-Wall",
+            "-Wextra",
+            "-O2",
+            "-I",
+            "include",
+            "--size",
+            "--memory-report",
+            "--memory-report-file",
+        ])
+        .arg(&report_path)
+        .args(["--map", "--list-file", "-o"])
+        .arg(&out_hex)
+        .arg("examples/pic16f877a/memory_report_fixed.c")
+        .output()
+        .expect("run picc memory report");
+
+    if !output.status.success() {
+        panic!(
+            "picc failed: stdout={:?} stderr={:?}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Target: PIC16F877A"));
+    assert!(stdout.contains("Memory report"));
+    assert!(stdout.contains("__rt_mul_q16_16"));
+    let report = fs::read_to_string(report_path).expect("memory report file");
+    assert!(report.contains("Runtime helper contribution"));
+    assert!(report.contains("__rt_mul_q16_16"));
+    assert!(report.contains("Largest contributors"));
+    assert_hex_is_programmable(&out_hex);
+}
+
+#[test]
+/// Verifies Phase 25 data RAM overflow diagnostics are explicit.
+fn phase25_reports_data_ram_overflow() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase25-ram-overflow.c",
+        "\
+unsigned char big[100];
+void main(void) {
+    big[0] = 1;
+}
+",
+    );
+
+    assert!(error.contains("data RAM overflow"));
+    assert!(error.contains("not enough allocatable RAM"));
+}
+
+#[test]
+/// Verifies Phase 25 stack-region overflow diagnostics are explicit.
+fn phase25_reports_stack_region_overflow() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase25-stack-overflow.c",
+        "\
+void main(void) {
+    unsigned char local[80];
+    local[0] = 1;
+}
+",
+    );
+
+    assert!(error.contains("stack region overflow"));
+    assert!(error.contains("Phase 4 software stack needs"));
+}
+
+#[test]
+/// Verifies Phase 25 still rejects ROM tables that cannot fit the RETLW page model.
+fn phase25_reports_rom_table_too_large() {
+    let values = vec!["1"; 256].join(", ");
+    let source = format!(
+        "\
+const __rom unsigned char table[] = {{ {values} }};
+void main(void) {{
+}}
+"
+    );
+    let error = compile_error("pic16f628a", "phase25-rom-too-large.c", &source);
+
+    assert!(error.contains("too large for one phase 14 RETLW"));
+}
+
+#[test]
+/// Verifies program-memory overflow is a hard error when resource fitting is requested.
+fn phase25_reports_program_memory_overflow_when_size_requested() {
+    let out_hex = temp_file("phase25-overflow.hex");
+    let output = Command::new(picc_bin())
+        .current_dir(repo("."))
+        .args([
+            "--target",
+            "pic16f628a",
+            "-Wall",
+            "-Wextra",
+            "-O2",
+            "-I",
+            "include",
+            "--size",
+            "-o",
+        ])
+        .arg(&out_hex)
+        .arg("examples/pic16f628a/stack_abi.c")
+        .output()
+        .expect("run picc overflow");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("program memory overflow for target pic16f628a"));
+}
+
+#[test]
+/// Verifies checked-in Phase 25 examples compile through the `picc` CLI.
+fn phase25_examples_compile_via_picc() {
+    let examples = [
+        ("pic16f628a", "examples/pic16f628a/size_report_small.c"),
+        ("pic16f877a", "examples/pic16f877a/memory_report_fixed.c"),
+        ("pic16f877a", "examples/pic16f877a/memory_report_rom.c"),
+    ];
+
+    for (target, example) in examples {
+        let output = compile_example_via_picc_cli_with_extra_args(
+            target,
+            example,
+            &["--size", "--memory-report"],
+        );
+        assert_hex_is_programmable(&output);
+        assert!(output.with_extension("map").exists());
+        assert!(output.with_extension("lst").exists());
+    }
+}
 // SPDX-License-Identifier: GPL-3.0-or-later

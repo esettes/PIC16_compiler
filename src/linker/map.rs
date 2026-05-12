@@ -4,6 +4,7 @@ use std::fmt::Write;
 
 #[derive(Clone, Debug, Default)]
 pub struct MapFile {
+    pub resource_lines: Vec<String>,
     pub code_symbols: Vec<(String, u16)>,
     pub data_symbols: Vec<(String, u16)>,
     pub rom_symbols: Vec<(String, u16)>,
@@ -12,6 +13,14 @@ pub struct MapFile {
 /// Renders the linker map with code and data symbol addresses.
 pub fn render_map(map: &MapFile) -> String {
     let mut output = String::new();
+    if !map.resource_lines.is_empty() {
+        let _ = writeln!(output, "Memory Summary");
+        let _ = writeln!(output, "--------------");
+        for line in &map.resource_lines {
+            let _ = writeln!(output, "{line}");
+        }
+        let _ = writeln!(output);
+    }
     render_section(&mut output, "Code Symbols", &map.code_symbols);
     render_grouped(&mut output, "  User Code", &map.code_symbols, |name| {
         !name.starts_with("__rt_") && !name.starts_with("__")

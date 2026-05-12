@@ -29,7 +29,7 @@ pub enum OptimizationLevel {
     Os,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct OutputArtifacts {
     pub emit_tokens: bool,
     pub emit_ast: bool,
@@ -37,6 +37,9 @@ pub struct OutputArtifacts {
     pub emit_asm: bool,
     pub map: bool,
     pub list_file: bool,
+    pub size: bool,
+    pub memory_report: bool,
+    pub memory_report_file: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -99,6 +102,8 @@ impl CliOptions {
                 "--emit-asm" => artifacts.emit_asm = true,
                 "--map" => artifacts.map = true,
                 "--list-file" => artifacts.list_file = true,
+                "--size" => artifacts.size = true,
+                "--memory-report" => artifacts.memory_report = true,
                 "--verbose" => verbose = true,
                 "--opt-report" => opt_report = true,
                 "--stack-check" => stack_check = true,
@@ -128,6 +133,12 @@ impl CliOptions {
                         .ok_or_else(|| "--stack-report-file requires a path".to_string())?;
                     stack_report = true;
                     stack_report_file = Some(PathBuf::from(value));
+                }
+                "--memory-report-file" => {
+                    let value = iter
+                        .next()
+                        .ok_or_else(|| "--memory-report-file requires a path".to_string())?;
+                    artifacts.memory_report_file = Some(PathBuf::from(value));
                 }
                 "-I" => {
                     let value = iter
@@ -233,6 +244,10 @@ pub fn help_text() -> &'static str {
         "  --emit-asm        Write assembly dump next to output\n",
         "  --map             Write map file next to output\n",
         "  --list-file       Write listing file next to output\n",
+        "  --size            Print compact target resource usage\n",
+        "  --memory-report   Print detailed memory/resource report\n",
+        "  --memory-report-file <path>\n",
+        "                    Write detailed memory/resource report to file\n",
         "  --opt-report      Print optimization summary after a successful compile\n",
         "  --stack-check     Emit runtime software-stack overflow checks\n",
         "  --stack-report    Print stack usage summary after a successful compile\n",

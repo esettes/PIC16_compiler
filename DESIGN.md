@@ -68,7 +68,19 @@ Execution validation:
 
 ### Shared Backend + Descriptors
 
-Backend knows `midrange14` family, not concrete devices. Device descriptors own RAM ranges, program size, SFRs, vectors, config words.
+Backend knows `midrange14` family, not concrete devices. Device descriptors own RAM ranges, program size, SFRs, vectors, config words, reserved RAM ranges, default stack region, and ROM table region.
+
+### Phase 25 Resource Fitting
+
+Phase 25 validates final encoded output against the selected target. It reports program words, modeled data RAM, static data, reserved software stack, estimated max stack, ROM table words, included helpers, function-pointer dispatchers, and largest program-memory contributors.
+
+CLI surfaces:
+
+- `--size`
+- `--memory-report`
+- `--memory-report-file <path>`
+
+The `.map` file starts with a compact memory summary. The `.lst` file starts with resource-summary comments. Overflow diagnostics are hard errors for known program-memory, data-RAM, config-word, ROM-table/code, and stack-region failures.
 
 ### Phase 4 Stack-first ABI
 

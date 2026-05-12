@@ -85,3 +85,15 @@ Possible follow-up lines:
 `--stack-check` is separate from reporting.
 
 It emits inline overflow guards and a generated `__stack_overflow_trap` loop. Report text still works with checks on or off.
+
+## Phase 25 Resource Report Link
+
+`--memory-report` reuses this stack analysis and places the stack numbers next to target RAM capacity:
+
+- stack base / limit / capacity
+- estimated max stack
+- helper stack pressure
+- ISR context cost
+- function-pointer uncertainty
+
+Use `--memory-report` when deciding whether a program fits a concrete PIC target. Use `--stack-report` when debugging call/frame detail.
