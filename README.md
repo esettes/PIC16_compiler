@@ -33,7 +33,20 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 25: target resource limits, memory fitting, and size reports on top of Phase 24 dynamic Q16.16 fixed-point helpers, Phase 23 fixed literals/ROM tables, Phase 22 fixed-point arithmetic, Phase 21 controlled 32-bit integers, Phase 20 simulator CLI/debugging workflow, Phase 19 emulator-based execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier frontend/backend phases**.
+Current implementation is **Phase 26: device configuration, HEX validation, and programmer workflow on top of Phase 25 target resource limits, Phase 24 dynamic Q16.16 fixed-point helpers, Phase 23 fixed literals/ROM tables, Phase 22 fixed-point arithmetic, Phase 21 controlled 32-bit integers, Phase 20 simulator CLI/debugging workflow, Phase 19 emulator-based execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier frontend/backend phases**.
+
+Phase 26 scope:
+
+- explicit config-word descriptors for `PIC16F628A` and `PIC16F877A`
+- symbolic `#pragma config FIELD = VALUE` support
+- raw `__config(0x....)` fallback
+- config word emitted in HEX and surfaced in `.map` / `.lst`
+- always-on final HEX validation for target range, vectors, config, 14-bit words, checksums, and EOF
+- `--verify-hex` detailed validation report
+- `--print-program-command`, `--program`, and `--program-cmd <cmd>` for external programmer workflows
+- Makefile `make size`, `make sim`, `make flash`, `FLASH_CMD`, and `FLASH_ARGS`
+- hardware smoke examples under `examples/hardware/`
+- no IEEE float, recursion, or advanced optimization work
 
 Phase 25 scope:
 

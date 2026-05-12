@@ -57,3 +57,13 @@ Phase 25 adds clearer failures for:
 - missing descriptor ranges
 
 Existing ROM page-size and ISR/helper diagnostics remain unchanged.
+
+## Phase 26 Interaction
+
+Phase 26 makes final HEX validation always-on. `--size` and `--memory-report` remain detailed reporting surfaces, but invalid program-memory output is now rejected even when reports are not requested.
+
+Use `--verify-hex` with `--memory-report` when preparing a hardware build:
+
+```bash
+picc --target pic16f628a -I include --size --memory-report --verify-hex -o build/app.hex app.c
+```

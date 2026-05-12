@@ -1,0 +1,32 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#include <pic16/pic16f877a.h>
+
+#pragma config FOSC = HS
+#pragma config WDTE = OFF
+#pragma config PWRTE = ON
+#pragma config BOREN = ON
+#pragma config LVP = OFF
+#pragma config CPD = OFF
+#pragma config CP = OFF
+
+static void delay(void) {
+    unsigned int outer;
+    unsigned char inner;
+    for (outer = 0; outer < 250; outer = outer + 1) {
+        for (inner = 0; inner < 200; inner = inner + 1) {
+        }
+    }
+}
+
+void main(void) {
+    ADCON1 = 0x06;
+    TRISB = 0x00;
+    PORTB = 0x00;
+    while (1) {
+        PORTB = 0x01;
+        delay();
+        PORTB = 0x00;
+        delay();
+    }
+}

@@ -852,7 +852,7 @@ void main(void) {
 #[test]
 fn executes_phase22_q8_8_multiply_helper() {
     let (core, map) = run_source(
-        "pic16f628a",
+        "pic16f877a",
         "phase22-q8-mul.c",
         r#"
 __fixed8_8 a = __q8_8(0x0180);
@@ -871,7 +871,7 @@ void main(void) {
 #[test]
 fn executes_phase22_q8_8_divide_helper() {
     let (core, map) = run_source(
-        "pic16f628a",
+        "pic16f877a",
         "phase22-q8-div.c",
         r#"
 __fixed8_8 a = __q8_8(0x0300);
@@ -911,7 +911,7 @@ void main(void) {
 #[test]
 fn executes_phase22_q8_8_struct_and_array_storage() {
     let (core, map) = run_source(
-        "pic16f628a",
+        "pic16f877a",
         "phase22-q8-aggregate.c",
         r#"
 struct Sensor {
@@ -939,7 +939,7 @@ void main(void) {
 #[test]
 fn executes_phase22_uq8_8_arithmetic() {
     let (core, map) = run_source(
-        "pic16f628a",
+        "pic16f877a",
         "phase22-uq8-arith.c",
         r#"
 __ufixed8_8 a = __uq8_8(0x0300);
@@ -1105,7 +1105,7 @@ void main(void) {
 #[test]
 fn executes_phase23_fixed_casts() {
     let (core, map) = run_source(
-        "pic16f628a",
+        "pic16f877a",
         "phase23-fixed-casts.c",
         r#"
 __fixed8_8 q8 = 1.5q8_8;

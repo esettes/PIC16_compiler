@@ -2,6 +2,8 @@
 
 # Testing Guide
 
+Phase 26 validation lives in `tests/compiler_pipeline.rs` and `src/hex/intel_hex.rs`. It checks raw and symbolic config words, duplicate/unknown config diagnostics, config emission in `.hex/.map/.lst`, final HEX validation reports, program overflow rejection without `--size`, programmer command printing, configurable Makefile flashing, and hardware smoke examples.
+
 Phase 25 resource-report validation lives in `tests/compiler_pipeline.rs`. It checks target descriptors, `--size`, `--memory-report`, `--memory-report-file`, map/listing resource summaries, helper contribution reporting, ROM-table contribution reporting, data-RAM overflow diagnostics, and stack-region overflow diagnostics.
 
 Phase 24 runtime validation lives in `tests/execution_sim.rs`. It compiles C programs to HEX, runs them through the simulator, and checks fixed-point RAM results for decimal literals, fixed ROM table reads, fixed casts, Q8.8 arithmetic, UQ8.8 arithmetic, Q16.16 add/subtract/compare, Q16.16 constant-folded multiply/divide, and dynamic Q16.16/UQ16.16 helper-backed multiply/divide.
@@ -26,6 +28,16 @@ cargo test --test execution_sim
 cargo test --test sim_cli
 cargo clippy --all-targets -- -D warnings
 ```
+
+## Phase 26 Hardware Workflow Tests
+
+No test requires actual hardware. Tests validate:
+
+- generated HEX has valid checksum and EOF
+- config word lands at the target config address
+- external programmer command shape is configurable
+- example Makefiles expose `FLASH_CMD` and `FLASH_ARGS`
+- hardware smoke examples compile with `--verify-hex`
 
 ## Memory Report Tests
 

@@ -2,9 +2,10 @@
 
 PIC ?= picc
 SIM ?= pic16-sim
-TARGET := pic16f877a
-CFLAGS := -Wall -Wextra -Werror -O2 -I include
-SRC := src/main.c
+TARGET := pic16f628a
+ROOT := ../../..
+CFLAGS := -Wall -Wextra -Werror -O2 -I $(ROOT)/include
+SRC := main.c
 OUT := build/main.hex
 MAP := $(OUT:.hex=.map)
 FLASH_CMD ?= echo "Configure FLASH_CMD to program"
@@ -21,11 +22,10 @@ size: $(SRC)
 sim: $(OUT)
 	$(SIM) $(OUT) --map $(MAP) --max-steps 200000 --print-regs
 
-clean:
-	rm -rf build
-
 flash: $(OUT)
 	$(FLASH_CMD) $(FLASH_ARGS) $(OUT)
 
-.PHONY: clean flash size sim
-# SPDX-License-Identifier: GPL-3.0-or-later
+clean:
+	rm -rf build
+
+.PHONY: size sim flash clean

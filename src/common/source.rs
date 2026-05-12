@@ -26,6 +26,19 @@ pub struct SourcePoint {
 pub struct PreprocessedSource {
     pub text: String,
     pub origins: Vec<SourcePoint>,
+    pub config_directives: Vec<ConfigDirective>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConfigDirective {
+    pub kind: ConfigDirectiveKind,
+    pub point: SourcePoint,
+}
+
+#[derive(Clone, Debug)]
+pub enum ConfigDirectiveKind {
+    Raw(u16),
+    Field { field: String, value: String },
 }
 
 impl PreprocessedSource {
@@ -34,6 +47,7 @@ impl PreprocessedSource {
         Self {
             text: String::new(),
             origins: Vec::new(),
+            config_directives: Vec::new(),
         }
     }
 
@@ -65,6 +79,11 @@ impl PreprocessedSource {
         self.origins
             .get(index.min(self.origins.len().saturating_sub(1)))
             .copied()
+    }
+
+    /// Records one target configuration directive found during preprocessing.
+    pub fn push_config(&mut self, kind: ConfigDirectiveKind, point: SourcePoint) {
+        self.config_directives.push(ConfigDirective { kind, point });
     }
 }
 

@@ -451,9 +451,9 @@ fn compiles_phase3_word_pointer_example() {
 }
 
 #[test]
-/// Verifies the Phase 4 stack ABI handles 3+ arguments and nested calls on PIC16F628A.
+/// Verifies the Phase 4 stack ABI handles 3+ arguments and nested calls.
 fn compiles_phase4_stack_abi_example() {
-    let output = compile_example("pic16f628a", "examples/pic16f628a/stack_abi.c");
+    let output = compile_example("pic16f877a", "examples/pic16f628a/stack_abi.c");
     let asm = read_artifact(&output, "asm");
     let map = read_artifact(&output, "map");
 
@@ -1877,10 +1877,10 @@ fn phase17_examples_compile_via_picc() {
 /// Verifies fixed multidimensional arrays compile and use row-major indexing.
 fn compiles_phase16_multidimensional_array_basic() {
     let output = compile_source(
-        "pic16f628a",
+        "pic16f877a",
         "phase16-matrix-basic.c",
         "\
-#include <pic16/pic16f628a.h>
+#include <pic16/pic16f877a.h>
 unsigned char matrix[2][3];
 void main(void) {
     unsigned char i = 1;
@@ -2063,10 +2063,10 @@ void main(void) {
 /// Verifies whole-struct copy assignment compiles through byte-wise lowering.
 fn compiles_phase11_whole_struct_copy_assignment() {
     let output = compile_source(
-        "pic16f628a",
+        "pic16f877a",
         "phase11-struct-copy.c",
         "\
-#include <pic16/pic16f628a.h>
+#include <pic16/pic16f877a.h>
 struct Pair {
     unsigned char x;
     unsigned char y;
@@ -2688,7 +2688,7 @@ void main(void) {
 /// Verifies checked-in Phase 22 fixed-point examples compile cleanly.
 fn phase22_examples_compile_via_picc() {
     let examples = [
-        ("pic16f628a", "examples/pic16f628a/fixed_q8_8_basic.c"),
+        ("pic16f877a", "examples/pic16f628a/fixed_q8_8_basic.c"),
         ("pic16f877a", "examples/pic16f877a/fixed_q8_8_arithmetic.c"),
         ("pic16f877a", "examples/pic16f877a/fixed_sensor_scale.c"),
         ("pic16f877a", "examples/pic16f877a/fixed_struct.c"),
@@ -2880,6 +2880,11 @@ fn assert_makefile_shape(path: &str) {
     assert!(makefile.contains("$(PIC)"));
     assert!(makefile.contains("--target"));
     assert!(makefile.contains("-o $(OUT)"));
+    assert!(makefile.contains("FLASH_CMD ?="));
+    assert!(makefile.contains("FLASH_ARGS ?="));
+    assert!(makefile.contains("size:"));
+    assert!(makefile.contains("sim:"));
+    assert!(makefile.contains("flash:"));
     assert!(!makefile.contains("cargo run"));
 }
 
@@ -3366,7 +3371,7 @@ fn phase8_examples_compile_via_picc() {
     let examples = [
         ("pic16f628a", "examples/pic16f628a/typedef_enum.c"),
         ("pic16f628a", "examples/pic16f628a/struct_point.c"),
-        ("pic16f628a", "examples/pic16f628a/array_initializer.c"),
+        ("pic16f877a", "examples/pic16f628a/array_initializer.c"),
         ("pic16f628a", "examples/pic16f628a/struct_initializer.c"),
         ("pic16f628a", "examples/pic16f628a/casts.c"),
     ];
@@ -5542,6 +5547,233 @@ fn phase25_examples_compile_via_picc() {
         assert_hex_is_programmable(&output);
         assert!(output.with_extension("map").exists());
         assert!(output.with_extension("lst").exists());
+    }
+}
+
+#[test]
+/// Verifies Phase 26 raw `__config(...)` emits the requested config word in HEX/map/listing.
+fn phase26_raw_config_word_emits_to_artifacts() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase26-raw-config.c",
+        "\
+__config(0x3F18);
+unsigned char result;
+void main(void) {
+    result = 1;
+}
+",
+    );
+
+    let hex = read_hex_bytes(&output);
+    assert_eq!(hex.get(&(0x2007 * 2)).copied(), Some(0x18));
+    assert_eq!(hex.get(&(0x2007 * 2 + 1)).copied(), Some(0x3F));
+    let map = read_artifact(&output, "map");
+    let listing = read_artifact(&output, "lst");
+    assert!(map.contains("Config word: 0x3F18 @ 0x2007"));
+    assert!(listing.contains("Config word: 0x3F18 @ 0x2007"));
+}
+
+#[test]
+/// Verifies Phase 26 symbolic config pragmas are accepted.
+fn phase26_symbolic_config_pragmas_compile() {
+    let output = compile_source(
+        "pic16f628a",
+        "phase26-symbolic-config.c",
+        "\
+#pragma config FOSC = INTRC_NOCLKOUT
+#pragma config WDTE = OFF
+#pragma config PWRTE = ON
+#pragma config MCLRE = ON
+#pragma config BOREN = ON
+#pragma config LVP = OFF
+#pragma config CPD = OFF
+#pragma config CP = OFF
+unsigned char result;
+void main(void) {
+    result = 2;
+}
+",
+    );
+
+    assert_hex_is_programmable(&output);
+    let map = read_artifact(&output, "map");
+    assert!(map.contains("Config word:"));
+}
+
+#[test]
+/// Verifies Phase 26 rejects duplicate config settings.
+fn phase26_rejects_duplicate_config_setting() {
+    let error = compile_error(
+        "pic16f628a",
+        "phase26-config-duplicate.c",
+        "\
+#pragma config WDTE = OFF
+#pragma config WDTE = ON
+void main(void) {}
+",
+    );
+
+    assert!(error.contains("duplicate config setting `WDTE`"));
+}
+
+#[test]
+/// Verifies Phase 26 rejects unknown config fields and values.
+fn phase26_rejects_unknown_config_field_and_value() {
+    let field_error = compile_error(
+        "pic16f628a",
+        "phase26-config-field.c",
+        "\
+#pragma config NOPE = OFF
+void main(void) {}
+",
+    );
+    assert!(field_error.contains("unknown config field `NOPE`"));
+
+    let value_error = compile_error(
+        "pic16f628a",
+        "phase26-config-value.c",
+        "\
+#pragma config WDTE = MAYBE
+void main(void) {}
+",
+    );
+    assert!(value_error.contains("unknown config value `MAYBE`"));
+}
+
+#[test]
+/// Verifies Phase 26 HEX validation report can be printed.
+fn phase26_verify_hex_prints_report() {
+    let out_dir = temp_dir_path("phase26-verify-hex");
+    fs::create_dir_all(&out_dir).expect("out dir");
+    let out_hex = out_dir.join("verify.hex");
+    let output = Command::new(picc_bin())
+        .current_dir(repo("."))
+        .args([
+            "--target",
+            "pic16f628a",
+            "-Wall",
+            "-Wextra",
+            "-O2",
+            "-I",
+            "include",
+            "--verify-hex",
+            "-o",
+        ])
+        .arg(&out_hex)
+        .arg("examples/pic16f628a/blink.c")
+        .output()
+        .expect("run picc verify hex");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("HEX validation"));
+    assert!(stdout.contains("checksum: ok"));
+    assert_hex_is_programmable(&out_hex);
+}
+
+#[test]
+/// Verifies invalid target memory output is rejected even without `--size`.
+fn phase26_rejects_program_overflow_without_size() {
+    let out_hex = temp_file("phase26-overflow.hex");
+    let output = Command::new(picc_bin())
+        .current_dir(repo("."))
+        .args([
+            "--target",
+            "pic16f628a",
+            "-Wall",
+            "-Wextra",
+            "-O2",
+            "-I",
+            "include",
+            "-o",
+        ])
+        .arg(&out_hex)
+        .arg("examples/pic16f628a/stack_abi.c")
+        .output()
+        .expect("run picc overflow");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("outside target pic16f628a range"));
+}
+
+#[test]
+/// Verifies Phase 26 programmer command printing is configurable and does not need input source.
+fn phase26_print_program_command_works() {
+    let output = Command::new(picc_bin())
+        .current_dir(repo("."))
+        .args([
+            "--print-program-command",
+            "--program-cmd",
+            "pk3cmd -P PIC16F628A -M -F",
+            "--target",
+            "pic16f628a",
+            "-o",
+            "build/blink.hex",
+        ])
+        .output()
+        .expect("run print program command");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("pk3cmd -P PIC16F628A -M -F"));
+    assert!(stdout.contains("build/blink.hex"));
+}
+
+#[test]
+/// Verifies Phase 26 `--program` requires an explicit external command.
+fn phase26_program_requires_command() {
+    let out_hex = temp_file("phase26-program.hex");
+    let output = Command::new(picc_bin())
+        .current_dir(repo("."))
+        .args([
+            "--target",
+            "pic16f628a",
+            "-Wall",
+            "-Wextra",
+            "-O2",
+            "-I",
+            "include",
+            "--program",
+            "-o",
+        ])
+        .arg(&out_hex)
+        .arg("examples/pic16f628a/blink.c")
+        .output()
+        .expect("run picc program");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("programmer command requested but missing"));
+}
+
+#[test]
+/// Verifies Phase 26 hardware smoke examples build and expose configurable flashing.
+fn phase26_hardware_smoke_examples_compile() {
+    let examples = [
+        (
+            "pic16f628a",
+            "examples/hardware/pic16f628a_led_blink/main.c",
+            "examples/hardware/pic16f628a_led_blink/Makefile",
+        ),
+        (
+            "pic16f877a",
+            "examples/hardware/pic16f877a_led_blink/main.c",
+            "examples/hardware/pic16f877a_led_blink/Makefile",
+        ),
+        (
+            "pic16f877a",
+            "examples/hardware/pic16f877a_timer_interrupt/main.c",
+            "examples/hardware/pic16f877a_timer_interrupt/Makefile",
+        ),
+    ];
+
+    for (target, source, makefile) in examples {
+        let output =
+            compile_example_via_picc_cli_with_extra_args(target, source, &["--verify-hex"]);
+        assert_hex_is_programmable(&output);
+        assert_makefile_shape(makefile);
     }
 }
 // SPDX-License-Identifier: GPL-3.0-or-later

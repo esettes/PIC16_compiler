@@ -82,6 +82,17 @@ CLI surfaces:
 
 The `.map` file starts with a compact memory summary. The `.lst` file starts with resource-summary comments. Overflow diagnostics are hard errors for known program-memory, data-RAM, config-word, ROM-table/code, and stack-region failures.
 
+### Phase 26 Config + HEX Validation
+
+Phase 26 adds explicit per-target config-word descriptors and user config syntax:
+
+- `#pragma config FIELD = VALUE`
+- `__config(0x....)` raw fallback
+
+Config resolution happens after preprocessing and before lexing. Final HEX validation always runs after HEX emission and rejects target-range overflow, config overlap, invalid 14-bit words, checksum failure, and missing EOF. `--verify-hex` prints the validation report.
+
+Programmer integration stays external. `picc` can print or run a user-provided command, but no PICkit USB protocol or vendor path is built into the compiler.
+
 ### Phase 4 Stack-first ABI
 
 Current ABI is stack-first, caller-pushed, upward-growing.

@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::backend::pic16::devices::TargetDevice;
-use crate::common::source::{PreprocessedSource, SourceId, SourceManager, SourcePoint};
+use crate::common::source::{
+    ConfigDirectiveKind, PreprocessedSource, SourceId, SourceManager, SourcePoint,
+};
 use crate::default_predefined_macros;
 use crate::diagnostics::DiagnosticBag;
 
@@ -108,6 +110,11 @@ impl<'a> Preprocessor<'a> {
             }
 
             if is_active(conditions) {
+                if let Some(raw_config) = parse_raw_config(trimmed) {
+                    output.push_config(ConfigDirectiveKind::Raw(raw_config), point);
+                    output.push_char('\n', point);
+                    continue;
+                }
                 let expanded = self.expand_line(line, point, diagnostics);
                 output.push_str(&expanded, point);
                 output.push_char('\n', point);
@@ -201,6 +208,12 @@ impl<'a> Preprocessor<'a> {
                     self.macros.remove(rest.trim());
                 }
             }
+            "pragma" => {
+                if !is_active(conditions) {
+                    return;
+                }
+                self.handle_pragma(rest, output, origin, diagnostics);
+            }
             "ifdef" => {
                 let active = self.macros.contains_key(rest.trim());
                 push_condition(conditions, active);
@@ -238,7 +251,7 @@ impl<'a> Preprocessor<'a> {
                     None,
                     format!("unsupported preprocessor directive `#{directive}`"),
                     Some(
-                        "supported directives: #include, #define, #undef, #if, #ifdef, #ifndef, #else, #endif"
+                            "supported directives: #include, #define, #undef, #pragma config, #if, #ifdef, #ifndef, #else, #endif"
                             .to_string(),
                     ),
                 );
@@ -247,6 +260,66 @@ impl<'a> Preprocessor<'a> {
 
         if is_active(conditions) {
             output.push_char('\n', origin);
+        }
+    }
+
+    /// Handles supported pragma forms. Phase 26 supports target config settings.
+    fn handle_pragma(
+        &mut self,
+        rest: &str,
+        output: &mut PreprocessedSource,
+        origin: SourcePoint,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        let trimmed = rest.trim();
+        let Some(config) = trimmed.strip_prefix("config") else {
+            diagnostics.error(
+                "preprocessor",
+                None,
+                format!("unsupported pragma `{trimmed}`"),
+                Some("supported pragma form: `#pragma config FIELD = VALUE`".to_string()),
+            );
+            return;
+        };
+        let config = config.trim();
+        if config.is_empty() {
+            diagnostics.error(
+                "preprocessor",
+                None,
+                "malformed #pragma config",
+                Some("expected `#pragma config FIELD = VALUE`".to_string()),
+            );
+            return;
+        }
+        for assignment in config.split(',') {
+            let assignment = assignment.trim();
+            let Some((field, value)) = assignment.split_once('=') else {
+                diagnostics.error(
+                    "preprocessor",
+                    None,
+                    format!("malformed #pragma config assignment `{assignment}`"),
+                    Some("expected `FIELD = VALUE`".to_string()),
+                );
+                continue;
+            };
+            let field = field.trim();
+            let value = value.trim();
+            if field.is_empty() || value.is_empty() {
+                diagnostics.error(
+                    "preprocessor",
+                    None,
+                    "malformed #pragma config assignment",
+                    Some("expected non-empty field and value".to_string()),
+                );
+                continue;
+            }
+            output.push_config(
+                ConfigDirectiveKind::Field {
+                    field: field.to_ascii_uppercase(),
+                    value: value.to_ascii_uppercase(),
+                },
+                origin,
+            );
         }
     }
 
@@ -334,6 +407,25 @@ fn parse_include(raw: &str) -> Option<String> {
         return Some(trimmed.trim_matches(&['<', '>'][..]).to_string());
     }
     None
+}
+
+/// Parses lower-level `__config(0x....);` directives before normal C parsing.
+fn parse_raw_config(line: &str) -> Option<u16> {
+    let trimmed = line.trim().trim_end_matches(';').trim();
+    let inner = trimmed.strip_prefix("__config(")?.strip_suffix(')')?.trim();
+    parse_u16_literal(inner)
+}
+
+/// Parses decimal or hexadecimal unsigned 16-bit config literals.
+fn parse_u16_literal(raw: &str) -> Option<u16> {
+    let trimmed = raw.trim();
+    if let Some(hex) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        return u16::from_str_radix(hex, 16).ok();
+    }
+    trimmed.parse::<u16>().ok()
 }
 
 /// Pushes a new conditional-compilation frame derived from the current parent state.

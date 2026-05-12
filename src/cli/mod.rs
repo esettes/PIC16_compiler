@@ -16,9 +16,17 @@ pub struct CliOptions {
 #[derive(Clone, Debug)]
 pub enum CliCommand {
     Compile(CompileCommand),
+    PrintProgramCommand(ProgramCommand),
     ListTargets,
     Help,
     Version,
+}
+
+#[derive(Clone, Debug)]
+pub struct ProgramCommand {
+    pub target: String,
+    pub output: PathBuf,
+    pub program_cmd: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,6 +48,9 @@ pub struct OutputArtifacts {
     pub size: bool,
     pub memory_report: bool,
     pub memory_report_file: Option<PathBuf>,
+    pub verify_hex: bool,
+    pub program: bool,
+    pub program_cmd: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -78,6 +89,7 @@ impl CliOptions {
         let mut stack_report_file = None::<PathBuf>;
         let mut artifacts = OutputArtifacts::default();
         let mut warning_profile = WarningProfile::default();
+        let mut print_program_command = false;
 
         while let Some(argument) = iter.next() {
             match argument.as_str() {
@@ -104,6 +116,9 @@ impl CliOptions {
                 "--list-file" => artifacts.list_file = true,
                 "--size" => artifacts.size = true,
                 "--memory-report" => artifacts.memory_report = true,
+                "--verify-hex" => artifacts.verify_hex = true,
+                "--program" => artifacts.program = true,
+                "--print-program-command" => print_program_command = true,
                 "--verbose" => verbose = true,
                 "--opt-report" => opt_report = true,
                 "--stack-check" => stack_check = true,
@@ -140,6 +155,12 @@ impl CliOptions {
                         .ok_or_else(|| "--memory-report-file requires a path".to_string())?;
                     artifacts.memory_report_file = Some(PathBuf::from(value));
                 }
+                "--program-cmd" => {
+                    let value = iter
+                        .next()
+                        .ok_or_else(|| "--program-cmd requires a value".to_string())?;
+                    artifacts.program_cmd = Some(value);
+                }
                 "-I" => {
                     let value = iter
                         .next()
@@ -170,19 +191,31 @@ impl CliOptions {
             }
         }
 
-        if input.is_none() {
-            return Err(format!("missing input file\n\n{}", help_text()));
-        }
         if target.is_none() {
             return Err(format!("missing --target\n\n{}", help_text()));
         }
+        let target = target.expect("checked");
+        let output = output.unwrap_or_else(|| PathBuf::from("a.hex"));
+
+        if print_program_command {
+            return Ok(Self {
+                command: CliCommand::PrintProgramCommand(ProgramCommand {
+                    target,
+                    output,
+                    program_cmd: artifacts.program_cmd,
+                }),
+            });
+        }
+
+        if input.is_none() {
+            return Err(format!("missing input file\n\n{}", help_text()));
+        }
 
         let input = input.expect("checked");
-        let output = output.unwrap_or_else(|| PathBuf::from("a.hex"));
 
         Ok(Self {
             command: CliCommand::Compile(CompileCommand {
-                target: target.expect("checked"),
+                target,
                 input,
                 output,
                 include_dirs,
@@ -226,6 +259,7 @@ pub fn help_text() -> &'static str {
         env!("CARGO_PKG_VERSION"),
         "\n\nUsage:\n",
         "  picc --target <name> [options] -o <out.hex> <input.c>\n",
+        "  picc --print-program-command --target <name> -o <out.hex>\n",
         "  picc --list-targets\n",
         "  picc --help\n",
         "  picc --version\n\n",
@@ -248,6 +282,12 @@ pub fn help_text() -> &'static str {
         "  --memory-report   Print detailed memory/resource report\n",
         "  --memory-report-file <path>\n",
         "                    Write detailed memory/resource report to file\n",
+        "  --verify-hex      Print final Intel HEX validation report\n",
+        "  --print-program-command\n",
+        "                    Print external programmer command shape without flashing\n",
+        "  --program         Run external programmer command after successful compile\n",
+        "  --program-cmd <cmd>\n",
+        "                    External programmer command for --program/--print-program-command\n",
         "  --opt-report      Print optimization summary after a successful compile\n",
         "  --stack-check     Emit runtime software-stack overflow checks\n",
         "  --stack-report    Print stack usage summary after a successful compile\n",

@@ -17,11 +17,12 @@ pub mod sim_cli;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use assembler::listing::render_listing;
 use backend::pic16::devices::{DeviceRegistry, TargetDevice};
 use backend::pic16::midrange14::codegen::{BackendOptions, StackReportSummary, compile_program};
-use cli::{CLI_NAME, CliCommand, CliOptions, OptimizationLevel};
+use cli::{CLI_NAME, CliCommand, CliOptions, OptimizationLevel, ProgramCommand};
 use common::source::SourceManager;
 use diagnostics::{DiagnosticBag, DiagnosticEmitter, Severity, StageResult};
 use frontend::ast::TranslationUnit;
@@ -29,7 +30,7 @@ use frontend::lexer::Lexer;
 use frontend::parser::Parser;
 use frontend::preprocessor::Preprocessor;
 use frontend::semantic::SemanticAnalyzer;
-use hex::intel_hex::IntelHexWriter;
+use hex::intel_hex::{IntelHexWriter, validate_hex_output};
 use ir::lowering::IrLowerer;
 use ir::passes::{compact_temps, constant_fold, dead_code_elimination};
 use linker::map::render_map;
@@ -52,6 +53,7 @@ struct OptimizationReport {
 pub fn execute(options: CliOptions) -> StageResult<CompilationOutput> {
     match options.command.clone() {
         CliCommand::Compile(command) => compile_command(command),
+        CliCommand::PrintProgramCommand(command) => print_program_command(command),
         CliCommand::ListTargets => {
             let registry = DeviceRegistry::new();
             let mut lines = Vec::new();
@@ -133,6 +135,12 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
     }
 
     let preprocessed = preprocessed.expect("preprocessor result checked");
+    let config_word = target
+        .resolve_config_word(&preprocessed.config_directives, &mut diagnostics)
+        .unwrap_or(target.default_config_word);
+    if diagnostics.has_errors() {
+        return Err(diagnostics);
+    }
     if command.artifacts.emit_tokens {
         let tokens = Lexer::new(&preprocessed, &mut diagnostics).collect_debug();
         write_artifact(&command.output, "tokens", &tokens)?;
@@ -195,8 +203,12 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
     if diagnostics.has_errors() {
         return Err(diagnostics);
     }
-    let assembled = assembled.expect("backend result checked");
+    let mut assembled = assembled.expect("backend result checked");
     optimization_report.backend = assembled.optimization;
+    assembled.map.resource_lines.push(format!(
+        "Config word: 0x{config_word:04X} @ 0x{:04X}",
+        target.vectors.config_word
+    ));
 
     if command.artifacts.emit_asm {
         write_artifact(&command.output, "asm", &assembled.program.render())?;
@@ -230,7 +242,11 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
             render_listing(
                 &assembled.program,
                 &assembled.words,
-                Some(&assembled.resource_report.size_text),
+                Some(&listing_resource_summary(
+                    &assembled.resource_report.size_text,
+                    target,
+                    config_word,
+                )),
             ),
         )
         .map_err(|error| {
@@ -299,8 +315,18 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
         })?;
     }
 
-    let hex_records =
-        IntelHexWriter::new(target).emit(&assembled.words, target.default_config_word);
+    let hex_records = IntelHexWriter::new(target).emit(&assembled.words, config_word);
+    let hex_report = match validate_hex_output(target, &assembled.words, config_word, &hex_records)
+    {
+        Ok(report) => report,
+        Err(errors) => {
+            let mut bag = DiagnosticBag::new(command.warning_profile);
+            for error in errors {
+                bag.error("hex", None, error, None);
+            }
+            return Err(bag);
+        }
+    };
     fs::write(&command.output, hex_records).map_err(|error| {
         DiagnosticBag::single(
             Severity::Error,
@@ -335,6 +361,14 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
         println!("{}", assembled.resource_report.text);
     }
 
+    if command.artifacts.verify_hex {
+        println!("{}", hex_report.text);
+    }
+
+    if command.artifacts.program {
+        run_programmer_command(&command.output, command.artifacts.program_cmd.as_deref())?;
+    }
+
     let mut generated_files = vec![command.output.clone()];
     if let Some(path) = map_path {
         generated_files.push(path);
@@ -353,6 +387,71 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
         hex_path: command.output,
         generated_files,
     })
+}
+
+/// Prints one external programmer command without compiling or flashing.
+fn print_program_command(command: ProgramCommand) -> StageResult<CompilationOutput> {
+    let registry = DeviceRegistry::new();
+    let _target = registry.device(&command.target).ok_or_else(|| {
+        DiagnosticBag::single(
+            Severity::Error,
+            "cli",
+            format!("unknown target `{}`", command.target),
+        )
+    })?;
+    println!(
+        "{}",
+        render_program_command(&command.output, command.program_cmd.as_deref())
+    );
+    Ok(CompilationOutput {
+        hex_path: PathBuf::new(),
+        generated_files: Vec::new(),
+    })
+}
+
+fn listing_resource_summary(size_text: &str, target: &TargetDevice, config_word: u16) -> String {
+    let mut summary = size_text.to_string();
+    summary.push_str(&format!(
+        "Config word: 0x{config_word:04X} @ 0x{:04X}\n",
+        target.vectors.config_word
+    ));
+    summary
+}
+
+fn render_program_command(output: &Path, program_cmd: Option<&str>) -> String {
+    let command = program_cmd.unwrap_or("${FLASH_CMD:-echo \"Configure FLASH_CMD to program\"}");
+    format!("{command} ${{FLASH_ARGS:-}} {}", output.display())
+}
+
+fn run_programmer_command(output: &Path, program_cmd: Option<&str>) -> StageResult<()> {
+    let Some(program_cmd) = program_cmd else {
+        return Err(DiagnosticBag::single(
+            Severity::Error,
+            "cli",
+            "programmer command requested but missing; pass `--program-cmd <cmd>`".to_string(),
+        ));
+    };
+    let command_line = format!("{} {}", program_cmd, output.display());
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg(&command_line)
+        .status()
+        .map_err(|error| {
+            DiagnosticBag::single(
+                Severity::Error,
+                "cli",
+                format!("failed to run programmer command `{command_line}`: {error}"),
+            )
+        })?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(DiagnosticBag::single(
+            Severity::Error,
+            "cli",
+            format!("programmer command failed with status {status}"),
+        ))
+    }
 }
 
 /// Writes an auxiliary compiler artifact next to the main output path.

@@ -2,7 +2,7 @@
 
 # PIC16 `midrange14` Backend
 
-Phase 25 extends the PIC16 backend with target resource fitting and size reports. Phase 24 dynamic Q16.16/UQ16.16 multiply and divide helpers remain supported, but their flash/stack contribution is now visible in reports.
+Phase 26 extends the PIC16 backend/output path with explicit config words and final HEX validation. Phase 25 target resource fitting and Phase 24 dynamic Q16.16/UQ16.16 helpers remain supported.
 
 Phase 21 extends the PIC16 backend to four-byte integer values. The return convention is `W` plus `__abi.return_high`, `__abi.return_upper0`, and `__abi.return_upper1`. Multi-byte carry/borrow codegen is shared by 8-, 16-, 32-bit, and fixed raw paths.
 
@@ -18,7 +18,7 @@ Shared backend responsibilities:
 - IR -> PIC16 asm lowering
 - 14-bit word encoding
 
-Current backend phase: **Phase 25 resource fitting on top of Phase 24 dynamic Q16.16 helper codegen, Phase 23 fixed ROM table codegen, Phase 22 fixed-point codegen, Phase 21 32-bit integer codegen, Phase 20 simulator tooling, Phase 19 execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier backend phases**
+Current backend phase: **Phase 26 config/HEX workflow on top of Phase 25 resource fitting, Phase 24 dynamic Q16.16 helper codegen, Phase 23 fixed ROM table codegen, Phase 22 fixed-point codegen, Phase 21 32-bit integer codegen, Phase 20 simulator tooling, Phase 19 execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier backend phases**
 
 Backend owns:
 
@@ -35,6 +35,8 @@ Backend owns:
 - target memory fit validation after final encoding
 - compact and detailed resource report rendering
 - helper/dispatcher/ROM-table contribution reporting
+- config-word resolution from `#pragma config` and raw `__config(...)`
+- final Intel HEX validation for target range, vectors, config, word width, checksum, and EOF
 - fixed-point ROM table reads through `RomRead16`/`RomRead32`
 - interrupt vector emission and ISR dispatch
 - ISR-specific save/restore and `retfie` lowering
@@ -110,6 +112,8 @@ Current backend docs:
 - [phase22-fixed-codegen.md](phase22-fixed-codegen.md)
 - [phase23-fixed-rom-tables.md](phase23-fixed-rom-tables.md)
 - [phase25-resource-fitting.md](phase25-resource-fitting.md)
+- [phase26-config-word.md](phase26-config-word.md)
+- [phase26-hex-validation.md](phase26-hex-validation.md)
 - [../runtime/phase22-fixed-helpers.md](../runtime/phase22-fixed-helpers.md)
 - [../runtime/phase24-q16-16-dynamic-helpers.md](../runtime/phase24-q16-16-dynamic-helpers.md)
 - [../ir/phase24-fixed-dynamic-lowering.md](../ir/phase24-fixed-dynamic-lowering.md)

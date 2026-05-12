@@ -2,6 +2,9 @@
 
 use std::collections::BTreeMap;
 
+use crate::common::source::{ConfigDirective, ConfigDirectiveKind};
+use crate::diagnostics::DiagnosticBag;
+
 #[derive(Clone, Copy, Debug)]
 pub struct MemoryRange {
     pub start: u16,
@@ -33,6 +36,28 @@ pub struct DeviceVectors {
     pub config_word: u16,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct ConfigValue {
+    pub name: &'static str,
+    pub bits: u16,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ConfigField {
+    pub name: &'static str,
+    pub mask: u16,
+    pub values: &'static [ConfigValue],
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ConfigDescriptor {
+    pub address: u16,
+    pub valid_mask: u16,
+    pub default_word: u16,
+    pub reserved_policy: &'static str,
+    pub fields: &'static [ConfigField],
+}
+
 #[derive(Clone, Debug)]
 pub struct TargetDevice {
     pub name: &'static str,
@@ -50,6 +75,7 @@ pub struct TargetDevice {
     pub default_stack_region: MemoryRange,
     pub rom_table_region: MemoryRange,
     pub sfrs: &'static [DeviceRegister],
+    pub config: &'static ConfigDescriptor,
     pub default_config_word: u16,
     pub capabilities: &'static [&'static str],
 }
@@ -84,6 +110,116 @@ impl TargetDevice {
                 .iter()
                 .map(|range| range.size())
                 .sum::<u16>()
+    }
+
+    /// Resolves `#pragma config` and `__config(...)` directives into one config word.
+    pub fn resolve_config_word(
+        &self,
+        directives: &[ConfigDirective],
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<u16> {
+        let descriptor = self.config;
+        if descriptor.address != self.vectors.config_word
+            || descriptor.default_word != self.default_config_word
+        {
+            diagnostics.error(
+                "config",
+                None,
+                format!("missing target config descriptor for {}", self.name),
+                Some("config descriptor must match device vectors/default word".to_string()),
+            );
+            return None;
+        }
+
+        let mut word = descriptor.default_word;
+        let mut seen_fields = BTreeMap::<String, String>::new();
+        let mut raw_seen = false;
+        let mut symbolic_seen = false;
+
+        for directive in directives {
+            match &directive.kind {
+                ConfigDirectiveKind::Raw(raw) => {
+                    if raw_seen || symbolic_seen {
+                        diagnostics.error(
+                            "config",
+                            None,
+                            "duplicate config setting",
+                            Some("use either one `__config(...)` or symbolic `#pragma config` fields".to_string()),
+                        );
+                        continue;
+                    }
+                    raw_seen = true;
+                    if raw & !descriptor.valid_mask != 0 {
+                        diagnostics.error(
+                            "config",
+                            None,
+                            format!(
+                                "raw config word 0x{raw:04X} sets bits outside valid mask 0x{:04X}",
+                                descriptor.valid_mask
+                            ),
+                            Some("clear reserved/unsupported config bits".to_string()),
+                        );
+                        continue;
+                    }
+                    word = *raw;
+                }
+                ConfigDirectiveKind::Field { field, value } => {
+                    if raw_seen {
+                        diagnostics.error(
+                            "config",
+                            None,
+                            "duplicate config setting",
+                            Some("do not mix `__config(...)` with `#pragma config`".to_string()),
+                        );
+                        continue;
+                    }
+                    symbolic_seen = true;
+                    if let Some(previous) = seen_fields.insert(field.clone(), value.clone()) {
+                        diagnostics.error(
+                            "config",
+                            None,
+                            format!(
+                                "duplicate config setting `{field}`: `{previous}` then `{value}`"
+                            ),
+                            None,
+                        );
+                        continue;
+                    }
+                    let Some(config_field) =
+                        descriptor.fields.iter().find(|item| item.name == field)
+                    else {
+                        diagnostics.error(
+                            "config",
+                            None,
+                            format!("unknown config field `{field}` for target {}", self.name),
+                            Some("check target-specific supported config fields".to_string()),
+                        );
+                        continue;
+                    };
+                    let Some(config_value) =
+                        config_field.values.iter().find(|item| item.name == value)
+                    else {
+                        diagnostics.error(
+                            "config",
+                            None,
+                            format!(
+                                "unknown config value `{value}` for field `{field}` on target {}",
+                                self.name
+                            ),
+                            Some("check target-specific supported config values".to_string()),
+                        );
+                        continue;
+                    };
+                    word = (word & !config_field.mask) | (config_value.bits & config_field.mask);
+                }
+            }
+        }
+
+        if diagnostics.has_errors() {
+            None
+        } else {
+            Some(word)
+        }
     }
 }
 
@@ -167,6 +303,172 @@ const F877A_RESERVED_RAM: [MemoryRange; 4] = [
         end: 0x019F,
     },
 ];
+
+const OFF_ON_LOW_TRUE: [ConfigValue; 2] = [
+    ConfigValue {
+        name: "ON",
+        bits: 0x0000,
+    },
+    ConfigValue {
+        name: "OFF",
+        bits: 0xFFFF,
+    },
+];
+const OFF_ON_HIGH_TRUE: [ConfigValue; 2] = [
+    ConfigValue {
+        name: "OFF",
+        bits: 0x0000,
+    },
+    ConfigValue {
+        name: "ON",
+        bits: 0xFFFF,
+    },
+];
+const F628A_FOSC_VALUES: [ConfigValue; 8] = [
+    ConfigValue {
+        name: "LP",
+        bits: 0x0000,
+    },
+    ConfigValue {
+        name: "XT",
+        bits: 0x0001,
+    },
+    ConfigValue {
+        name: "HS",
+        bits: 0x0002,
+    },
+    ConfigValue {
+        name: "EC",
+        bits: 0x0003,
+    },
+    ConfigValue {
+        name: "INTRC_NOCLKOUT",
+        bits: 0x0004,
+    },
+    ConfigValue {
+        name: "INTRC_CLKOUT",
+        bits: 0x0005,
+    },
+    ConfigValue {
+        name: "ER_NOCLKOUT",
+        bits: 0x0006,
+    },
+    ConfigValue {
+        name: "ER_CLKOUT",
+        bits: 0x0007,
+    },
+];
+const F877A_FOSC_VALUES: [ConfigValue; 4] = [
+    ConfigValue {
+        name: "LP",
+        bits: 0x0000,
+    },
+    ConfigValue {
+        name: "XT",
+        bits: 0x0001,
+    },
+    ConfigValue {
+        name: "HS",
+        bits: 0x0002,
+    },
+    ConfigValue {
+        name: "RC",
+        bits: 0x0003,
+    },
+];
+const F628A_CONFIG_FIELDS: [ConfigField; 8] = [
+    ConfigField {
+        name: "FOSC",
+        mask: 0x0007,
+        values: &F628A_FOSC_VALUES,
+    },
+    ConfigField {
+        name: "WDTE",
+        mask: 0x0008,
+        values: &OFF_ON_HIGH_TRUE,
+    },
+    ConfigField {
+        name: "PWRTE",
+        mask: 0x0010,
+        values: &OFF_ON_LOW_TRUE,
+    },
+    ConfigField {
+        name: "MCLRE",
+        mask: 0x0020,
+        values: &OFF_ON_HIGH_TRUE,
+    },
+    ConfigField {
+        name: "BOREN",
+        mask: 0x0040,
+        values: &OFF_ON_HIGH_TRUE,
+    },
+    ConfigField {
+        name: "LVP",
+        mask: 0x0080,
+        values: &OFF_ON_HIGH_TRUE,
+    },
+    ConfigField {
+        name: "CPD",
+        mask: 0x0100,
+        values: &OFF_ON_LOW_TRUE,
+    },
+    ConfigField {
+        name: "CP",
+        mask: 0x3E00,
+        values: &OFF_ON_LOW_TRUE,
+    },
+];
+const F877A_CONFIG_FIELDS: [ConfigField; 7] = [
+    ConfigField {
+        name: "FOSC",
+        mask: 0x0003,
+        values: &F877A_FOSC_VALUES,
+    },
+    ConfigField {
+        name: "WDTE",
+        mask: 0x0004,
+        values: &OFF_ON_HIGH_TRUE,
+    },
+    ConfigField {
+        name: "PWRTE",
+        mask: 0x0008,
+        values: &OFF_ON_LOW_TRUE,
+    },
+    ConfigField {
+        name: "BOREN",
+        mask: 0x0040,
+        values: &OFF_ON_HIGH_TRUE,
+    },
+    ConfigField {
+        name: "LVP",
+        mask: 0x0080,
+        values: &OFF_ON_HIGH_TRUE,
+    },
+    ConfigField {
+        name: "CPD",
+        mask: 0x0100,
+        values: &OFF_ON_LOW_TRUE,
+    },
+    ConfigField {
+        name: "CP",
+        mask: 0x3000,
+        values: &OFF_ON_LOW_TRUE,
+    },
+];
+const F628A_CONFIG: ConfigDescriptor = ConfigDescriptor {
+    address: 0x2007,
+    valid_mask: 0x3FFF,
+    default_word: 0x3F30,
+    reserved_policy: "preserve default bits; reject raw bits outside 14-bit config word",
+    fields: &F628A_CONFIG_FIELDS,
+};
+const F877A_CONFIG: ConfigDescriptor = ConfigDescriptor {
+    address: 0x2007,
+    valid_mask: 0x3FFF,
+    default_word: 0x3F32,
+    reserved_policy: "preserve default bits; reject raw bits outside 14-bit config word",
+    fields: &F877A_CONFIG_FIELDS,
+};
 
 const F628A_SFRS: [DeviceRegister; 17] = [
     DeviceRegister {
@@ -342,6 +644,7 @@ fn pic16f628a() -> TargetDevice {
             end: 0x07FF,
         },
         sfrs: &F628A_SFRS,
+        config: &F628A_CONFIG,
         default_config_word: 0x3F30,
         capabilities: &[
             "harvard",
@@ -382,6 +685,7 @@ fn pic16f877a() -> TargetDevice {
             end: 0x1FFF,
         },
         sfrs: &F877A_SFRS,
+        config: &F877A_CONFIG,
         default_config_word: 0x3F32,
         capabilities: &[
             "harvard",
@@ -407,6 +711,15 @@ mod tests {
         assert_eq!(device.vectors.reset, 0x0000);
         assert_eq!(device.vectors.interrupt, 0x0004);
         assert_eq!(device.vectors.config_word, 0x2007);
+        assert_eq!(device.config.address, 0x2007);
+        assert_eq!(device.config.default_word, device.default_config_word);
+        assert!(
+            device
+                .config
+                .fields
+                .iter()
+                .any(|field| field.name == "FOSC")
+        );
         assert!(!device.allocatable_gpr.is_empty());
         assert!(!device.reserved_ram.is_empty());
         assert!(device.rom_table_region.contains(0x07FF));
@@ -421,6 +734,15 @@ mod tests {
         assert_eq!(device.vectors.reset, 0x0000);
         assert_eq!(device.vectors.interrupt, 0x0004);
         assert_eq!(device.vectors.config_word, 0x2007);
+        assert_eq!(device.config.address, 0x2007);
+        assert_eq!(device.config.default_word, device.default_config_word);
+        assert!(
+            device
+                .config
+                .fields
+                .iter()
+                .any(|field| field.name == "FOSC")
+        );
         assert!(!device.allocatable_gpr.is_empty());
         assert!(!device.reserved_ram.is_empty());
         assert!(device.rom_table_region.contains(0x1FFF));

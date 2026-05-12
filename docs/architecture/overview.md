@@ -2,7 +2,7 @@
 
 # General Architecture
 
-Phase 25 adds target-aware resource fitting and size reports while preserving the Stack-first ABI and PIC16 `midrange14` backend. Phase 24 dynamic Q16.16/UQ16.16 multiply/divide helpers remain unchanged; Phase 25 makes their program-memory and stack cost visible.
+Phase 26 adds device config words, final HEX validation, and external programmer workflow support while preserving the Stack-first ABI and PIC16 `midrange14` backend. Phase 25 resource fitting remains in place; Phase 26 makes invalid target HEX a hard failure.
 
 Phase 21 32-bit integers remain the raw intermediate foundation for Q8.8 multiply/divide. Q16.16 multiply/divide constants are folded exactly; dynamic Q16.16 helper-backed operations lower through page-safe fixed-point runtime helpers without exposing public `long long`.
 
@@ -16,7 +16,7 @@ Phase 21 32-bit integers remain the raw intermediate foundation for Q8.8 multipl
 
 Target backend is classic 14-bit PIC16 mid-range family, not a generic 8-bit CPU model.
 
-Current Phase 25 keeps that split intact while extending:
+Current Phase 26 keeps that split intact while extending:
 
 - stack-first caller-pushed ABI
 - fixed-point frontend typing, raw constructors, casts, and diagnostics
@@ -55,9 +55,10 @@ Current Phase 25 keeps that split intact while extending:
 - Phase 23 fixed decimal literals, fixed ROM calibration tables, and simulator-validated fixed constant folding/ROM reads
 - Phase 24 dynamic Q16.16/UQ16.16 multiply/divide helpers with simulator validation
 - Phase 25 target memory descriptors, final resource validation, `--size`, and `--memory-report`
+- Phase 26 config-word descriptors, `#pragma config`, raw `__config`, `--verify-hex`, and external programmer command workflow
 - PIC16 banking/paging without backend duplication per device
 
-Phase 25 keeps the compiler layering unchanged:
+Phase 26 keeps the compiler layering unchanged:
 
 - frontend still produces typed trees only
 - IR still stays target-aware but encoding-agnostic
@@ -65,6 +66,8 @@ Phase 25 keeps the compiler layering unchanged:
 - emulator reads backend-produced HEX artifacts after compilation; it does not replace codegen
 - `pic16-sim` is optional tooling and does not alter normal `picc` behavior
 - resource fitting runs after final encoding so code, helpers, dispatchers, traps, and ROM tables all have concrete addresses
+- HEX validation runs after config resolution and Intel HEX emission
+- external programming remains a user-supplied command, not a built-in hardware protocol
 
 Execution-validation layer:
 
@@ -84,4 +87,6 @@ See:
 - [PIC16 Simulator CLI](../sim/pic16-sim-cli.md)
 - [PIC16 Memory Limits](pic16-memory-limits.md)
 - [Memory Report](../developer-guide/memory-report.md)
+- [Programming PIC16 Devices](../developer-guide/programming-pic16.md)
+- [Hardware Smoke Tests](../developer-guide/hardware-smoke-tests.md)
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
