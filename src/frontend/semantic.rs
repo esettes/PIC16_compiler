@@ -2171,7 +2171,7 @@ impl<'a> SemanticAnalyzer<'a> {
             diagnostics.error(
                 "semantic",
                 Some(span),
-                format!("`{op:?}` requires both operands to be `float` in phase 27"),
+                format!("`{op:?}` requires both operands to be `float` in phase 28"),
                 Some("cast integer or fixed-point operands to `float` explicitly before float arithmetic".to_string()),
             );
             return None;
@@ -2247,7 +2247,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 diagnostics.error(
                     "semantic",
                     Some(span),
-                    format!("`{op:?}` is not supported for float operands in phase 27"),
+                    format!("`{op:?}` is not supported for float operands in phase 28"),
                     Some("cast to an integer raw representation only if byte-level work is intentional".to_string()),
                 );
                 None
@@ -5391,7 +5391,7 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
-    /// Inserts Phase 27 conservative float casts. Dynamic non-float conversions are deferred.
+    /// Inserts Phase 28 float casts. Runtime casts go through the finite Q16.16 bridge.
     fn coerce_float_expr(
         &mut self,
         expr: TypedExpr,
@@ -5422,6 +5422,9 @@ impl<'a> SemanticAnalyzer<'a> {
         }
 
         if let Some(value) = eval_integer_constant_expr(&expr) {
+            if expr.ty.is_float() {
+                self.diagnose_float_to_i32_constant(value, expr.ty, target_ty, span, diagnostics);
+            }
             let converted = Self::eval_float_conversion_constant(value, expr.ty, target_ty);
             return TypedExpr {
                 kind: TypedExprKind::IntLiteral(converted),
@@ -5438,19 +5441,161 @@ impl<'a> SemanticAnalyzer<'a> {
             return self.build_bitcast_expr(expr, target_ty);
         }
 
+        if target_ty.is_float() {
+            if matches!(expr.ty.scalar, ScalarType::I32 | ScalarType::U32) {
+                return self.build_i32_to_float_cast_expr(expr, target_ty, span);
+            }
+            let bridge_scalar = if expr.ty.is_unsigned() {
+                ScalarType::UQ16_16
+            } else {
+                ScalarType::Q16_16
+            };
+            let fixed_expr =
+                self.coerce_fixed_expr(expr, Type::new(bridge_scalar), diagnostics, context, false);
+            return self.build_q16_to_float_cast_expr(fixed_expr, target_ty, span);
+        }
+
+        if expr.ty.is_float() {
+            if matches!(target_ty.scalar, ScalarType::I32 | ScalarType::U32) {
+                return self.build_float_to_i32_cast_expr(expr, target_ty, span);
+            }
+            let q16_expr = self.build_float_to_q16_cast_expr(expr, span);
+            if target_ty == q16_expr.ty {
+                return q16_expr;
+            }
+            return self.coerce_fixed_expr(q16_expr, target_ty, diagnostics, context, false);
+        }
+
         diagnostics.error(
             "semantic",
             Some(span),
             format!(
-                "dynamic float conversion from `{}` to `{}` is not supported in phase 27",
+                "unsupported dynamic float conversion from `{}` to `{}`",
                 expr.ty, target_ty
             ),
             Some(
-                "use explicit casts on constants, or keep runtime conversion in integer/fixed-point form"
+                "phase 28 supports runtime float casts through the Q16.16 finite bridge"
                     .to_string(),
             ),
         );
         expr
+    }
+
+    fn diagnose_float_to_i32_constant(
+        &self,
+        value: i64,
+        source_ty: Type,
+        target_ty: Type,
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        if !matches!(target_ty.scalar, ScalarType::I32 | ScalarType::U32) {
+            return;
+        }
+        let float_value = f32::from_bits(normalize_value(value, source_ty) as u32);
+        if !float_value.is_finite() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "unsupported float special value in conversion to 32-bit integer",
+                None,
+            );
+            return;
+        }
+        if target_ty.scalar == ScalarType::I32
+            && (float_value.trunc() < i32::MIN as f32
+                || float_value.trunc() > i32::MAX as f32)
+        {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "constant float-to-long cast is out of range",
+                Some("use a smaller finite value or keep the value as float".to_string()),
+            );
+        }
+        if target_ty.scalar == ScalarType::U32
+            && (float_value.trunc() < 0.0 || float_value.trunc() > u32::MAX as f32)
+        {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "constant float-to-unsigned-long cast is out of range",
+                Some("negative float constants cannot be cast to unsigned long in phase 29".to_string()),
+            );
+        }
+    }
+
+    fn build_float_to_q16_cast_expr(&self, expr: TypedExpr, span: Span) -> TypedExpr {
+        TypedExpr {
+            kind: TypedExprKind::Cast {
+                kind: CastKind::F32ToQ16,
+                expr: Box::new(expr),
+            },
+            ty: Type::new(ScalarType::Q16_16),
+            span,
+            value_category: ValueCategory::RValue,
+        }
+    }
+
+    fn build_q16_to_float_cast_expr(
+        &self,
+        expr: TypedExpr,
+        target_ty: Type,
+        span: Span,
+    ) -> TypedExpr {
+        TypedExpr {
+            kind: TypedExprKind::Cast {
+                kind: CastKind::Q16ToF32,
+                expr: Box::new(expr),
+            },
+            ty: target_ty,
+            span,
+            value_category: ValueCategory::RValue,
+        }
+    }
+
+    fn build_i32_to_float_cast_expr(
+        &self,
+        expr: TypedExpr,
+        target_ty: Type,
+        span: Span,
+    ) -> TypedExpr {
+        let kind = if expr.ty.scalar == ScalarType::U32 {
+            CastKind::U32ToF32
+        } else {
+            CastKind::I32ToF32
+        };
+        TypedExpr {
+            kind: TypedExprKind::Cast {
+                kind,
+                expr: Box::new(expr),
+            },
+            ty: target_ty,
+            span,
+            value_category: ValueCategory::RValue,
+        }
+    }
+
+    fn build_float_to_i32_cast_expr(
+        &self,
+        expr: TypedExpr,
+        target_ty: Type,
+        span: Span,
+    ) -> TypedExpr {
+        let kind = if target_ty.scalar == ScalarType::U32 {
+            CastKind::F32ToU32
+        } else {
+            CastKind::F32ToI32
+        };
+        TypedExpr {
+            kind: TypedExprKind::Cast {
+                kind,
+                expr: Box::new(expr),
+            },
+            ty: target_ty,
+            span,
+            value_category: ValueCategory::RValue,
+        }
     }
 
     /// Evaluates constant casts between finite float, integer, and fixed-point values.
@@ -6889,11 +7034,32 @@ impl<'a> SemanticAnalyzer<'a> {
                     );
                 }
             }
+            TypedExprKind::Cast { kind, expr } => {
+                if matches!(
+                    kind,
+                    CastKind::F32ToQ16
+                        | CastKind::Q16ToF32
+                        | CastKind::I32ToF32
+                        | CastKind::U32ToF32
+                        | CastKind::F32ToI32
+                        | CastKind::F32ToU32
+                ) {
+                    diagnostics.error(
+                        "semantic",
+                        Some(expr.span),
+                        format!(
+                            "interrupt handler `{}` cannot use a dynamic float cast",
+                            self.symbols[function].name
+                        ),
+                        Some("phase 29 float casts lower through runtime helpers".to_string()),
+                    );
+                }
+                self.walk_interrupt_expr(function, expr, diagnostics);
+            }
             TypedExprKind::Unary { expr, .. }
             | TypedExprKind::ArrayDecay(expr)
             | TypedExprKind::AddressOf(expr)
-            | TypedExprKind::Deref(expr)
-            | TypedExprKind::Cast { expr, .. } => {
+            | TypedExprKind::Deref(expr) => {
                 self.walk_interrupt_expr(function, expr, diagnostics);
             }
             TypedExprKind::BitField { storage, .. } => {
@@ -7220,6 +7386,14 @@ fn eval_integer_constant_expr(expr: &TypedExpr) -> Option<i64> {
                 }
                 CastKind::SignExtend => {
                     normalize_value(signed_value(value, value_expr.ty), expr.ty)
+                }
+                CastKind::F32ToQ16
+                | CastKind::Q16ToF32
+                | CastKind::I32ToF32
+                | CastKind::U32ToF32
+                | CastKind::F32ToI32
+                | CastKind::F32ToU32 => {
+                    SemanticAnalyzer::eval_float_conversion_constant(value, value_expr.ty, expr.ty)
                 }
             }
         }

@@ -117,6 +117,27 @@ Phase 27 adds a conservative `float` scalar without adding `double` or a math li
 
 This is intentionally finite-only software float support. It is not a claim of full IEEE-754 runtime compliance.
 
+### Phase 28 Float Hardening
+
+Phase 28 keeps the finite-only model and hardens the unsafe edges:
+
+- dynamic `int`/`unsigned int` and fixed-point casts lower through `__rt_q16_16_to_f32` and `__rt_f32_to_q16_16`
+- dynamic `long`/`unsigned long` float casts are rejected because the Phase 28 bridge is Q16.16, not a full 32-bit integer-to-float converter
+- dynamic float comparisons are rejected; constant comparisons continue to fold deterministically
+- cast helpers are listed as `float helper` in map, listing, memory report, and stack report data
+- ISR policy remains conservative: float helper casts/arithmetic/comparisons are rejected
+
+### Phase 29 Float Runtime Completion
+
+Phase 29 fills the main remaining finite-float runtime gaps:
+
+- dynamic comparisons lower through shared `__rt_f32_cmp`, returning `0xFF`, `0`, or `1`
+- comparisons work in assignment and control-flow lowering (`if`, `while`, `for`)
+- dynamic `long` / `unsigned long` to `float` use `__rt_i32_to_f32` and `__rt_u32_to_f32`
+- dynamic `float` to `long` / `unsigned long` use `__rt_f32_to_i32` and `__rt_f32_to_u32`
+- float-to-integer casts truncate toward zero; dynamic negative float to unsigned long returns zero
+- helper costs remain visible to Phase 25 resource fitting
+
 ### Phase 24 Dynamic Q16.16 Helpers
 
 Phase 22/23/24 add explicit fixed-point scalar types:

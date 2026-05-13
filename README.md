@@ -33,17 +33,21 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 27: basic finite software `float` support on top of Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, Phase 24 dynamic Q16.16 fixed-point helpers, Phase 23 fixed literals/ROM tables, Phase 22 fixed-point arithmetic, Phase 21 controlled 32-bit integers, Phase 20 simulator CLI/debugging workflow, Phase 19 emulator-based execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier frontend/backend phases**.
+Current implementation is **Phase 29: float runtime completion for dynamic comparisons and 32-bit integer conversions on top of Phase 28 float hardening, Phase 27 basic finite software `float`, Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, and the earlier frontend/backend phases**.
 
-Phase 27 scope:
+Phase 29 scope:
 
 - `float` as a 4-byte little-endian scalar with IEEE-754 single-precision storage bits
 - decimal float literals such as `1.5` and `1.5f`
 - float globals, statics, locals, parameters, returns, arrays, structs, unions, and data pointers
 - finite-only constant folding for literals, unary minus, arithmetic, comparisons, and constant casts
+- dynamic 16-bit integer and fixed-point casts through finite `f32 <-> Q16.16` bridge helpers
+- dynamic `long` / `unsigned long` to `float` helpers
+- dynamic `float` to `long` / `unsigned long` helpers with truncation toward zero
+- dynamic float comparisons via shared `__rt_f32_cmp`
 - dynamic float add/sub helpers that convert through an internal Q16.16 work format
 - inline fast paths for common finite `* 2.0f` and `/ 2.0f`
-- simulator execution tests for raw literals, assignment, arithmetic, unary minus, constant comparisons, casts, calls, structs, and arrays
+- simulator execution tests for raw literals, assignment, arithmetic, unary minus, folded comparisons, dynamic casts, calls, structs, arrays, pointers, and unions
 - resource reports classify emitted float helpers as `float helper`
 - no `double`, math library, recursion, ROM float tables, or full IEEE special-value compliance
 
@@ -1055,6 +1059,10 @@ picc --list-targets
 - [docs/runtime/phase24-q16-16-dynamic-helpers.md](docs/runtime/phase24-q16-16-dynamic-helpers.md)
 - [docs/frontend/phase27-float.md](docs/frontend/phase27-float.md)
 - [docs/runtime/phase27-float-helpers.md](docs/runtime/phase27-float-helpers.md)
+- [docs/frontend/phase28-float-conversions.md](docs/frontend/phase28-float-conversions.md)
+- [docs/ir/phase28-float-dynamic-lowering.md](docs/ir/phase28-float-dynamic-lowering.md)
+- [docs/runtime/phase28-float-runtime.md](docs/runtime/phase28-float-runtime.md)
+- [docs/backend/phase28-float-resource-cost.md](docs/backend/phase28-float-resource-cost.md)
 - [docs/migration/phase3-to-phase4-abi.md](docs/migration/phase3-to-phase4-abi.md)
 - [docs/developer-guide/adding-device.md](docs/developer-guide/adding-device.md)
 
@@ -1067,4 +1075,4 @@ picc --list-targets
 
 ## Current Limits
 
-Phase 27 adds finite software `float`, but current hard limits remain: no `double`, no math library (`sin`, `cos`, `sqrt`, etc.), no full IEEE NaN/Inf/subnormal compliance, no ROM float tables, no dynamic mixed float/integer arithmetic, no dynamic float/integer casts beyond supported constant casts, no general ROM pointer model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no function-pointer calls inside ISR, no fixed-point modulo, no raw computed PIC16 indirect calls, and no recursion. Float helpers are large; resource fitting can reject helper-heavy programs on real targets. The emulator is intentionally core-only: no full peripheral timing model, no asynchronous interrupt scheduling, and no claim of complete PIC16 device emulation.
+Phase 29 completes the basic finite software `float` runtime, but current hard limits remain: no `double`, no math library (`sin`, `cos`, `sqrt`, etc.), no full IEEE NaN/Inf/subnormal compliance, no ROM float tables, no dynamic mixed float/integer arithmetic, no general ROM pointer model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no function-pointer calls inside ISR, no fixed-point modulo, no raw computed PIC16 indirect calls, and no recursion. Float helpers are large; resource fitting can reject helper-heavy programs on real targets. The emulator is intentionally core-only: no full peripheral timing model, no asynchronous interrupt scheduling, and no claim of complete PIC16 device emulation.

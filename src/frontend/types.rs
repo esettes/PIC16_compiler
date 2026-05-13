@@ -52,6 +52,12 @@ pub enum CastKind {
     SignExtend,
     Truncate,
     Bitcast,
+    F32ToQ16,
+    Q16ToF32,
+    I32ToF32,
+    U32ToF32,
+    F32ToI32,
+    F32ToU32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

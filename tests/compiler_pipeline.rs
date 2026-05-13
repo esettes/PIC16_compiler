@@ -38,6 +38,10 @@ fn picc_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_picc"))
 }
 
+fn pic16_sim_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_pic16-sim"))
+}
+
 /// Compiles one input file with artifact dumps enabled and returns the HEX path.
 fn compile_input(target: &str, input: PathBuf) -> PathBuf {
     let output = temp_file("out.hex");
@@ -5931,4 +5935,328 @@ fn phase27_float_examples_compile_via_picc() {
         assert_hex_is_programmable(&output);
     }
 }
-// SPDX-License-Identifier: GPL-3.0-or-later
+
+#[test]
+/// Verifies Phase 28 folded float comparisons through the user-facing simulator workflow.
+fn phase28_folded_float_comparison_runs_with_pic16_sim() {
+    let input = temp_file("phase28-float-comparison.c");
+    fs::write(
+        &input,
+        r#"
+unsigned char same_flag;
+
+void main(void) {
+    same_flag = (1.5f == 1.5f);
+}
+"#,
+    )
+    .expect("fixture");
+    let output = temp_file("phase28-float-comparison.hex");
+    let compile = Command::new(picc_bin())
+        .arg("--target")
+        .arg("pic16f877a")
+        .arg("-O2")
+        .arg("-I")
+        .arg(repo("include"))
+        .arg("--map")
+        .arg("-o")
+        .arg(&output)
+        .arg(&input)
+        .output()
+        .expect("run picc");
+    assert!(
+        compile.status.success(),
+        "picc failed: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let sim = Command::new(pic16_sim_bin())
+        .arg(&output)
+        .arg("--map")
+        .arg(output.with_extension("map"))
+        .arg("--run-until")
+        .arg("__halt")
+        .arg("--print-symbol")
+        .arg("same_flag")
+        .arg("--max-steps")
+        .arg("200000")
+        .output()
+        .expect("run pic16-sim");
+    assert!(
+        sim.status.success(),
+        "pic16-sim failed: {}",
+        String::from_utf8_lossy(&sim.stderr)
+    );
+    assert!(String::from_utf8_lossy(&sim.stdout).contains("same_flag = 1"));
+}
+
+#[test]
+/// Verifies Phase 28 cast helpers appear in memory and stack reports.
+fn phase28_float_cast_helpers_are_reported() {
+    let input = temp_file("phase28-float-cast-report.c");
+    fs::write(
+        &input,
+        r#"
+int source;
+float value;
+int result;
+
+void main(void) {
+    source = -3;
+    value = (float)source;
+    result = (int)value;
+}
+"#,
+    )
+    .expect("fixture");
+    let output = temp_file("phase28-float-cast-report.hex");
+    let memory_report = temp_file("phase28-float-cast-report.mem");
+    let stack_report = temp_file("phase28-float-cast-report.stack");
+    execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: "pic16f877a".to_string(),
+            input,
+            output: output.clone(),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O2,
+            artifacts: OutputArtifacts {
+                map: true,
+                list_file: true,
+                memory_report: true,
+                memory_report_file: Some(memory_report.clone()),
+                ..OutputArtifacts::default()
+            },
+            verbose: false,
+            opt_report: false,
+            stack_check: true,
+            stack_report: false,
+            stack_report_file: Some(stack_report.clone()),
+            warning_profile: WarningProfile::default(),
+        }),
+    })
+    .expect("compile phase28 cast report");
+
+    let map = fs::read_to_string(output.with_extension("map")).expect("map");
+    let lst = fs::read_to_string(output.with_extension("lst")).expect("lst");
+    let memory = fs::read_to_string(memory_report).expect("memory report");
+    let stack = fs::read_to_string(stack_report).expect("stack report");
+    assert!(map.contains("__rt_q16_16_to_f32"));
+    assert!(map.contains("__rt_f32_to_q16_16"));
+    assert!(lst.contains("__rt_q16_16_to_f32"));
+    assert!(lst.contains("__rt_f32_to_q16_16"));
+    assert!(memory.contains("float helper"));
+    assert!(memory.contains("__rt_q16_16_to_f32"));
+    assert!(memory.contains("__rt_f32_to_q16_16"));
+    assert!(stack.contains("helper_extra="));
+}
+
+#[test]
+/// Verifies Phase 28 unsupported float forms diagnose instead of silently lowering.
+fn phase28_float_hardening_diagnostics() {
+    let float_switch = compile_error(
+        "pic16f877a",
+        "phase28-float-switch.c",
+        r#"
+float selector;
+void main(void) {
+    switch (selector) {
+    default:
+        break;
+    }
+}
+"#,
+    );
+    assert!(float_switch.contains("switch expression must have integer or enum type"));
+}
+
+#[test]
+/// Verifies Phase 29 float compare and 32-bit conversion helpers appear in artifacts/reports.
+fn phase29_float_helpers_are_reported() {
+    let input = temp_file("phase29-float-compare-report.c");
+    fs::write(
+        &input,
+        r#"
+float a;
+float b;
+unsigned char result;
+
+void main(void) {
+    a = 1.5f;
+    b = 1.0f;
+    if (a > b) {
+        result = 1;
+    }
+}
+"#,
+    )
+    .expect("fixture");
+    let output = temp_file("phase29-float-compare-report.hex");
+    let memory_report = temp_file("phase29-float-compare-report.mem");
+    let stack_report = temp_file("phase29-float-compare-report.stack");
+    execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: "pic16f877a".to_string(),
+            input,
+            output: output.clone(),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O2,
+            artifacts: OutputArtifacts {
+                map: true,
+                list_file: true,
+                memory_report: true,
+                memory_report_file: Some(memory_report.clone()),
+                ..OutputArtifacts::default()
+            },
+            verbose: false,
+            opt_report: false,
+            stack_check: true,
+            stack_report: false,
+            stack_report_file: Some(stack_report.clone()),
+            warning_profile: WarningProfile::default(),
+        }),
+    })
+    .expect("compile phase29 helper report");
+
+    let map = fs::read_to_string(output.with_extension("map")).expect("map");
+    let lst = fs::read_to_string(output.with_extension("lst")).expect("lst");
+    let memory = fs::read_to_string(memory_report).expect("memory report");
+    let stack = fs::read_to_string(stack_report).expect("stack report");
+    assert!(map.contains("__rt_f32_cmp"));
+    assert!(lst.contains("__rt_f32_cmp"));
+    assert!(memory.contains("__rt_f32_cmp"));
+    assert!(memory.contains("float helper"));
+    assert!(stack.contains("helper_extra="));
+
+    let input = temp_file("phase29-float-cast-report.c");
+    fs::write(
+        &input,
+        r#"
+long source;
+float value;
+long result;
+
+void main(void) {
+    source = 100000L;
+    value = (float)source;
+    result = (long)value;
+}
+"#,
+    )
+    .expect("fixture");
+    let output = temp_file("phase29-float-cast-report.hex");
+    let memory_report = temp_file("phase29-float-cast-report.mem");
+    execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: "pic16f877a".to_string(),
+            input,
+            output: output.clone(),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O2,
+            artifacts: OutputArtifacts {
+                map: true,
+                list_file: true,
+                memory_report: true,
+                memory_report_file: Some(memory_report.clone()),
+                ..OutputArtifacts::default()
+            },
+            verbose: false,
+            opt_report: false,
+            stack_check: true,
+            stack_report: false,
+            stack_report_file: None,
+            warning_profile: WarningProfile::default(),
+        }),
+    })
+    .expect("compile phase29 cast helper report");
+    let map = fs::read_to_string(output.with_extension("map")).expect("map");
+    let lst = fs::read_to_string(output.with_extension("lst")).expect("lst");
+    let memory = fs::read_to_string(memory_report).expect("memory report");
+    for helper in ["__rt_i32_to_f32", "__rt_f32_to_i32"] {
+        assert!(map.contains(helper), "missing {helper} in map");
+        assert!(lst.contains(helper), "missing {helper} in listing");
+        assert!(memory.contains(helper), "missing {helper} in memory report");
+    }
+}
+
+#[test]
+/// Verifies Phase 29 float diagnostics remain explicit.
+fn phase29_float_completion_diagnostics() {
+    let isr_compare = compile_error(
+        "pic16f877a",
+        "phase29-float-compare-isr.c",
+        r#"
+float a;
+float b;
+void __interrupt isr(void) {
+    if (a > b) {
+    }
+}
+void main(void) {}
+"#,
+    );
+    assert!(isr_compare.contains("cannot use `Greater` when it would lower through a runtime helper"));
+
+    let negative_unsigned = compile_error(
+        "pic16f877a",
+        "phase29-negative-float-to-ulong.c",
+        r#"
+unsigned long result;
+void main(void) {
+    result = (unsigned long)-1.0f;
+}
+"#,
+    );
+    assert!(negative_unsigned.contains("constant float-to-unsigned-long cast is out of range"));
+
+    let out_of_range = compile_error(
+        "pic16f877a",
+        "phase29-float-to-long-range.c",
+        r#"
+long result;
+void main(void) {
+    result = (long)3000000000.0f;
+}
+"#,
+    );
+    assert!(out_of_range.contains("constant float-to-long cast is out of range"));
+}
+
+#[test]
+/// Verifies checked-in Phase 28 float examples compile cleanly on PIC16F877A.
+fn phase28_float_examples_compile_via_picc() {
+    for example in [
+        "examples/pic16f877a/float_dynamic_casts.c",
+        "examples/pic16f877a/float_comparisons.c",
+        "examples/pic16f877a/float_resource_report.c",
+        "examples/pic16f877a/float_fixed_interop.c",
+        "examples/pic16f877a/float_limitations.c",
+    ] {
+        let output = compile_example_via_picc_cli_with_extra_args(
+            "pic16f877a",
+            example,
+            &["--size", "--verify-hex"],
+        );
+        assert_hex_is_programmable(&output);
+    }
+}
+
+#[test]
+/// Verifies checked-in Phase 29 float examples compile cleanly on PIC16F877A.
+fn phase29_float_examples_compile_via_picc() {
+    for example in [
+        "examples/pic16f877a/float_dynamic_comparisons.c",
+        "examples/pic16f877a/float_long_casts.c",
+        "examples/pic16f877a/float_threshold_control.c",
+        "examples/pic16f877a/float_loop_compare.c",
+    ] {
+        let output = compile_example_via_picc_cli_with_extra_args(
+            "pic16f877a",
+            example,
+            &["--size", "--verify-hex"],
+        );
+        assert_hex_is_programmable(&output);
+    }
+}

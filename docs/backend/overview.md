@@ -149,6 +149,8 @@ Phase 27 float backend responsibilities:
 - store `float` as 4-byte little-endian f32 bits
 - reuse the existing 32-bit return slots
 - emit finite float helpers as `float helper` resource contributions
+- emit Phase 28 cast helpers `__rt_q16_16_to_f32` and `__rt_f32_to_q16_16`
+- emit Phase 29 compare and 32-bit conversion helpers as `float helper` resource contributions
 - inline common `* 2.0f` and `/ 2.0f` exponent adjustments
 - let resource fitting reject helper-heavy float programs that do not fit a target
 
@@ -178,6 +180,9 @@ Phase 11-18 backend docs:
 - [phase17-dispatcher.md](phase17-dispatcher.md)
 - [phase18-stack-safety.md](phase18-stack-safety.md)
 - [phase27-float-codegen.md](phase27-float-codegen.md)
+- [phase28-float-resource-cost.md](phase28-float-resource-cost.md)
+- [../runtime/phase29-float-compare.md](../runtime/phase29-float-compare.md)
+- [../runtime/phase29-float-i32-conversions.md](../runtime/phase29-float-i32-conversions.md)
 
 Phase 19 execution-validation docs:
 

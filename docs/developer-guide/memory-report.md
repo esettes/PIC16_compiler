@@ -69,6 +69,16 @@ Use `--verify-hex` with `--memory-report` when preparing a hardware build:
 picc --target pic16f628a -I include --size --memory-report --verify-hex -o build/app.hex app.c
 ```
 
-## Phase 27 Float Interaction
+## Phase 27/28 Float Interaction
 
-Float helpers are reported as `float helper`. Generic helpers are large; prefer `--size` before hardware builds and expect resource fitting to reject programs that pull several float helpers on small targets.
+Float helpers are reported as `float helper`. Phase 28 cast helpers use the same category:
+
+- `__rt_q16_16_to_f32`
+- `__rt_f32_to_q16_16`
+- `__rt_f32_cmp`
+- `__rt_i32_to_f32`
+- `__rt_u32_to_f32`
+- `__rt_f32_to_i32`
+- `__rt_f32_to_u32`
+
+Generic helpers are large; prefer `--size` before hardware builds and expect resource fitting to reject programs that pull several float helpers on small targets.

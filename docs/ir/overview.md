@@ -114,6 +114,9 @@ Phase 27 float lowering notes:
 - finite float literals lower as raw-bit constants
 - constant float arithmetic and comparisons fold before backend codegen
 - dynamic float arithmetic lowers to typed binary IR and the backend chooses helper or inline fast path
+- Phase 28 dynamic float casts lower to explicit cast IR using `F32ToQ16` and `Q16ToF32`
+- Phase 29 dynamic 32-bit integer float casts lower to explicit `I32ToF32`, `U32ToF32`, `F32ToI32`, and `F32ToU32` cast IR
+- Phase 29 dynamic float comparisons lower as float compare conditions consumed by the backend helper call path
 - implicit mixed float/integer arithmetic is intentionally not inserted
 
 Current Phase 18 limits:
@@ -147,6 +150,8 @@ Current detail:
 - [phase23-fixed-constant-folding.md](phase23-fixed-constant-folding.md)
 - [phase24-fixed-dynamic-lowering.md](phase24-fixed-dynamic-lowering.md)
 - [phase27-float-lowering.md](phase27-float-lowering.md)
+- [phase28-float-dynamic-lowering.md](phase28-float-dynamic-lowering.md)
+- [phase29-float-comparison-lowering.md](phase29-float-comparison-lowering.md)
 - [phase12-pointer-lowering.md](phase12-pointer-lowering.md)
 - [phase13-rom-lowering.md](phase13-rom-lowering.md)
 - [phase14-rom-read-lowering.md](phase14-rom-read-lowering.md)

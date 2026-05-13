@@ -1487,3 +1487,241 @@ void main(void) {
 
     assert_eq!(symbol_u32(&core, &map, "result"), 0x4000_0000);
 }
+
+#[test]
+fn executes_phase28_dynamic_signed_int_float_round_trip() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase28-float-int-casts.c",
+        r#"
+int si;
+float f;
+int si_result;
+
+void main(void) {
+    si = -3;
+    f = (float)si;
+    si_result = (int)f;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u16(&core, &map, "si_result"), 0xFFFD);
+}
+
+#[test]
+fn executes_phase28_dynamic_unsigned_int_float_round_trip() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase28-float-uint-casts.c",
+        r#"
+unsigned int phase28_uint_value;
+float phase28_float_value;
+unsigned int phase28_uint_result;
+
+void main(void) {
+    phase28_uint_value = 5;
+    phase28_float_value = (float)phase28_uint_value;
+    phase28_uint_result = (unsigned int)phase28_float_value;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u16(&core, &map, "phase28_uint_result"), 5);
+}
+
+#[test]
+fn executes_phase28_dynamic_fixed_float_round_trips() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase28-float-fixed-casts.c",
+        r#"
+__fixed16_16 q16;
+float f;
+__fixed16_16 q16_result;
+
+void main(void) {
+    q16 = -2.25q16_16;
+    f = (float)q16;
+    q16_result = (__fixed16_16)f;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "q16_result"), 0xFFFD_C000);
+}
+
+#[test]
+fn executes_phase28_dynamic_q8_float_round_trip() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase28-float-q8-casts.c",
+        r#"
+__fixed8_8 q8;
+float f;
+__fixed8_8 q8_result;
+
+void main(void) {
+    q8 = 1.5q8_8;
+    f = (float)q8;
+    q8_result = (__fixed8_8)f;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u16(&core, &map, "q8_result"), 0x0180);
+}
+
+#[test]
+fn executes_phase28_float_pointer_and_union_storage() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase28-float-pointer-union.c",
+        r#"
+union FloatRaw {
+    float f;
+    unsigned long raw;
+};
+
+float value;
+float copied;
+float *ptr;
+union FloatRaw overlay;
+unsigned long raw_result;
+
+void main(void) {
+    value = -1.5f;
+    ptr = &value;
+    copied = *ptr;
+    overlay.f = copied;
+    raw_result = overlay.raw;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "raw_result"), 0xBFC0_0000);
+}
+
+#[test]
+fn executes_phase29_dynamic_float_comparisons_and_control_flow() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase29-float-comparisons.c",
+        r#"
+float a;
+float b;
+unsigned char result;
+unsigned char loop_count;
+
+void main(void) {
+    a = 1.0f;
+    b = 1.0f;
+    if (a == b) { result = result + 1; }
+
+    b = 2.0f;
+    if (a != b) { result = result + 1; }
+    a = 1.5f;
+    if (a < b) { result = result + 1; }
+    if (b <= b) { result = result + 1; }
+    a = 3.0f;
+    if (a > b) { result = result + 1; }
+    if (a >= a) { result = result + 1; }
+    a = -1.0f;
+    if (a < b) { result = result + 1; }
+    b = -4.0f;
+    if (a > b) { result = result + 1; }
+
+    a = 30.5f;
+    b = 28.0f;
+    if (a > b) { result = result + 1; }
+
+    a = 0.0f;
+    b = 1.0f;
+    while (a < b) {
+        loop_count = loop_count + 1;
+        a = 2.0f;
+    }
+}
+"#,
+    );
+
+    assert_eq!(symbol_u8(&core, &map, "result"), 9);
+    assert_eq!(symbol_u8(&core, &map, "loop_count"), 1);
+}
+
+#[test]
+fn executes_phase29_dynamic_i32_to_float_casts() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase29-i32-to-float.c",
+        r#"
+long large_signed;
+long negative_signed;
+unsigned long large_unsigned;
+float signed_result;
+float negative_result;
+float unsigned_result;
+
+void main(void) {
+    large_signed = 100000L;
+    negative_signed = -1000L;
+    large_unsigned = 100000UL;
+    signed_result = (float)large_signed;
+    negative_result = (float)negative_signed;
+    unsigned_result = (float)large_unsigned;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "signed_result"), 0x47C3_5000);
+    assert_eq!(symbol_u32(&core, &map, "negative_result"), 0xC47A_0000);
+    assert_eq!(symbol_u32(&core, &map, "unsigned_result"), 0x47C3_5000);
+}
+
+#[test]
+fn executes_phase29_dynamic_float_to_i32_casts() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase29-float-to-i32.c",
+        r#"
+float positive_value;
+float negative_value;
+float unsigned_value;
+long positive_result;
+long negative_result;
+unsigned long unsigned_result;
+
+void main(void) {
+    positive_value = 1000.75f;
+    negative_value = -1000.75f;
+    unsigned_value = 1000.75f;
+    positive_result = (long)positive_value;
+    negative_result = (long)negative_value;
+    unsigned_result = (unsigned long)unsigned_value;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "positive_result"), 1000);
+    assert_eq!(symbol_u32(&core, &map, "negative_result"), 0xFFFF_FC18);
+    assert_eq!(symbol_u32(&core, &map, "unsigned_result"), 1000);
+}
+
+#[test]
+fn executes_phase29_negative_float_to_unsigned_long_returns_zero() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase29-negative-float-to-u32.c",
+        r#"
+float negative_value;
+unsigned long result;
+
+void main(void) {
+    negative_value = -1.0f;
+    result = (unsigned long)negative_value;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0);
+}

@@ -44,6 +44,13 @@ pub enum RuntimeHelper {
     F32Sub,
     F32Mul,
     F32Div,
+    F32Cmp,
+    F32ToQ16,
+    Q16ToF32,
+    I32ToF32,
+    U32ToF32,
+    F32ToI32,
+    F32ToU32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -96,6 +103,13 @@ impl RuntimeHelper {
         RuntimeHelper::F32Sub,
         RuntimeHelper::F32Mul,
         RuntimeHelper::F32Div,
+        RuntimeHelper::F32Cmp,
+        RuntimeHelper::F32ToQ16,
+        RuntimeHelper::Q16ToF32,
+        RuntimeHelper::I32ToF32,
+        RuntimeHelper::U32ToF32,
+        RuntimeHelper::F32ToI32,
+        RuntimeHelper::F32ToU32,
     ];
 
     pub const fn info(self) -> RuntimeHelperInfo {
@@ -370,6 +384,55 @@ impl RuntimeHelper {
                 label: "__rt_f32_div",
                 operand_ty: Type::new(ScalarType::F32),
                 arg_bytes: 8,
+                local_bytes: 16,
+                frame_bytes: 18,
+            },
+            Self::F32Cmp => RuntimeHelperInfo {
+                label: "__rt_f32_cmp",
+                operand_ty: Type::new(ScalarType::F32),
+                arg_bytes: 8,
+                local_bytes: 16,
+                frame_bytes: 18,
+            },
+            Self::F32ToQ16 => RuntimeHelperInfo {
+                label: "__rt_f32_to_q16_16",
+                operand_ty: Type::new(ScalarType::F32),
+                arg_bytes: 4,
+                local_bytes: 16,
+                frame_bytes: 18,
+            },
+            Self::Q16ToF32 => RuntimeHelperInfo {
+                label: "__rt_q16_16_to_f32",
+                operand_ty: Type::new(ScalarType::Q16_16),
+                arg_bytes: 4,
+                local_bytes: 16,
+                frame_bytes: 18,
+            },
+            Self::I32ToF32 => RuntimeHelperInfo {
+                label: "__rt_i32_to_f32",
+                operand_ty: Type::new(ScalarType::I32),
+                arg_bytes: 4,
+                local_bytes: 16,
+                frame_bytes: 18,
+            },
+            Self::U32ToF32 => RuntimeHelperInfo {
+                label: "__rt_u32_to_f32",
+                operand_ty: Type::new(ScalarType::U32),
+                arg_bytes: 4,
+                local_bytes: 16,
+                frame_bytes: 18,
+            },
+            Self::F32ToI32 => RuntimeHelperInfo {
+                label: "__rt_f32_to_i32",
+                operand_ty: Type::new(ScalarType::F32),
+                arg_bytes: 4,
+                local_bytes: 16,
+                frame_bytes: 18,
+            },
+            Self::F32ToU32 => RuntimeHelperInfo {
+                label: "__rt_f32_to_u32",
+                operand_ty: Type::new(ScalarType::F32),
+                arg_bytes: 4,
                 local_bytes: 16,
                 frame_bytes: 18,
             },

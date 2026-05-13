@@ -700,7 +700,41 @@ fn apply_cast(kind: CastKind, value: i64, source_ty: Type, target_ty: Type) -> i
             target_ty,
         ),
         CastKind::Truncate | CastKind::Bitcast => normalize_value(value, target_ty),
+        CastKind::F32ToQ16
+        | CastKind::Q16ToF32
+        | CastKind::I32ToF32
+        | CastKind::U32ToF32
+        | CastKind::F32ToI32
+        | CastKind::F32ToU32 => apply_float_cast(value, source_ty, target_ty),
     }
+}
+
+fn apply_float_cast(value: i64, source_ty: Type, target_ty: Type) -> i64 {
+    let float_value = if source_ty.is_float() {
+        f32::from_bits(normalize_value(value, source_ty) as u32)
+    } else if source_ty.is_fixed() {
+        let raw = if source_ty.is_signed() {
+            crate::common::integer::signed_value(value, source_ty) as f32
+        } else {
+            normalize_value(value, source_ty) as f32
+        };
+        raw / ((1_u32 << source_ty.fixed_fraction_bits().unwrap_or(0)) as f32)
+    } else if source_ty.is_signed() {
+        crate::common::integer::signed_value(value, source_ty) as f32
+    } else {
+        normalize_value(value, source_ty) as f32
+    };
+    if target_ty.is_float() {
+        return i64::from(float_value.to_bits());
+    }
+    if target_ty.is_fixed() {
+        return normalize_value(
+            (float_value * ((1_u32 << target_ty.fixed_fraction_bits().unwrap_or(0)) as f32))
+                .trunc() as i64,
+            target_ty,
+        );
+    }
+    normalize_value(float_value.trunc() as i64, target_ty)
 }
 
 #[cfg(test)]
