@@ -19,6 +19,7 @@ Policy:
 - no `double`
 - no math library
 - dynamic 32-bit integer float casts are provided by Phase 29 helpers, not this Q16.16 bridge
+- ROM float tables are provided by Phase 30 through RETLW-backed raw f32 bytes
 - no helper use inside ISR
 
 The conversion bridge is intentionally Q16.16 based. It is useful for sensor scaling and fixed-point interop, not a complete IEEE conversion library.

@@ -21,7 +21,8 @@ Behavior:
 - overflow/wrap follows the internal Q16.16 work representation, not full IEEE saturation/NaN/Inf behavior
 - helper-backed float operations are rejected inside ISRs
 - helper labels appear in `.map`, `.lst`, stack reports, and memory reports when emitted
-- Phase 28 dynamic casts support 16-bit integers and fixed-point types; dynamic 32-bit integer casts and dynamic float comparisons remain rejected
+- Phase 28 dynamic casts support 16-bit integers and fixed-point types through the Q16.16 bridge
 - Phase 29 adds dynamic 32-bit integer casts and dynamic comparisons
+- Phase 30 adds ROM-backed float tables; those tables do not add new float arithmetic helpers
 
-Resource note: generic float helpers are large. Codegen includes inline fast paths for common finite `* 2.0f` and `/ 2.0f` to avoid pulling generic helpers when possible.
+Resource note: generic float helpers are large. Codegen includes inline fast paths for common finite `* 2.0f` and `/ 2.0f` to avoid pulling generic helpers when possible. ROM float reads are cheap, but using the read result in helper-backed arithmetic/comparison can still pull large helpers.

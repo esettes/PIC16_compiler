@@ -151,6 +151,8 @@ Phase 27 float backend responsibilities:
 - emit finite float helpers as `float helper` resource contributions
 - emit Phase 28 cast helpers `__rt_q16_16_to_f32` and `__rt_f32_to_q16_16`
 - emit Phase 29 compare and 32-bit conversion helpers as `float helper` resource contributions
+- emit Phase 30 `const __rom float[]` tables as RETLW-backed ROM table contributions
+- lower ROM float reads through the existing 32-bit little-endian ROM byte-read path
 - inline common `* 2.0f` and `/ 2.0f` exponent adjustments
 - let resource fitting reject helper-heavy float programs that do not fit a target
 
@@ -181,6 +183,7 @@ Phase 11-18 backend docs:
 - [phase18-stack-safety.md](phase18-stack-safety.md)
 - [phase27-float-codegen.md](phase27-float-codegen.md)
 - [phase28-float-resource-cost.md](phase28-float-resource-cost.md)
+- [phase30-rom-float-tables.md](phase30-rom-float-tables.md)
 - [../runtime/phase29-float-compare.md](../runtime/phase29-float-compare.md)
 - [../runtime/phase29-float-i32-conversions.md](../runtime/phase29-float-i32-conversions.md)
 

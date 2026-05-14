@@ -33,9 +33,9 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 29: float runtime completion for dynamic comparisons and 32-bit integer conversions on top of Phase 28 float hardening, Phase 27 basic finite software `float`, Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, and the earlier frontend/backend phases**.
+Current implementation is **Phase 30: ROM float tables and float static-data integration on top of Phase 29 dynamic float comparisons and 32-bit integer conversions, Phase 28 float hardening, Phase 27 basic finite software `float`, Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, and the earlier frontend/backend phases**.
 
-Phase 29 scope:
+Phase 30 scope:
 
 - `float` as a 4-byte little-endian scalar with IEEE-754 single-precision storage bits
 - decimal float literals such as `1.5` and `1.5f`
@@ -47,9 +47,13 @@ Phase 29 scope:
 - dynamic float comparisons via shared `__rt_f32_cmp`
 - dynamic float add/sub helpers that convert through an internal Q16.16 work format
 - inline fast paths for common finite `* 2.0f` and `/ 2.0f`
-- simulator execution tests for raw literals, assignment, arithmetic, unary minus, folded comparisons, dynamic casts, calls, structs, arrays, pointers, and unions
+- `const __rom float[]` calibration tables with omitted-size inference and direct `table[index]` reads
+- constant and dynamic ROM float indexing through the existing 32-bit RETLW byte-read path
+- ROM float payload layout as little-endian f32 bytes, for example `1.0f` emits `00 00 80 3F`
+- simulator execution tests for raw literals, assignment, arithmetic, unary minus, folded/dynamic comparisons, dynamic casts, ROM float reads, calls, structs, arrays, pointers, and unions
 - resource reports classify emitted float helpers as `float helper`
-- no `double`, math library, recursion, ROM float tables, or full IEEE special-value compliance
+- resource reports and maps list ROM float tables as `ROM RETLW table` contributions
+- no `double`, math library, recursion, general ROM pointers, or full IEEE special-value compliance
 
 Phase 26 scope:
 
@@ -1063,6 +1067,12 @@ picc --list-targets
 - [docs/ir/phase28-float-dynamic-lowering.md](docs/ir/phase28-float-dynamic-lowering.md)
 - [docs/runtime/phase28-float-runtime.md](docs/runtime/phase28-float-runtime.md)
 - [docs/backend/phase28-float-resource-cost.md](docs/backend/phase28-float-resource-cost.md)
+- [docs/runtime/phase29-float-compare.md](docs/runtime/phase29-float-compare.md)
+- [docs/runtime/phase29-float-i32-conversions.md](docs/runtime/phase29-float-i32-conversions.md)
+- [docs/ir/phase29-float-comparison-lowering.md](docs/ir/phase29-float-comparison-lowering.md)
+- [docs/frontend/phase30-rom-float.md](docs/frontend/phase30-rom-float.md)
+- [docs/ir/phase30-rom-float-lowering.md](docs/ir/phase30-rom-float-lowering.md)
+- [docs/backend/phase30-rom-float-tables.md](docs/backend/phase30-rom-float-tables.md)
 - [docs/migration/phase3-to-phase4-abi.md](docs/migration/phase3-to-phase4-abi.md)
 - [docs/developer-guide/adding-device.md](docs/developer-guide/adding-device.md)
 
@@ -1075,4 +1085,4 @@ picc --list-targets
 
 ## Current Limits
 
-Phase 29 completes the basic finite software `float` runtime, but current hard limits remain: no `double`, no math library (`sin`, `cos`, `sqrt`, etc.), no full IEEE NaN/Inf/subnormal compliance, no ROM float tables, no dynamic mixed float/integer arithmetic, no general ROM pointer model, no code-space pointers, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no function-pointer calls inside ISR, no fixed-point modulo, no raw computed PIC16 indirect calls, and no recursion. Float helpers are large; resource fitting can reject helper-heavy programs on real targets. The emulator is intentionally core-only: no full peripheral timing model, no asynchronous interrupt scheduling, and no claim of complete PIC16 device emulation.
+Phase 30 completes ROM-backed float calibration tables, but current hard limits remain: no `double`, no math library (`sin`, `cos`, `sqrt`, etc.), no full IEEE NaN/Inf/subnormal compliance, no dynamic mixed float/integer arithmetic, no general ROM pointer model, no code-space pointers, no address-of ROM elements, no ROM/data pointer mixing, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no function-pointer calls inside ISR, no fixed-point modulo, no raw computed PIC16 indirect calls, and no recursion. Float helpers are large; resource fitting can reject helper-heavy programs on real targets. Helper-backed float expressions are most robust when ROM-read values are first copied into RAM globals/statics before arithmetic or comparison. The emulator is intentionally core-only: no full peripheral timing model, no asynchronous interrupt scheduling, and no claim of complete PIC16 device emulation.

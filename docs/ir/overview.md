@@ -117,6 +117,7 @@ Phase 27 float lowering notes:
 - Phase 28 dynamic float casts lower to explicit cast IR using `F32ToQ16` and `Q16ToF32`
 - Phase 29 dynamic 32-bit integer float casts lower to explicit `I32ToF32`, `U32ToF32`, `F32ToI32`, and `F32ToU32` cast IR
 - Phase 29 dynamic float comparisons lower as float compare conditions consumed by the backend helper call path
+- Phase 30 ROM float indexing reuses `RomRead32`; the IR carries raw 32-bit f32 bytes as an ordinary `float` temp result
 - implicit mixed float/integer arithmetic is intentionally not inserted
 
 Current Phase 18 limits:
@@ -132,7 +133,7 @@ Current Phase 18 limits:
 - no function-pointer arithmetic or relational comparisons
 - no indirect calls inside interrupt handlers
 - no recursion, even with `--stack-check`
-- no `double`, math library, ROM float tables, or full IEEE special-value runtime model
+- no `double`, math library, general ROM pointer model, or full IEEE special-value runtime model
 - fixed-point modulo remains unsupported
 - helper-backed fixed operations remain rejected inside interrupt handlers
 

@@ -54,11 +54,12 @@ Current Phase 18 frontend surface:
 - accepts `float` declarations, finite decimal float literals, and constant float casts/comparisons/arithmetic
 - accepts Phase 28 dynamic 16-bit integer/fixed-point float casts through helper lowering
 - accepts Phase 29 dynamic 32-bit integer float casts and dynamic float comparisons
-- rejects implicit mixed float/integer arithmetic, float ROM tables, float bitfields, float switch expressions, and helper-backed float work in ISRs
+- accepts Phase 30 file-scope `const __rom float[]` tables with direct indexing
+- rejects implicit mixed float/integer arithmetic, float bitfields, float switch expressions, ROM/data pointer mixing, and helper-backed float work in ISRs
 - validates pointer relational comparisons for compatible data-space pointer types
 - validates pointer subtraction for compatible data-space pointer types with 1-byte or 2-byte elements
 - parses explicit `__rom` declarations for file-scope 8-bit/16-bit integer arrays
-- accepts `const __rom char[]`, `const __rom unsigned char[]`, `const __rom int[]`, and `const __rom unsigned int[]` initializers from brace lists or string literals
+- accepts `const __rom char[]`, `const __rom unsigned char[]`, `const __rom int[]`, `const __rom unsigned int[]`, fixed-point ROM arrays, and `const __rom float[]` initializers from brace lists or string literals where applicable
 - rejects ROM/data-pointer mixing and rejects ROM pointer forms
 - lowers direct ROM indexing plus `__rom_read8(table, index)` / `__rom_read16(table, index)` as the supported ROM read surfaces
 - parses supported function-pointer declarators, typedefs, arrays, and struct fields

@@ -94,4 +94,5 @@ See:
 - [Hardware Smoke Tests](../developer-guide/hardware-smoke-tests.md)
 - [Phase 27 Float](../frontend/phase27-float.md)
 - [Phase 28 Float Conversions](../frontend/phase28-float-conversions.md)
+- [Phase 30 ROM Float](../frontend/phase30-rom-float.md)
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->

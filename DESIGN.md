@@ -113,7 +113,7 @@ Phase 27 adds a conservative `float` scalar without adding `double` or a math li
 - runtime float add/sub helpers convert operands to an internal Q16.16 work format, operate there, and convert back to f32 bits
 - common `* 2.0f` and `/ 2.0f` lower inline by exponent adjustment to avoid large helper pulls
 - helper-backed float work is rejected inside ISRs
-- ROM float tables, `double`, NaN/Inf semantics, subnormal completeness, and math functions remain deferred
+- ROM float tables are added in Phase 30; `double`, NaN/Inf semantics, subnormal completeness, and math functions remain deferred
 
 This is intentionally finite-only software float support. It is not a claim of full IEEE-754 runtime compliance.
 
@@ -137,6 +137,19 @@ Phase 29 fills the main remaining finite-float runtime gaps:
 - dynamic `float` to `long` / `unsigned long` use `__rt_f32_to_i32` and `__rt_f32_to_u32`
 - float-to-integer casts truncate toward zero; dynamic negative float to unsigned long returns zero
 - helper costs remain visible to Phase 25 resource fitting
+
+### Phase 30 ROM Float Tables
+
+Phase 30 stores calibration-style float constants in program memory:
+
+- supported form is file-scope `const __rom float table[] = { ... };`
+- initializer elements are finite float constants or already-foldable float expressions
+- payload bytes are raw little-endian f32 bits in RETLW tables
+- constant and dynamic `table[index]` reads lower through the existing 32-bit ROM-read IR/backend path
+- no startup RAM copy is emitted for ROM float objects
+- ROM/data pointer mixing, address-of ROM elements, local ROM objects, non-const ROM objects, and assignment to ROM elements remain diagnostics
+- dynamic ROM reads remain rejected inside ISRs; constant-index reads are allowed only when lowered inline
+- helper-backed float arithmetic/comparison remains expensive and resource-fitted
 
 ### Phase 24 Dynamic Q16.16 Helpers
 

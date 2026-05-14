@@ -1637,7 +1637,7 @@ impl<'a> CodegenContext<'a> {
         self.program.push(AsmLine::Label(done_label));
     }
 
-    /// Lowers one Phase 23 fixed-point ROM double-word read from little-endian bytes.
+    /// Lowers one fixed-point or float ROM double-word read from little-endian bytes.
     fn emit_rom_read32(
         &mut self,
         function: &IrFunction,
@@ -1652,7 +1652,7 @@ impl<'a> CodegenContext<'a> {
                 "backend",
                 None,
                 format!(
-                    "ROM object `{}` needs a byte-array initializer in phase 23",
+                    "ROM object `{}` needs a byte-array initializer for a 32-bit ROM read",
                     self.symbol_name(symbol)
                 ),
                 None,
@@ -1665,7 +1665,7 @@ impl<'a> CodegenContext<'a> {
                 "backend",
                 None,
                 format!(
-                    "ROM object `{}` has an invalid 32-bit byte layout in phase 23",
+                    "ROM object `{}` has an invalid 32-bit ROM byte layout",
                     self.symbol_name(symbol)
                 ),
                 None,
@@ -1680,12 +1680,14 @@ impl<'a> CodegenContext<'a> {
                 "backend",
                 None,
                 format!(
-                    "ROM object `{}` has unsupported phase 23 double-word table length {} ({} bytes)",
+                    "ROM object `{}` has unsupported 32-bit ROM table length {} ({} bytes)",
                     self.symbol_name(symbol),
                     len,
                     bytes.len()
                 ),
-                Some("keep each 32-bit ROM table within one 255-byte RETLW payload page".to_string()),
+                Some(
+                    "keep each 32-bit ROM table within one 255-byte RETLW payload page".to_string(),
+                ),
             );
             self.clear_temp(function.symbol, dst, function.temp_types[dst]);
             return;
@@ -1711,7 +1713,7 @@ impl<'a> CodegenContext<'a> {
                 "backend",
                 None,
                 format!(
-                    "interrupt handler `{}` reached dynamic ROM double-word lowering in phase 23",
+                    "interrupt handler `{}` reached dynamic ROM double-word lowering",
                     self.symbol_name(function.symbol)
                 ),
                 Some("only constant-index ROM reads are allowed inside ISRs".to_string()),
@@ -1961,12 +1963,24 @@ impl<'a> CodegenContext<'a> {
         self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(info.arg_bytes));
 
         match op {
-            BinaryOp::Equal => self.emit_scratch0_equals_branch(0, targets.then_label, targets.else_label),
-            BinaryOp::NotEqual => self.emit_scratch0_nonzero_branch(targets.then_label, targets.else_label),
-            BinaryOp::Less => self.emit_scratch0_equals_branch(0xFF, targets.then_label, targets.else_label),
-            BinaryOp::LessEqual => self.emit_scratch0_equals_branch(1, targets.else_label, targets.then_label),
-            BinaryOp::Greater => self.emit_scratch0_equals_branch(1, targets.then_label, targets.else_label),
-            BinaryOp::GreaterEqual => self.emit_scratch0_equals_branch(0xFF, targets.else_label, targets.then_label),
+            BinaryOp::Equal => {
+                self.emit_scratch0_equals_branch(0, targets.then_label, targets.else_label)
+            }
+            BinaryOp::NotEqual => {
+                self.emit_scratch0_nonzero_branch(targets.then_label, targets.else_label)
+            }
+            BinaryOp::Less => {
+                self.emit_scratch0_equals_branch(0xFF, targets.then_label, targets.else_label)
+            }
+            BinaryOp::LessEqual => {
+                self.emit_scratch0_equals_branch(1, targets.else_label, targets.then_label)
+            }
+            BinaryOp::Greater => {
+                self.emit_scratch0_equals_branch(1, targets.then_label, targets.else_label)
+            }
+            BinaryOp::GreaterEqual => {
+                self.emit_scratch0_equals_branch(0xFF, targets.else_label, targets.then_label)
+            }
             _ => {
                 diagnostics.error(
                     "backend",
@@ -4549,12 +4563,7 @@ impl<'a> CodegenContext<'a> {
         self.branch_to_label(&finish_label);
 
         self.program.push(AsmLine::Label(not_equal_label));
-        self.branch_on_current_frame_bit(
-            q0_offset + 3,
-            7,
-            &lhs_neg_label,
-            &lhs_nonneg_label,
-        );
+        self.branch_on_current_frame_bit(q0_offset + 3, 7, &lhs_neg_label, &lhs_nonneg_label);
 
         self.program.push(AsmLine::Label(lhs_neg_label));
         self.branch_on_current_frame_bit(
@@ -4563,7 +4572,8 @@ impl<'a> CodegenContext<'a> {
             &rhs_neg_from_lhs_neg_label,
             &less_label,
         );
-        self.program.push(AsmLine::Label(rhs_neg_from_lhs_neg_label));
+        self.program
+            .push(AsmLine::Label(rhs_neg_from_lhs_neg_label));
         self.branch_to_label(&same_sign_label);
 
         self.program.push(AsmLine::Label(lhs_nonneg_label));
@@ -4573,7 +4583,8 @@ impl<'a> CodegenContext<'a> {
             &rhs_neg_from_lhs_nonneg_label,
             &same_sign_label,
         );
-        self.program.push(AsmLine::Label(rhs_neg_from_lhs_nonneg_label));
+        self.program
+            .push(AsmLine::Label(rhs_neg_from_lhs_nonneg_label));
         self.branch_to_label(&greater_label);
 
         self.program.push(AsmLine::Label(same_sign_label));
@@ -4599,6 +4610,7 @@ impl<'a> CodegenContext<'a> {
     }
 
     /// Converts a signed or unsigned 32-bit integer to finite IEEE f32 bits.
+    #[allow(clippy::too_many_arguments)]
     fn emit_i32_to_float_frame(
         &mut self,
         int_offset: u16,
@@ -4622,6 +4634,7 @@ impl<'a> CodegenContext<'a> {
     }
 
     /// Converts finite IEEE f32 bits to signed or unsigned 32-bit integer bits.
+    #[allow(clippy::too_many_arguments)]
     fn emit_float_to_i32_frame(
         &mut self,
         raw_offset: u16,
@@ -7146,9 +7159,7 @@ fn eval_const_expr(expr: &TypedExpr) -> i64 {
                 | CastKind::I32ToF32
                 | CastKind::U32ToF32
                 | CastKind::F32ToI32
-                | CastKind::F32ToU32 => {
-                    eval_float_cast_constant(value, value_expr.ty, target_ty)
-                }
+                | CastKind::F32ToU32 => eval_float_cast_constant(value, value_expr.ty, target_ty),
             }
         }
         TypedExprKind::Assign { .. }
@@ -7186,8 +7197,8 @@ fn eval_float_cast_constant(value: i64, source_ty: Type, target_ty: Type) -> i64
     }
     if target_ty.is_fixed() {
         return normalize_value(
-            (float_value * ((1_u32 << target_ty.fixed_fraction_bits().unwrap_or(0)) as f32))
-                .trunc() as i64,
+            (float_value * ((1_u32 << target_ty.fixed_fraction_bits().unwrap_or(0)) as f32)).trunc()
+                as i64,
             target_ty,
         );
     }

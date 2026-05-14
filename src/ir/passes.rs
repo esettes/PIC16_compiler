@@ -729,8 +729,8 @@ fn apply_float_cast(value: i64, source_ty: Type, target_ty: Type) -> i64 {
     }
     if target_ty.is_fixed() {
         return normalize_value(
-            (float_value * ((1_u32 << target_ty.fixed_fraction_bits().unwrap_or(0)) as f32))
-                .trunc() as i64,
+            (float_value * ((1_u32 << target_ty.fixed_fraction_bits().unwrap_or(0)) as f32)).trunc()
+                as i64,
             target_ty,
         );
     }

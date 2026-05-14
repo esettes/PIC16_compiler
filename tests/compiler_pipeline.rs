@@ -5906,15 +5906,20 @@ void main(void) {}
 }
 
 #[test]
-/// Verifies ROM float tables are explicitly deferred.
-fn phase27_rejects_rom_float_tables() {
-    let error = compile_error(
+/// Verifies Phase 30 accepts simple ROM float tables.
+fn phase30_compiles_rom_float_table_declaration() {
+    let output = compile_source(
         "pic16f877a",
-        "phase27-rom-float.c",
-        "const __rom float table[] = { 1.0f, 2.0f };",
+        "phase30-rom-float-decl.c",
+        r#"
+const __rom float table[] = { 1.0f, 2.0f };
+void main(void) {}
+"#,
     );
 
-    assert!(error.contains("unsupported ROM element type `const __rom float`"));
+    let map = read_artifact(&output, "map");
+    assert!(map.contains("table [rom, const"));
+    assert_hex_is_programmable(&output);
 }
 
 #[test]
@@ -6197,7 +6202,9 @@ void __interrupt isr(void) {
 void main(void) {}
 "#,
     );
-    assert!(isr_compare.contains("cannot use `Greater` when it would lower through a runtime helper"));
+    assert!(
+        isr_compare.contains("cannot use `Greater` when it would lower through a runtime helper")
+    );
 
     let negative_unsigned = compile_error(
         "pic16f877a",
@@ -6251,6 +6258,175 @@ fn phase29_float_examples_compile_via_picc() {
         "examples/pic16f877a/float_long_casts.c",
         "examples/pic16f877a/float_threshold_control.c",
         "examples/pic16f877a/float_loop_compare.c",
+    ] {
+        let output = compile_example_via_picc_cli_with_extra_args(
+            "pic16f877a",
+            example,
+            &["--size", "--verify-hex"],
+        );
+        assert_hex_is_programmable(&output);
+    }
+}
+
+#[test]
+/// Verifies Phase 30 ROM float tables emit little-endian f32 bytes and resource metadata.
+fn phase30_rom_float_tables_emit_and_report() {
+    let input = temp_file("phase30-rom-float-report.c");
+    fs::write(
+        &input,
+        r#"
+const __rom float calibration[] = { 1.0f, 1.5f, 2.0f };
+float value;
+
+void main(void) {
+    value = calibration[1];
+}
+"#,
+    )
+    .expect("fixture");
+    let output = temp_file("phase30-rom-float-report.hex");
+    let memory_report = temp_file("phase30-rom-float-report.mem");
+    execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: "pic16f877a".to_string(),
+            input,
+            output: output.clone(),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O2,
+            artifacts: OutputArtifacts {
+                map: true,
+                list_file: true,
+                memory_report: true,
+                memory_report_file: Some(memory_report.clone()),
+                ..OutputArtifacts::default()
+            },
+            verbose: false,
+            opt_report: false,
+            stack_check: false,
+            stack_report: false,
+            stack_report_file: None,
+            warning_profile: WarningProfile::default(),
+        }),
+    })
+    .expect("compile phase30 ROM float report");
+
+    let map = fs::read_to_string(output.with_extension("map")).expect("map");
+    let lst = fs::read_to_string(output.with_extension("lst")).expect("listing");
+    let memory = fs::read_to_string(memory_report).expect("memory report");
+    let rom_addr = map_symbol_address(&map, "calibration [rom, const").expect("rom symbol");
+    let hex = read_hex_bytes(&output);
+
+    assert!(map.contains("calibration [rom, const, 3 element(s), 12 byte(s)]"));
+    assert!(lst.contains("ROM calibration [rom, const"));
+    assert!(memory.contains("calibration [rom, const"));
+    assert!(memory.contains("ROM RETLW table"));
+    assert!(map.contains("ROM table words"));
+    assert_eq!(hex.get(&(rom_addr * 2 + 2)).copied(), Some(0x00));
+    assert_eq!(hex.get(&(rom_addr * 2 + 3)).copied(), Some(0x34));
+    assert_eq!(hex.get(&(rom_addr * 2 + 4)).copied(), Some(0x00));
+    assert_eq!(hex.get(&(rom_addr * 2 + 5)).copied(), Some(0x34));
+    assert_eq!(hex.get(&(rom_addr * 2 + 6)).copied(), Some(0x80));
+    assert_eq!(hex.get(&(rom_addr * 2 + 7)).copied(), Some(0x34));
+    assert_eq!(hex.get(&(rom_addr * 2 + 8)).copied(), Some(0x3F));
+    assert_eq!(hex.get(&(rom_addr * 2 + 9)).copied(), Some(0x34));
+}
+
+#[test]
+/// Verifies Phase 30 keeps unsupported ROM float forms explicit.
+fn phase30_rom_float_diagnostics() {
+    let nonconst = compile_error(
+        "pic16f877a",
+        "phase30-rom-float-nonconst.c",
+        r#"
+__rom float table[] = { 1.0f };
+void main(void) {}
+"#,
+    );
+    assert!(nonconst.contains("program-memory object `table` must be declared `const`"));
+
+    let local = compile_error(
+        "pic16f877a",
+        "phase30-rom-float-local.c",
+        r#"
+void main(void) {
+    const __rom float table[] = { 1.0f };
+}
+"#,
+    );
+    assert!(local.contains("local `table` cannot use `__rom` storage"));
+
+    let pointer_mix = compile_error(
+        "pic16f877a",
+        "phase30-rom-float-pointer.c",
+        r#"
+const __rom float table[] = { 1.0f };
+float *p;
+void main(void) {
+    p = table;
+}
+"#,
+    );
+    assert!(pointer_mix.contains("program-memory arrays do not decay to data-space pointers"));
+
+    let address = compile_error(
+        "pic16f877a",
+        "phase30-rom-float-address.c",
+        r#"
+const __rom float table[] = { 1.0f };
+float *p;
+void main(void) {
+    p = &table[0];
+}
+"#,
+    );
+    assert!(
+        address.contains("taking the address of a program-memory array element is not supported")
+    );
+
+    let write = compile_error(
+        "pic16f877a",
+        "phase30-rom-float-write.c",
+        r#"
+const __rom float table[] = { 1.0f };
+void main(void) {
+    table[0] = 2.0f;
+}
+"#,
+    );
+    assert!(write.contains("writing to a program-memory array element is not allowed"));
+}
+
+#[test]
+/// Verifies dynamic ROM float reads remain rejected inside interrupt handlers.
+fn phase30_rejects_dynamic_rom_float_read_in_isr() {
+    let error = compile_error(
+        "pic16f877a",
+        "phase30-rom-float-isr.c",
+        r#"
+const __rom float table[] = { 1.0f, 2.0f };
+unsigned char index;
+float value;
+
+void __interrupt isr(void) {
+    value = table[index];
+}
+
+void main(void) {}
+"#,
+    );
+
+    assert!(error.contains("cannot perform dynamic ROM reads"));
+}
+
+#[test]
+/// Verifies checked-in Phase 30 ROM float examples compile cleanly on PIC16F877A.
+fn phase30_float_rom_examples_compile_via_picc() {
+    for example in [
+        "examples/pic16f877a/float_rom_table.c",
+        "examples/pic16f877a/float_calibration_table.c",
+        "examples/pic16f877a/float_rom_threshold.c",
+        "examples/pic16f877a/float_static_init.c",
     ] {
         let output = compile_example_via_picc_cli_with_extra_args(
             "pic16f877a",

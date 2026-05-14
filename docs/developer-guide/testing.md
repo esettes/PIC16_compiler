@@ -100,12 +100,12 @@ Use execution tests when output shape is not enough to prove behavior, especiall
 
 - arithmetic helpers
 - fixed-point scaling and helper-backed Q8.8 arithmetic
-- finite float literals, float helper paths, Phase 28/29 dynamic cast paths, dynamic float comparisons, and float ABI behavior
+- finite float literals, float helper paths, Phase 28/29 dynamic cast paths, dynamic float comparisons, Phase 30 ROM float reads, and float ABI behavior
 - stack-first calls and nested calls
 - pointer dereference and `FSR/INDF`
 - function-pointer dispatch
 - aggregate layout and access
-- ROM table reads
+- ROM table reads, including integer, fixed-point, and float payloads
 
 ## Adding a New Execution Test
 

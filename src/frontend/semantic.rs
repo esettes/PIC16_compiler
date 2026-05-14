@@ -1108,7 +1108,7 @@ impl<'a> SemanticAnalyzer<'a> {
                     Some(expr.span),
                     "program-memory arrays do not decay to data-space pointers in phase 14",
                     Some(
-                        "read ROM arrays with `table[index]`, `__rom_read8()`, or `__rom_read16()`"
+                        "read ROM arrays with direct `table[index]` syntax or the integer ROM read builtins"
                             .to_string(),
                     ),
                 );
@@ -2608,7 +2608,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 span,
                 value_category: ValueCategory::RValue,
             }),
-            ScalarType::Q16_16 | ScalarType::UQ16_16 => Some(TypedExpr {
+            ScalarType::Q16_16 | ScalarType::UQ16_16 | ScalarType::F32 => Some(TypedExpr {
                 kind: TypedExprKind::RomRead32 {
                     symbol,
                     index: Box::new(index),
@@ -2625,18 +2625,6 @@ impl<'a> SemanticAnalyzer<'a> {
                         "direct ROM indexing does not support 32-bit ROM element type `{element_ty}` in phase 21"
                     ),
                     Some("keep 32-bit objects in data memory; ROM long tables are deferred".to_string()),
-                );
-                None
-            }
-            ScalarType::F32 => {
-                diagnostics.error(
-                    "semantic",
-                    Some(base.span),
-                    "direct ROM indexing does not support float ROM elements in phase 27",
-                    Some(
-                        "keep float values in data memory; ROM float tables are deferred"
-                            .to_string(),
-                    ),
                 );
                 None
             }
@@ -5503,8 +5491,7 @@ impl<'a> SemanticAnalyzer<'a> {
             return;
         }
         if target_ty.scalar == ScalarType::I32
-            && (float_value.trunc() < i32::MIN as f32
-                || float_value.trunc() > i32::MAX as f32)
+            && (float_value.trunc() < i32::MIN as f32 || float_value.trunc() > i32::MAX as f32)
         {
             diagnostics.error(
                 "semantic",
@@ -5520,7 +5507,10 @@ impl<'a> SemanticAnalyzer<'a> {
                 "semantic",
                 Some(span),
                 "constant float-to-unsigned-long cast is out of range",
-                Some("negative float constants cannot be cast to unsigned long in phase 29".to_string()),
+                Some(
+                    "negative float constants cannot be cast to unsigned long in phase 29"
+                        .to_string(),
+                ),
             );
         }
     }
@@ -6129,7 +6119,7 @@ impl<'a> SemanticAnalyzer<'a> {
                     Some(span),
                     format!("program-memory object `{name}` uses unsupported type `{ty}`"),
                     Some(
-                        "phase 23 supports one-dimensional ROM arrays of 8-bit/16-bit integers or fixed-point calibration values"
+                        "phase 30 supports one-dimensional ROM arrays of 8-bit/16-bit integers, fixed-point values, or float calibration values"
                             .to_string(),
                     ),
                 );
@@ -6155,6 +6145,7 @@ impl<'a> SemanticAnalyzer<'a> {
                     | ScalarType::UQ8_8
                     | ScalarType::Q16_16
                     | ScalarType::UQ16_16
+                    | ScalarType::F32
             ) || element_ty.pointer_depth != 0
                 || element_ty.is_array()
                 || element_ty.struct_id.is_some()
@@ -6164,7 +6155,7 @@ impl<'a> SemanticAnalyzer<'a> {
                     Some(span),
                     format!("program-memory object `{name}` uses unsupported ROM element type `{element_ty}`"),
                     Some(
-                        "use integer ROM arrays or fixed ROM arrays such as `const __rom __fixed8_8 table[]`"
+                        "use integer, fixed, or float ROM arrays such as `const __rom float table[]`"
                             .to_string(),
                     ),
                 );

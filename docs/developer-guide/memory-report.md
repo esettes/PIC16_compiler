@@ -36,6 +36,7 @@ picc --target pic16f877a -I include --memory-report-file build/app.mem -o build/
 - program sections
 - helper contribution with stack frame cost
 - float helper contribution when `__rt_f32_*` helpers are emitted
+- ROM float table contribution when `const __rom float[]` objects are emitted
 - largest program-memory contributors
 
 The report is deterministic so generated files can be diffed in CI.
@@ -69,7 +70,7 @@ Use `--verify-hex` with `--memory-report` when preparing a hardware build:
 picc --target pic16f628a -I include --size --memory-report --verify-hex -o build/app.hex app.c
 ```
 
-## Phase 27/28 Float Interaction
+## Phase 27-30 Float Interaction
 
 Float helpers are reported as `float helper`. Phase 28 cast helpers use the same category:
 
@@ -82,3 +83,5 @@ Float helpers are reported as `float helper`. Phase 28 cast helpers use the same
 - `__rt_f32_to_u32`
 
 Generic helpers are large; prefer `--size` before hardware builds and expect resource fitting to reject programs that pull several float helpers on small targets.
+
+Phase 30 ROM float tables are reported as `ROM RETLW table` contributions, not as helpers. A three-element table uses one entry word plus twelve `retlw` payload words. The map name includes tags such as `calibration [rom, const, 3 element(s), 12 byte(s)]`.

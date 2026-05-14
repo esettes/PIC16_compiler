@@ -11,9 +11,14 @@ Backend behavior:
 
 Deferred:
 
-- ROM float tables
-- dynamic float/integer conversion helpers
+- `double`
 - full IEEE NaN/Inf/subnormal handling
 - math library functions
+
+Later phases:
+
+- Phase 28 adds 16-bit/fixed dynamic conversion helpers.
+- Phase 29 adds dynamic comparisons and 32-bit integer conversion helpers.
+- Phase 30 adds ROM float tables through RETLW-backed raw f32 bytes.
 
 Resource fitting remains authoritative. If float helpers exceed a target, the compiler emits program-memory or stack diagnostics instead of writing invalid HEX.

@@ -37,3 +37,5 @@ Policy:
 - helper-backed comparisons are rejected inside ISRs
 
 Implementation note: the helper compares through the same finite Q16.16 work format used by the current float runtime. Values outside that practical embedded range are not full IEEE comparisons.
+
+Phase 30 ROM float reads produce ordinary raw f32 values. Comparing a ROM-read value is supported after the value is materialized like any other float; helper cost and ISR restrictions still apply.

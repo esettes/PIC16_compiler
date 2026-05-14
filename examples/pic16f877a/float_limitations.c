@@ -6,9 +6,9 @@ void main(void) {
     output = input * 2.0f;
 }
 
-/* Phase 28 limitations:
+/* Current float limitations:
  * - no double
  * - no math library
- * - no float ROM tables
- * - dynamic long/unsigned long <-> float casts are rejected
+ * - no full IEEE NaN/Inf/subnormal runtime model
+ * - no implicit mixed float/integer arithmetic
  */
