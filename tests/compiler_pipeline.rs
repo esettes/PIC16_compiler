@@ -257,6 +257,66 @@ fn compile_example_via_picc_cli_with_extra_args(
     out_hex
 }
 
+fn parse_program_words(output: &str) -> usize {
+    output
+        .lines()
+        .find_map(|line| line.strip_prefix("Program words: "))
+        .and_then(|rest| rest.split('/').next())
+        .and_then(|words| words.trim().parse::<usize>().ok())
+        .expect("program words in size output")
+}
+
+fn compile_profile_size_report(
+    profile: &str,
+    input: &str,
+    name: &str,
+    extra_args: &[&str],
+) -> (PathBuf, String, String) {
+    let out_dir = temp_dir_path(name);
+    fs::create_dir_all(&out_dir).expect("out dir");
+    let out_hex = out_dir.join(format!("{profile}.hex"));
+    let memory_report = out_dir.join(format!("{profile}.mem"));
+    let mut command = Command::new(picc_bin());
+    command.current_dir(repo("."));
+    command.args([
+        "--target",
+        "pic16f877a",
+        "-Wall",
+        "-Wextra",
+        "-O2",
+        "-I",
+        "include",
+        "--runtime-profile",
+        profile,
+        "--size",
+        "--memory-report",
+        "--memory-report-file",
+    ]);
+    command.arg(&memory_report);
+    command.args(["--map", "--list-file"]);
+    command.args(extra_args);
+    let output = command
+        .arg("-o")
+        .arg(&out_hex)
+        .arg(input)
+        .output()
+        .expect("run picc profile report");
+
+    if !output.status.success() {
+        panic!(
+            "picc profile {profile} failed for {input}: stdout={:?} stderr={:?}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    (
+        out_hex,
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        fs::read_to_string(memory_report).expect("memory report"),
+    )
+}
+
 /// Returns a strict warning profile equivalent to `-Wall -Wextra -Werror`.
 fn strict_warnings() -> WarningProfile {
     WarningProfile {

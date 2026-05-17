@@ -1848,21 +1848,21 @@ fn executes_phase34_small_profile_u32_divmod_wrappers() {
         r#"
 unsigned long a;
 unsigned long b;
-unsigned long q;
-unsigned long r;
+unsigned long phase34_uquotient_result;
+unsigned long phase34_uremainder_result;
 
 void main(void) {
     a = 100000UL;
     b = 300UL;
-    q = a / b;
-    r = a % b;
+    phase34_uquotient_result = a / b;
+    phase34_uremainder_result = a % b;
 }
 "#,
         RuntimeProfile::Small,
     );
 
-    assert_eq!(symbol_u32(&core, &map, "q"), 333);
-    assert_eq!(symbol_u32(&core, &map, "r"), 100);
+    assert_eq!(symbol_u32(&core, &map, "phase34_uquotient_result"), 333);
+    assert_eq!(symbol_u32(&core, &map, "phase34_uremainder_result"), 100);
     assert!(map.contains("__rt_u32_divmod_core"));
 }
 
@@ -1874,21 +1874,27 @@ fn executes_phase34_small_profile_i32_divmod_wrappers() {
         r#"
 long a;
 long b;
-long q;
-long r;
+long phase34_iquotient_result;
+long phase34_iremainder_result;
 
 void main(void) {
     a = -100000L;
     b = 300L;
-    q = a / b;
-    r = a % b;
+    phase34_iquotient_result = a / b;
+    phase34_iremainder_result = a % b;
 }
 "#,
         RuntimeProfile::Small,
     );
 
-    assert_eq!(symbol_u32(&core, &map, "q"), 0xFFFF_FEB3);
-    assert_eq!(symbol_u32(&core, &map, "r"), 0xFFFF_FF9C);
+    assert_eq!(
+        symbol_u32(&core, &map, "phase34_iquotient_result"),
+        0xFFFF_FEB3
+    );
+    assert_eq!(
+        symbol_u32(&core, &map, "phase34_iremainder_result"),
+        0xFFFF_FF9C
+    );
     assert!(map.contains("__rt_u32_divmod_core"));
 }
 
