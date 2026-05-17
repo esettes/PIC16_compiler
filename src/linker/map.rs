@@ -47,6 +47,48 @@ pub fn render_map(map: &MapFile) -> String {
     );
     render_grouped(
         &mut output,
+        "    integer",
+        true,
+        &map.code_symbols,
+        |name| is_integer_helper(name),
+    );
+    render_grouped(
+        &mut output,
+        "    division",
+        true,
+        &map.code_symbols,
+        |name| is_division_helper(name),
+    );
+    render_grouped(
+        &mut output,
+        "    fixed",
+        true,
+        &map.code_symbols,
+        |name| is_fixed_helper(name),
+    );
+    render_grouped(
+        &mut output,
+        "    float",
+        true,
+        &map.code_symbols,
+        |name| is_float_helper(name),
+    );
+    render_grouped(
+        &mut output,
+        "    conversion",
+        true,
+        &map.code_symbols,
+        |name| is_conversion_helper(name),
+    );
+    render_grouped(
+        &mut output,
+        "    shift",
+        true,
+        &map.code_symbols,
+        |name| is_shift_helper(name),
+    );
+    render_grouped(
+        &mut output,
         "  Internal / Vectors",
         true,
         &map.code_symbols,
@@ -136,5 +178,33 @@ fn render_grouped<F>(
 /// Returns the PIC16 program-control page selected by PCLATH<4:3>.
 const fn control_page(addr: u16) -> u8 {
     ((addr >> 11) & 0x03) as u8
+}
+
+fn is_fixed_helper(name: &str) -> bool {
+    !is_conversion_helper(name)
+        && (name.contains("_q8_8")
+            || name.contains("_uq8_8")
+            || name.contains("_q16_16")
+            || name.contains("_uq16_16"))
+}
+
+fn is_float_helper(name: &str) -> bool {
+    name.starts_with("__rt_f32_") && !is_conversion_helper(name)
+}
+
+fn is_conversion_helper(name: &str) -> bool {
+    name.contains("_to_f32") || name.contains("__rt_f32_to_")
+}
+
+fn is_shift_helper(name: &str) -> bool {
+    name.starts_with("__rt_shl") || name.starts_with("__rt_shr")
+}
+
+fn is_division_helper(name: &str) -> bool {
+    name.starts_with("__rt_div") || name.starts_with("__rt_mod")
+}
+
+fn is_integer_helper(name: &str) -> bool {
+    name.starts_with("__rt_mul_") && !is_fixed_helper(name)
 }
 // SPDX-License-Identifier: GPL-3.0-or-later
