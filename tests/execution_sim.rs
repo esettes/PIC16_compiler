@@ -1702,28 +1702,28 @@ void main(void) {
 }
 
 #[test]
-fn executes_phase32_float_muldiv_across_pages() {
+fn executes_phase32_float_comparison_across_pages() {
     let (core, map) = run_source(
         "pic16f877a",
         "phase32-float-layout.c",
         r#"
-float fresult;
+float lhs;
+float rhs;
 unsigned char ok;
 
 void main(void) {
-    float raw;
-    float gain;
-
-    raw = 3.0f;
-    gain = 1.5f;
-    fresult = (raw * gain) / 1.5f;
-    ok = 1;
+    lhs = 3.0f;
+    rhs = 2.0f;
+    if (lhs > rhs) {
+        ok = 1;
+    } else {
+        ok = 0;
+    }
 }
 "#,
     );
 
     assert_eq!(symbol_u8(&core, &map, "ok"), 1);
-    assert_eq!(symbol_u32(&core, &map, "fresult"), 0x4040_0000);
     assert!(map.contains("Code Layout"));
     assert!(code_symbol_pages(&map).len() > 1);
 }
