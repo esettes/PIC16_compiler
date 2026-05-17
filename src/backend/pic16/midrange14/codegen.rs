@@ -8,7 +8,7 @@ use crate::common::integer::{
     compare_rel, eval_binary, eval_unary, high_byte, low_byte, normalize_value, signed_value,
     value_byte,
 };
-use crate::diagnostics::DiagnosticBag;
+use crate::diagnostics::{Diagnostic, DiagnosticBag, Severity};
 use crate::frontend::ast::{BinaryOp, UnaryOp};
 use crate::frontend::semantic::{
     FunctionPointerDispatchGroup, Symbol, SymbolId, SymbolKind, TypedExpr, TypedExprKind,
@@ -20,7 +20,10 @@ use crate::linker::map::MapFile;
 
 use super::asm::{AsmInstr, AsmLine, AsmProgram, Dest, PeepholeStats};
 use super::encoder::{LinkerRelaxationStats, encode_program, relax_page_setup};
-use super::runtime::{RuntimeHelper, RuntimeHelperInfo, binary_helper};
+use super::runtime::{
+    RuntimeHelper, RuntimeHelperCategory, RuntimeHelperInfo, RuntimeProfile, binary_helper,
+    runtime_helper_by_label, validate_helper_dependency_graph,
+};
 
 const STATUS_ADDR: u16 = 0x03;
 const STATUS_C_BIT: u8 = 0;
@@ -52,6 +55,7 @@ pub struct BackendOptimizationReport {
 pub struct BackendOptions {
     pub stack_check: bool,
     pub enforce_resource_limits: bool,
+    pub runtime_profile: RuntimeProfile,
 }
 
 #[derive(Clone, Debug)]
@@ -85,6 +89,14 @@ pub struct ResourceSummary {
     pub estimated_max_stack: u16,
     pub rom_table_words: u16,
     pub helpers_included: u16,
+    pub runtime_helper_words: u16,
+    pub integer_helper_words: u16,
+    pub fixed_helper_words: u16,
+    pub float_helper_words: u16,
+    pub conversion_helper_words: u16,
+    pub shift_helper_words: u16,
+    pub division_helper_words: u16,
+    pub dispatcher_words: u16,
     pub function_pointer_dispatchers: u16,
     pub unknown_function_pointer_target_sets: u16,
     pub page_setup_removed: u16,

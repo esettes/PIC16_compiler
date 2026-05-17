@@ -3,6 +3,24 @@
 use crate::frontend::ast::BinaryOp;
 use crate::frontend::types::{ScalarType, Type};
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RuntimeProfile {
+    Small,
+    #[default]
+    Balanced,
+    Fast,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum RuntimeHelperCategory {
+    Integer,
+    Fixed,
+    Float,
+    Conversion,
+    Shift,
+    Division,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum RuntimeHelper {
     MulU8,
@@ -60,6 +78,21 @@ pub struct RuntimeHelperInfo {
     pub arg_bytes: u16,
     pub local_bytes: u16,
     pub frame_bytes: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeHelperCatalogEntry {
+    pub helper: RuntimeHelper,
+    pub label: &'static str,
+    pub category: RuntimeHelperCategory,
+    pub required_by: &'static str,
+    pub arg_bytes: u16,
+    pub local_bytes: u16,
+    pub frame_bytes: u16,
+    pub estimated_words: u16,
+    pub dependencies: &'static [RuntimeHelper],
+    pub page_sensitive: bool,
+    pub target_constraints: &'static str,
 }
 
 impl RuntimeHelper {
@@ -441,6 +474,140 @@ impl RuntimeHelper {
 
     pub const fn label(self) -> &'static str {
         self.info().label
+    }
+
+    pub const fn category(self) -> RuntimeHelperCategory {
+        match self {
+            Self::MulQ8_8
+            | Self::MulUQ8_8
+            | Self::MulQ16_16
+            | Self::MulUQ16_16
+            | Self::DivQ8_8
+            | Self::DivUQ8_8
+            | Self::DivQ16_16
+            | Self::DivUQ16_16 => RuntimeHelperCategory::Fixed,
+            Self::F32Add | Self::F32Sub | Self::F32Mul | Self::F32Div | Self::F32Cmp => {
+                RuntimeHelperCategory::Float
+            }
+            Self::F32ToQ16
+            | Self::Q16ToF32
+            | Self::I32ToF32
+            | Self::U32ToF32
+            | Self::F32ToI32
+            | Self::F32ToU32 => RuntimeHelperCategory::Conversion,
+            Self::Shl8
+            | Self::Shl16
+            | Self::Shl32
+            | Self::ShrU8
+            | Self::ShrI8
+            | Self::ShrU16
+            | Self::ShrI16
+            | Self::ShrU32
+            | Self::ShrI32 => RuntimeHelperCategory::Shift,
+            Self::DivU8
+            | Self::DivI8
+            | Self::DivU16
+            | Self::DivI16
+            | Self::DivU32
+            | Self::DivI32
+            | Self::ModU8
+            | Self::ModI8
+            | Self::ModU16
+            | Self::ModI16
+            | Self::ModU32
+            | Self::ModI32 => RuntimeHelperCategory::Division,
+            _ => RuntimeHelperCategory::Integer,
+        }
+    }
+
+    pub const fn required_by(self) -> &'static str {
+        match self.category() {
+            RuntimeHelperCategory::Integer => "integer arithmetic",
+            RuntimeHelperCategory::Fixed => "fixed-point arithmetic",
+            RuntimeHelperCategory::Float => "finite f32 arithmetic/comparison",
+            RuntimeHelperCategory::Conversion => "numeric conversion",
+            RuntimeHelperCategory::Shift => "dynamic shift",
+            RuntimeHelperCategory::Division => "integer division/modulo",
+        }
+    }
+
+    pub const fn dependencies(self) -> &'static [RuntimeHelper] {
+        &[]
+    }
+
+    pub const fn estimated_words(self) -> u16 {
+        let info = self.info();
+        info.arg_bytes + info.local_bytes + info.frame_bytes + 24
+    }
+
+    pub const fn page_sensitive(self) -> bool {
+        true
+    }
+
+    pub const fn target_constraints(self) -> &'static str {
+        match self.category() {
+            RuntimeHelperCategory::Float => "large on PIC16F628A; prefer PIC16F877A or fixed-point",
+            RuntimeHelperCategory::Fixed => "Q16.16 helpers may be large on small targets",
+            _ => "normal program-memory and stack limits",
+        }
+    }
+
+    pub const fn catalog_entry(self) -> RuntimeHelperCatalogEntry {
+        let info = self.info();
+        RuntimeHelperCatalogEntry {
+            helper: self,
+            label: info.label,
+            category: self.category(),
+            required_by: self.required_by(),
+            arg_bytes: info.arg_bytes,
+            local_bytes: info.local_bytes,
+            frame_bytes: info.frame_bytes,
+            estimated_words: self.estimated_words(),
+            dependencies: self.dependencies(),
+            page_sensitive: self.page_sensitive(),
+            target_constraints: self.target_constraints(),
+        }
+    }
+}
+
+pub fn runtime_helper_by_label(label: &str) -> Option<RuntimeHelper> {
+    RuntimeHelper::ALL
+        .iter()
+        .copied()
+        .find(|helper| helper.label() == label)
+}
+
+pub fn validate_helper_dependency_graph(helpers: &[RuntimeHelper]) -> Result<(), String> {
+    for helper in helpers {
+        for dependency in helper.dependencies() {
+            if !RuntimeHelper::ALL.contains(dependency) {
+                return Err(format!(
+                    "unknown runtime helper dependency `{}` required by `{}`",
+                    dependency.label(),
+                    helper.label()
+                ));
+            }
+            if dependency == helper {
+                return Err(format!(
+                    "runtime helper dependency cycle at `{}`",
+                    helper.label()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+impl RuntimeHelperCategory {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Integer => "integer",
+            Self::Fixed => "fixed",
+            Self::Float => "float",
+            Self::Conversion => "conversion",
+            Self::Shift => "shift",
+            Self::Division => "division",
+        }
     }
 }
 
