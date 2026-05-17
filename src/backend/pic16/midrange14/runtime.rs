@@ -545,12 +545,14 @@ impl RuntimeHelper {
         &[]
     }
 
-    pub const fn dependencies_for_profile(self, profile: RuntimeProfile) -> &'static [RuntimeHelper] {
+    pub const fn dependencies_for_profile(
+        self,
+        profile: RuntimeProfile,
+    ) -> &'static [RuntimeHelper] {
         match (profile, self) {
-            (
-                RuntimeProfile::Small,
-                Self::DivU32 | Self::ModU32 | Self::DivI32 | Self::ModI32,
-            ) => &[Self::U32DivModCore],
+            (RuntimeProfile::Small, Self::DivU32 | Self::ModU32 | Self::DivI32 | Self::ModI32) => {
+                &[Self::U32DivModCore]
+            }
             _ => self.dependencies(),
         }
     }
@@ -630,6 +632,16 @@ impl RuntimeHelperCategory {
             Self::Conversion => "conversion",
             Self::Shift => "shift",
             Self::Division => "division",
+        }
+    }
+}
+
+impl RuntimeProfile {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Small => "small",
+            Self::Balanced => "balanced",
+            Self::Fast => "fast",
         }
     }
 }

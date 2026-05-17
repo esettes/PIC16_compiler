@@ -101,6 +101,7 @@ pub struct ResourceSummary {
     pub unknown_function_pointer_target_sets: u16,
     pub page_setup_removed: u16,
     pub page_relaxation_passes: u16,
+    pub runtime_profile: RuntimeProfile,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -383,6 +384,7 @@ pub fn compile_program(
         &encoded.labels,
         &stack_report.summary,
         optimization.relaxation,
+        options.runtime_profile,
     );
     validate_resource_fit(
         target,
@@ -3878,8 +3880,20 @@ impl<'a> CodegenContext<'a> {
 
     /// Emits every internal arithmetic helper that codegen marked as used.
     fn emit_runtime_helpers(&mut self, diagnostics: &mut DiagnosticBag) {
-        let helpers = self.used_helpers.iter().copied().collect::<Vec<_>>();
-        if let Err(message) = validate_helper_dependency_graph(&helpers) {
+        let mut helpers = self.used_helpers.clone();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for helper in helpers.clone() {
+                for dependency in helper.dependencies_for_profile(self.options.runtime_profile) {
+                    changed |= helpers.insert(*dependency);
+                }
+            }
+        }
+        let helpers = helpers.into_iter().collect::<Vec<_>>();
+        if let Err(message) =
+            validate_helper_dependency_graph(&helpers, self.options.runtime_profile)
+        {
             diagnostics.error("backend", None, message, None);
             return;
         }
@@ -4234,6 +4248,33 @@ impl<'a> CodegenContext<'a> {
                     ty,
                     local_base,
                     matches!(helper, RuntimeHelper::DivQ16_16),
+                );
+            }
+            RuntimeHelper::U32DivModCore => {
+                self.emit_u32_divmod_core_helper(local_base);
+            }
+            RuntimeHelper::DivU32 | RuntimeHelper::ModU32
+                if self.options.runtime_profile == RuntimeProfile::Small =>
+            {
+                self.emit_u32_divmod_small_wrapper(
+                    helper,
+                    arg0_offset,
+                    arg1_offset,
+                    work_offset,
+                    flag_offset,
+                    false,
+                );
+            }
+            RuntimeHelper::DivI32 | RuntimeHelper::ModI32
+                if self.options.runtime_profile == RuntimeProfile::Small =>
+            {
+                self.emit_u32_divmod_small_wrapper(
+                    helper,
+                    arg0_offset,
+                    arg1_offset,
+                    work_offset,
+                    flag_offset,
+                    true,
                 );
             }
             RuntimeHelper::DivU8
@@ -5411,6 +5452,130 @@ impl<'a> CodegenContext<'a> {
         self.load_addr_to_w(self.layout.helpers.w_save);
     }
 
+    /// Emits the compact Phase 34 32-bit div/mod core used by the `small` profile.
+    fn emit_u32_divmod_core_helper(&mut self, local_base: u16) {
+        let ty = Type::new(ScalarType::U32);
+        let arg0_offset = 0u16;
+        let arg1_offset = 4u16;
+        let mode_offset = 8u16;
+        let remainder_offset = local_base;
+        let count_offset = remainder_offset + 4;
+        let core_label = self.unique_label("rt_u32_divmod_core");
+        let zero_label = self.unique_label("rt_u32_divmod_zero");
+        let finish_label = self.unique_label("rt_u32_divmod_finish");
+        let modulo_label = self.unique_label("rt_u32_divmod_mod");
+        let quotient_label = self.unique_label("rt_u32_divmod_quot");
+
+        self.clear_current_frame_slot(remainder_offset, ty);
+        self.emit_const_to_w(32);
+        self.store_w_to_current_frame_byte(count_offset);
+        self.emit_current_frame_nonzero_branch(arg1_offset, ty, &core_label, &zero_label);
+        self.program.push(AsmLine::Label(core_label));
+        self.emit_unsigned_divmod_core(
+            arg0_offset,
+            arg1_offset,
+            remainder_offset,
+            count_offset,
+            ty,
+            &finish_label,
+        );
+        self.program.push(AsmLine::Label(zero_label));
+        self.clear_current_frame_slot(arg0_offset, ty);
+        self.clear_current_frame_slot(remainder_offset, ty);
+        self.jump_to_label(&finish_label);
+        self.program.push(AsmLine::Label(finish_label));
+        self.emit_current_frame_nonzero_branch(
+            mode_offset,
+            Type::new(ScalarType::U8),
+            &modulo_label,
+            &quotient_label,
+        );
+        self.program.push(AsmLine::Label(quotient_label));
+        self.emit_return_current_frame_value(arg0_offset, ty);
+        let done_label = self.unique_label("rt_u32_divmod_done");
+        self.jump_to_label(&done_label);
+        self.program.push(AsmLine::Label(modulo_label));
+        self.emit_return_current_frame_value(remainder_offset, ty);
+        self.program.push(AsmLine::Label(done_label));
+    }
+
+    /// Emits compact Phase 34 wrappers that share `__rt_u32_divmod_core`.
+    fn emit_u32_divmod_small_wrapper(
+        &mut self,
+        helper: RuntimeHelper,
+        arg0_offset: u16,
+        arg1_offset: u16,
+        result_offset: u16,
+        flag_offset: u16,
+        signed: bool,
+    ) {
+        let ty = Type::new(ScalarType::U32);
+        if signed {
+            self.clear_current_frame_slot(flag_offset, Type::new(ScalarType::U8));
+            self.emit_runtime_set_flag_if_signed(arg0_offset, ty, flag_offset, 0x02);
+            self.emit_runtime_negate_if_signed(arg0_offset, ty, flag_offset, 0x01);
+            self.emit_runtime_negate_if_signed(arg1_offset, ty, flag_offset, 0x01);
+        }
+
+        let mode = u8::from(matches!(
+            helper,
+            RuntimeHelper::ModU32 | RuntimeHelper::ModI32
+        ));
+        self.emit_call_u32_divmod_core(arg0_offset, arg1_offset, mode, result_offset);
+
+        if signed {
+            let negate_label = self.unique_label("rt_u32_divmod_wrap_neg");
+            let done_label = self.unique_label("rt_u32_divmod_wrap_done");
+            let flag_bit = if matches!(helper, RuntimeHelper::DivI32) {
+                0
+            } else {
+                1
+            };
+            self.branch_on_current_frame_bit(flag_offset, flag_bit, &negate_label, &done_label);
+            self.program.push(AsmLine::Label(negate_label));
+            self.negate_current_frame_value(result_offset, ty);
+            self.program.push(AsmLine::Label(done_label));
+        }
+
+        self.emit_return_current_frame_value(result_offset, ty);
+    }
+
+    /// Calls the compact unsigned 32-bit div/mod primitive from another helper.
+    fn emit_call_u32_divmod_core(
+        &mut self,
+        arg0_offset: u16,
+        arg1_offset: u16,
+        mode: u8,
+        result_offset: u16,
+    ) {
+        let core = RuntimeHelper::U32DivModCore;
+        let info = core.info();
+        self.emit_stack_growth_check(info.arg_bytes, "runtime helper __rt_u32_divmod_core args");
+        for byte in 0..4u16 {
+            self.load_current_frame_byte_to_w(arg0_offset + byte);
+            self.push_w();
+        }
+        for byte in 0..4u16 {
+            self.load_current_frame_byte_to_w(arg1_offset + byte);
+            self.push_w();
+        }
+        self.emit_const_to_w(mode);
+        self.push_w();
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage(info.label.to_string())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Call(info.label.to_string())));
+        self.restore_code_page_after_call();
+        self.store_w_to_addr(self.layout.helpers.w_save);
+        self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(info.arg_bytes));
+        self.load_addr_to_w(self.layout.helpers.w_save);
+        self.store_w_to_current_frame_byte(result_offset);
+        for byte in 1..4usize {
+            self.load_return_byte_to_w(byte);
+            self.store_w_to_current_frame_byte(result_offset + byte as u16);
+        }
+    }
+
     /// Emits unsigned shift-and-add multiplication into a local result slot.
     fn emit_unsigned_mul_core(
         &mut self,
@@ -5808,14 +5973,14 @@ fn compute_max_stack_depth_with_interrupts(
                     }
                     IrInstr::Binary { dst, op, .. } => {
                         if let Some(helper) = binary_helper(*op, function.temp_types[*dst]) {
-                            let info = helper.info();
-                            helper_depth = helper_depth.max(info.arg_bytes + info.frame_bytes);
+                            helper_depth = helper_depth
+                                .max(runtime_helper_stack_cost(helper, Default::default()));
                         }
                     }
                     IrInstr::Cast { kind, .. } => {
                         if let Some(helper) = runtime_helper_for_cast(*kind) {
-                            let info = helper.info();
-                            helper_depth = helper_depth.max(info.arg_bytes + info.frame_bytes);
+                            helper_depth = helper_depth
+                                .max(runtime_helper_stack_cost(helper, Default::default()));
                         }
                     }
                     _ => {}
@@ -5827,8 +5992,8 @@ fn compute_max_stack_depth_with_interrupts(
             } = &block.terminator
                 && let Some(helper) = runtime_helper_for_float_compare(*op, *ty)
             {
-                let info = helper.info();
-                helper_depth = helper_depth.max(info.arg_bytes + info.frame_bytes);
+                helper_depth =
+                    helper_depth.max(runtime_helper_stack_cost(helper, Default::default()));
             }
         }
         calls.insert(function.symbol, callees);
@@ -5917,14 +6082,14 @@ fn analyze_stack(
                     }
                     IrInstr::Binary { dst, op, .. } => {
                         if let Some(helper) = binary_helper(*op, function.temp_types[*dst]) {
-                            let info = helper.info();
-                            helper_depth = helper_depth.max(info.arg_bytes + info.frame_bytes);
+                            helper_depth = helper_depth
+                                .max(runtime_helper_stack_cost(helper, options.runtime_profile));
                         }
                     }
                     IrInstr::Cast { kind, .. } => {
                         if let Some(helper) = runtime_helper_for_cast(*kind) {
-                            let info = helper.info();
-                            helper_depth = helper_depth.max(info.arg_bytes + info.frame_bytes);
+                            helper_depth = helper_depth
+                                .max(runtime_helper_stack_cost(helper, options.runtime_profile));
                         }
                     }
                     _ => {}
@@ -5936,8 +6101,8 @@ fn analyze_stack(
             } = &block.terminator
                 && let Some(helper) = runtime_helper_for_float_compare(*op, *ty)
             {
-                let info = helper.info();
-                helper_depth = helper_depth.max(info.arg_bytes + info.frame_bytes);
+                helper_depth =
+                    helper_depth.max(runtime_helper_stack_cost(helper, options.runtime_profile));
             }
         }
         helper_depths.insert(function.symbol, helper_depth);
@@ -6135,6 +6300,19 @@ fn call_depth_for_function(
     depth
 }
 
+fn runtime_helper_stack_cost(helper: RuntimeHelper, profile: RuntimeProfile) -> u16 {
+    let info = helper.info();
+    let dependency_cost = helper
+        .dependencies_for_profile(profile)
+        .iter()
+        .map(|dependency| runtime_helper_stack_cost(*dependency, profile))
+        .max()
+        .unwrap_or(0);
+    info.arg_bytes
+        .saturating_add(info.frame_bytes)
+        .saturating_add(dependency_cost)
+}
+
 /// Builds deterministic target resource usage data for `--size`, maps, and reports.
 fn build_resource_report(
     target: &TargetDevice,
@@ -6144,6 +6322,7 @@ fn build_resource_report(
     labels: &BTreeMap<String, u16>,
     stack: &StackReportSummary,
     relaxation: LinkerRelaxationStats,
+    runtime_profile: RuntimeProfile,
 ) -> ResourceReport {
     let contributions =
         collect_resource_contributions(target, typed_program, layout, words, labels);
@@ -6238,6 +6417,7 @@ fn build_resource_report(
         page_setup_removed: u16::try_from(relaxation.removed_redundant_setpages)
             .unwrap_or(u16::MAX),
         page_relaxation_passes: u16::try_from(relaxation.passes).unwrap_or(u16::MAX),
+        runtime_profile,
     };
 
     ResourceReport {
@@ -6414,6 +6594,11 @@ fn render_size_summary(
     let _ = writeln!(output, "Target: {}", target.name.to_ascii_uppercase());
     let _ = writeln!(
         output,
+        "Runtime profile: {}",
+        summary.runtime_profile.as_str()
+    );
+    let _ = writeln!(
+        output,
         "Program words: {} / {}",
         summary.program_words_used, summary.program_words_available
     );
@@ -6488,6 +6673,11 @@ fn render_memory_report(
     let _ = writeln!(output, "Memory report");
     let _ = writeln!(output, "-------------");
     let _ = writeln!(output, "target: {}", target.name);
+    let _ = writeln!(
+        output,
+        "runtime profile: {}",
+        summary.runtime_profile.as_str()
+    );
     let _ = writeln!(
         output,
         "program range: 0x{:04X}..0x{:04X} ({} words)",
@@ -6608,11 +6798,11 @@ fn render_memory_report(
             let frame = helper.stack_frame.unwrap_or(0);
             if let Some(runtime_helper) = runtime_helper_by_label(&helper.name) {
                 let catalog = runtime_helper.catalog_entry();
-                let dependencies = if catalog.dependencies.is_empty() {
+                let dependencies = runtime_helper.dependencies_for_profile(summary.runtime_profile);
+                let dependencies = if dependencies.is_empty() {
                     "(none)".to_string()
                 } else {
-                    catalog
-                        .dependencies
+                    dependencies
                         .iter()
                         .map(|dependency| dependency.label())
                         .collect::<Vec<_>>()
@@ -6620,9 +6810,14 @@ fn render_memory_report(
                 };
                 let _ = writeln!(
                     output,
-                    "{}: category={} actual={} estimated={} args={} locals={} frame={} required_by={} deps={} constraints={}",
+                    "{}: category={} variant={} actual={} estimated={} args={} locals={} frame={} required_by={} deps={} constraints={}",
                     helper.name,
                     catalog.category.as_str(),
+                    if dependencies == "(none)" {
+                        "balanced"
+                    } else {
+                        summary.runtime_profile.as_str()
+                    },
                     helper.words,
                     catalog.estimated_words,
                     catalog.arg_bytes,
@@ -6648,7 +6843,7 @@ fn render_memory_report(
             .iter()
             .filter_map(|item| runtime_helper_by_label(&item.name))
         {
-            let dependencies = helper.dependencies();
+            let dependencies = helper.dependencies_for_profile(summary.runtime_profile);
             if dependencies.is_empty() {
                 let _ = writeln!(output, "{} -> (none)", helper.label());
             } else {
@@ -6689,6 +6884,7 @@ fn render_resource_map_lines(
 ) -> Vec<String> {
     let mut lines = vec![
         format!("Target: {}", target.name.to_ascii_uppercase()),
+        format!("Runtime profile: {}", summary.runtime_profile.as_str()),
         format!(
             "Program words: {} / {}",
             summary.program_words_used, summary.program_words_available
