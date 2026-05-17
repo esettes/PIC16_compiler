@@ -6186,10 +6186,29 @@ fn build_resource_report(
             )
         })
         .count();
+    let runtime_helper_words = contributions
+        .iter()
+        .filter(|item| is_runtime_helper_contribution(item))
+        .map(|item| item.words)
+        .sum::<u16>();
+    let integer_helper_words =
+        helper_words_by_category(&contributions, RuntimeHelperCategory::Integer);
+    let fixed_helper_words = helper_words_by_category(&contributions, RuntimeHelperCategory::Fixed);
+    let float_helper_words = helper_words_by_category(&contributions, RuntimeHelperCategory::Float);
+    let conversion_helper_words =
+        helper_words_by_category(&contributions, RuntimeHelperCategory::Conversion);
+    let shift_helper_words = helper_words_by_category(&contributions, RuntimeHelperCategory::Shift);
+    let division_helper_words =
+        helper_words_by_category(&contributions, RuntimeHelperCategory::Division);
     let function_pointer_dispatchers = contributions
         .iter()
         .filter(|item| item.kind == ResourceContributionKind::FunctionPointerDispatcher)
         .count();
+    let dispatcher_words = contributions
+        .iter()
+        .filter(|item| item.kind == ResourceContributionKind::FunctionPointerDispatcher)
+        .map(|item| item.words)
+        .sum::<u16>();
 
     let summary = ResourceSummary {
         program_words_used,
@@ -6205,6 +6224,14 @@ fn build_resource_report(
         estimated_max_stack: layout.max_stack_depth,
         rom_table_words,
         helpers_included: u16::try_from(helpers_included).unwrap_or(u16::MAX),
+        runtime_helper_words,
+        integer_helper_words,
+        fixed_helper_words,
+        float_helper_words,
+        conversion_helper_words,
+        shift_helper_words,
+        division_helper_words,
+        dispatcher_words,
         function_pointer_dispatchers: u16::try_from(function_pointer_dispatchers)
             .unwrap_or(u16::MAX),
         unknown_function_pointer_target_sets: stack.unknown_function_pointer_target_sets,
