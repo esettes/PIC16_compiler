@@ -875,7 +875,7 @@ impl<'a> CodegenContext<'a> {
             self.emit_function(function, diagnostics);
         }
         self.emit_function_pointer_dispatchers();
-        self.emit_runtime_helpers();
+        self.emit_runtime_helpers(diagnostics);
     }
 
     /// Applies backend-local optimization passes and returns a summary for reporting.
@@ -3877,11 +3877,15 @@ impl<'a> CodegenContext<'a> {
     }
 
     /// Emits every internal arithmetic helper that codegen marked as used.
-    fn emit_runtime_helpers(&mut self) {
+    fn emit_runtime_helpers(&mut self, diagnostics: &mut DiagnosticBag) {
         let helpers = self.used_helpers.iter().copied().collect::<Vec<_>>();
+        if let Err(message) = validate_helper_dependency_graph(&helpers) {
+            diagnostics.error("backend", None, message, None);
+            return;
+        }
         if !helpers.is_empty() {
             self.program.push(AsmLine::Comment(
-                "runtime helpers (Phase 7 optimized section)".to_string(),
+                "runtime helpers (Phase 33 catalog/pruned section)".to_string(),
             ));
         }
         for helper in helpers {
@@ -4091,11 +4095,17 @@ impl<'a> CodegenContext<'a> {
         let work_offset = local_base;
         let count_offset = work_offset + width;
         let flag_offset = count_offset + 1;
+        let catalog = helper.catalog_entry();
 
         self.program.push(AsmLine::Label(info.label.to_string()));
         self.program.push(AsmLine::Comment(format!(
-            "runtime helper {:?} args={} locals={} frame_bytes={}",
-            helper, info.arg_bytes, info.local_bytes, info.frame_bytes
+            "runtime helper: {} helper={} required_by={} args={} locals={} frame_bytes={}",
+            catalog.category.as_str(),
+            info.label,
+            catalog.required_by,
+            info.arg_bytes,
+            info.local_bytes,
+            info.frame_bytes
         )));
         self.current_bank = UNKNOWN_BANK;
         self.emit_runtime_prologue(info);
