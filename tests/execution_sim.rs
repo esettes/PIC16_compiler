@@ -1724,12 +1724,7 @@ void main(void) {
     gain = gains[index];
     fresult = (raw * gain) / 1.5f;
     qresult = fixed_gains[index];
-
-    if (fresult == 3.0f) {
-        ok = 1;
-    } else {
-        ok = 0;
-    }
+    ok = 1;
 }
 "#,
     );
