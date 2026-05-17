@@ -197,6 +197,7 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
             enforce_resource_limits: command.artifacts.size
                 || command.artifacts.memory_report
                 || command.artifacts.memory_report_file.is_some(),
+            runtime_profile: command.artifacts.runtime_profile,
         },
         &mut diagnostics,
     );

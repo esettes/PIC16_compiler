@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 
+use crate::backend::pic16::midrange14::runtime::RuntimeProfile;
 use crate::diagnostics::WarningProfile;
 
 pub const CLI_NAME: &str = "picc";
@@ -51,6 +52,7 @@ pub struct OutputArtifacts {
     pub verify_hex: bool,
     pub program: bool,
     pub program_cmd: Option<String>,
+    pub runtime_profile: RuntimeProfile,
 }
 
 #[derive(Clone, Debug)]
@@ -119,6 +121,12 @@ impl CliOptions {
                 "--verify-hex" => artifacts.verify_hex = true,
                 "--program" => artifacts.program = true,
                 "--print-program-command" => print_program_command = true,
+                "--runtime-profile" => {
+                    let value = iter
+                        .next()
+                        .ok_or_else(|| "--runtime-profile requires a value".to_string())?;
+                    artifacts.runtime_profile = parse_runtime_profile(&value)?;
+                }
                 "--verbose" => verbose = true,
                 "--opt-report" => opt_report = true,
                 "--stack-check" => stack_check = true,
@@ -288,6 +296,8 @@ pub fn help_text() -> &'static str {
         "  --program         Run external programmer command after successful compile\n",
         "  --program-cmd <cmd>\n",
         "                    External programmer command for --program/--print-program-command\n",
+        "  --runtime-profile <small|balanced|fast>\n",
+        "                    Select runtime helper cost policy (default: balanced)\n",
         "  --opt-report      Print optimization summary after a successful compile\n",
         "  --stack-check     Emit runtime software-stack overflow checks\n",
         "  --stack-report    Print stack usage summary after a successful compile\n",
@@ -295,6 +305,17 @@ pub fn help_text() -> &'static str {
         "                    Write detailed stack report to file\n",
         "  --verbose         Enable verbose build logs"
     )
+}
+
+fn parse_runtime_profile(raw: &str) -> Result<RuntimeProfile, String> {
+    match raw {
+        "small" => Ok(RuntimeProfile::Small),
+        "balanced" => Ok(RuntimeProfile::Balanced),
+        "fast" => Ok(RuntimeProfile::Fast),
+        _ => Err(format!(
+            "unsupported runtime profile `{raw}`; expected `small`, `balanced`, or `fast`"
+        )),
+    }
 }
 
 impl Display for OptimizationLevel {
