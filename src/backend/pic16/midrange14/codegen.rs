@@ -6964,36 +6964,15 @@ fn push_label_if_present(
 }
 
 fn runtime_helper_resource_kind(helper: RuntimeHelper) -> ResourceContributionKind {
-    match helper {
-        RuntimeHelper::MulQ8_8
-        | RuntimeHelper::MulUQ8_8
-        | RuntimeHelper::MulQ16_16
-        | RuntimeHelper::MulUQ16_16
-        | RuntimeHelper::DivQ8_8
-        | RuntimeHelper::DivUQ8_8
-        | RuntimeHelper::DivQ16_16
-        | RuntimeHelper::DivUQ16_16 => ResourceContributionKind::FixedPointHelper,
-        RuntimeHelper::F32Add
-        | RuntimeHelper::F32Sub
-        | RuntimeHelper::F32Mul
-        | RuntimeHelper::F32Div
-        | RuntimeHelper::F32Cmp
-        | RuntimeHelper::F32ToQ16
-        | RuntimeHelper::Q16ToF32
-        | RuntimeHelper::I32ToF32
-        | RuntimeHelper::U32ToF32
-        | RuntimeHelper::F32ToI32
-        | RuntimeHelper::F32ToU32 => ResourceContributionKind::FloatHelper,
-        RuntimeHelper::Shl8
-        | RuntimeHelper::Shl16
-        | RuntimeHelper::Shl32
-        | RuntimeHelper::ShrU8
-        | RuntimeHelper::ShrI8
-        | RuntimeHelper::ShrU16
-        | RuntimeHelper::ShrI16
-        | RuntimeHelper::ShrU32
-        | RuntimeHelper::ShrI32 => ResourceContributionKind::ShiftHelper,
-        _ => ResourceContributionKind::RuntimeHelper,
+    match helper.category() {
+        RuntimeHelperCategory::Fixed => ResourceContributionKind::FixedPointHelper,
+        RuntimeHelperCategory::Float | RuntimeHelperCategory::Conversion => {
+            ResourceContributionKind::FloatHelper
+        }
+        RuntimeHelperCategory::Shift => ResourceContributionKind::ShiftHelper,
+        RuntimeHelperCategory::Integer | RuntimeHelperCategory::Division => {
+            ResourceContributionKind::RuntimeHelper
+        }
     }
 }
 

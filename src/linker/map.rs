@@ -59,20 +59,12 @@ pub fn render_map(map: &MapFile) -> String {
         &map.code_symbols,
         |name| is_division_helper(name),
     );
-    render_grouped(
-        &mut output,
-        "    fixed",
-        true,
-        &map.code_symbols,
-        |name| is_fixed_helper(name),
-    );
-    render_grouped(
-        &mut output,
-        "    float",
-        true,
-        &map.code_symbols,
-        |name| is_float_helper(name),
-    );
+    render_grouped(&mut output, "    fixed", true, &map.code_symbols, |name| {
+        is_fixed_helper(name)
+    });
+    render_grouped(&mut output, "    float", true, &map.code_symbols, |name| {
+        is_float_helper(name)
+    });
     render_grouped(
         &mut output,
         "    conversion",
@@ -80,13 +72,9 @@ pub fn render_map(map: &MapFile) -> String {
         &map.code_symbols,
         |name| is_conversion_helper(name),
     );
-    render_grouped(
-        &mut output,
-        "    shift",
-        true,
-        &map.code_symbols,
-        |name| is_shift_helper(name),
-    );
+    render_grouped(&mut output, "    shift", true, &map.code_symbols, |name| {
+        is_shift_helper(name)
+    });
     render_grouped(
         &mut output,
         "  Internal / Vectors",
