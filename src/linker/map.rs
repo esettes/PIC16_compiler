@@ -50,31 +50,43 @@ pub fn render_map(map: &MapFile) -> String {
         "    integer",
         true,
         &map.code_symbols,
-        |name| is_integer_helper(name),
+        is_integer_helper,
     );
     render_grouped(
         &mut output,
         "    division",
         true,
         &map.code_symbols,
-        |name| is_division_helper(name),
+        is_division_helper,
     );
-    render_grouped(&mut output, "    fixed", true, &map.code_symbols, |name| {
-        is_fixed_helper(name)
-    });
-    render_grouped(&mut output, "    float", true, &map.code_symbols, |name| {
-        is_float_helper(name)
-    });
+    render_grouped(
+        &mut output,
+        "    fixed",
+        true,
+        &map.code_symbols,
+        is_fixed_helper,
+    );
+    render_grouped(
+        &mut output,
+        "    float",
+        true,
+        &map.code_symbols,
+        is_float_helper,
+    );
     render_grouped(
         &mut output,
         "    conversion",
         true,
         &map.code_symbols,
-        |name| is_conversion_helper(name),
+        is_conversion_helper,
     );
-    render_grouped(&mut output, "    shift", true, &map.code_symbols, |name| {
-        is_shift_helper(name)
-    });
+    render_grouped(
+        &mut output,
+        "    shift",
+        true,
+        &map.code_symbols,
+        is_shift_helper,
+    );
     render_grouped(
         &mut output,
         "  Internal / Vectors",
