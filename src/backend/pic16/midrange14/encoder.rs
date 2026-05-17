@@ -218,13 +218,11 @@ fn page_before_line(
     index: usize,
     diagnostics: &mut DiagnosticBag,
 ) -> Option<Option<u8>> {
-    let mut pc = 0u16;
-    let mut current_page = Some(control_page(pc));
+    let mut current_page = None;
 
     for line in program.lines.iter().take(index) {
         match line {
-            AsmLine::Org(addr) => {
-                pc = *addr;
+            AsmLine::Org(_) => {
                 current_page = None;
             }
             AsmLine::Label(_) => {
@@ -242,43 +240,29 @@ fn page_before_line(
                     return None;
                 };
                 current_page = Some(control_page(addr));
-                pc += line_word_len(line);
             }
-            AsmLine::Instr(instr) => {
-                match instr {
-                    AsmInstr::Call(label) => {
-                        let Some(addr) = labels.get(label).copied() else {
-                            diagnostics.error(
-                                "assembler",
-                                None,
-                                format!("undefined label `{label}`"),
-                                None,
-                            );
-                            return None;
-                        };
-                        current_page = Some(control_page(addr));
-                    }
-                    AsmInstr::Goto(_)
-                    | AsmInstr::Return
-                    | AsmInstr::Retfie
-                    | AsmInstr::Retlw(_) => {
-                        current_page = None;
-                    }
-                    _ => {}
+            AsmLine::Instr(instr) => match instr {
+                AsmInstr::Call(label) => {
+                    let Some(addr) = labels.get(label).copied() else {
+                        diagnostics.error(
+                            "assembler",
+                            None,
+                            format!("undefined label `{label}`"),
+                            None,
+                        );
+                        return None;
+                    };
+                    current_page = Some(control_page(addr));
                 }
-                pc += instr.word_len();
-            }
+                AsmInstr::Goto(_) | AsmInstr::Return | AsmInstr::Retfie | AsmInstr::Retlw(_) => {
+                    current_page = None;
+                }
+                _ => {}
+            },
         }
     }
 
     Some(current_page)
-}
-
-fn line_word_len(line: &AsmLine) -> u16 {
-    match line {
-        AsmLine::Instr(instr) => instr.word_len(),
-        _ => 0,
-    }
 }
 
 /// Collects final program-counter addresses for every declared assembly label.
