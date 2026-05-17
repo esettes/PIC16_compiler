@@ -5439,6 +5439,69 @@ void main(void) {
 }
 
 #[test]
+/// Verifies Phase 32 reports page layout and linker relaxation data.
+fn phase32_reports_page_layout_and_relaxation() {
+    let input = temp_file("phase32-layout-report.c");
+    fs::write(
+        &input,
+        r#"
+float a;
+float b;
+unsigned char result;
+
+void main(void) {
+    a = 3.0f;
+    b = 2.0f;
+    if (a > b) {
+        result = 1;
+    } else {
+        result = 0;
+    }
+}
+"#,
+    )
+    .expect("fixture");
+    let output = temp_file("phase32-layout-report.hex");
+    let memory_report = temp_file("phase32-layout-report.mem");
+    execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: "pic16f877a".to_string(),
+            input,
+            output: output.clone(),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O2,
+            artifacts: OutputArtifacts {
+                map: true,
+                list_file: true,
+                size: true,
+                memory_report: true,
+                memory_report_file: Some(memory_report.clone()),
+                ..OutputArtifacts::default()
+            },
+            verbose: false,
+            opt_report: false,
+            stack_check: false,
+            stack_report: false,
+            stack_report_file: None,
+            warning_profile: WarningProfile::default(),
+        }),
+    })
+    .expect("compile phase32 layout report");
+
+    let map = read_artifact(&output, "map");
+    let listing = read_artifact(&output, "lst");
+    let memory = fs::read_to_string(memory_report).expect("memory report");
+    assert!(map.contains("Code Layout"));
+    assert!(map.contains("page 0: used="));
+    assert!(map.contains("Page setup relaxation"));
+    assert!(listing.contains("page-safe control-flow target"));
+    assert!(memory.contains("Page layout"));
+    assert!(memory.contains("page setup relaxation"));
+    assert!(memory.contains("__rt_f32_cmp"));
+}
+
+#[test]
 /// Verifies `--size`, `--memory-report`, and `--memory-report-file` expose helper cost.
 fn phase25_resource_report_cli_outputs_helper_contribution() {
     let out_dir = temp_dir_path("phase25-memory-report");
