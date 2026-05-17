@@ -6358,6 +6358,53 @@ fn validate_resource_fit(
             )),
         );
     }
+
+    emit_runtime_budget_warning(target, report, options, diagnostics);
+}
+
+fn emit_runtime_budget_warning(
+    target: &TargetDevice,
+    report: &ResourceReport,
+    options: BackendOptions,
+    diagnostics: &mut DiagnosticBag,
+) {
+    if report.summary.runtime_helper_words == 0 {
+        return;
+    }
+    let percent = (u32::from(report.summary.runtime_helper_words) * 100)
+        / u32::from(report.summary.program_words_available.max(1));
+    let threshold = match options.runtime_profile {
+        RuntimeProfile::Small => 20,
+        RuntimeProfile::Balanced | RuntimeProfile::Fast => 30,
+    };
+    if percent < threshold {
+        return;
+    }
+    diagnostics.push(Diagnostic {
+        severity: if diagnostics.warning_profile.werror {
+            Severity::Error
+        } else {
+            Severity::Warning
+        },
+        stage: "backend",
+        message: format!(
+            "runtime helpers use {} words on {} ({}% of program memory)",
+            report.summary.runtime_helper_words, target.name, percent
+        ),
+        span: None,
+        note: Some(format!(
+            "top helper categories: float={} fixed={} conversion={} division={}",
+            report.summary.float_helper_words,
+            report.summary.fixed_helper_words,
+            report.summary.conversion_helper_words,
+            report.summary.division_helper_words
+        )),
+        suggestion: Some(
+            "inspect --memory-report; consider fixed-point, --runtime-profile small, or a larger target"
+                .to_string(),
+        ),
+        code: Some("runtime-helper-budget"),
+    });
 }
 
 fn render_size_summary(
