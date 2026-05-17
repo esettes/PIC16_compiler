@@ -405,7 +405,7 @@ const fn dest_bit(dest: Dest) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_instr, encode_program};
+    use super::{encode_instr, encode_program, relax_page_setup};
     use crate::backend::pic16::midrange14::asm::{AsmInstr, AsmLine, AsmProgram, Dest};
     use crate::diagnostics::DiagnosticBag;
 
@@ -499,6 +499,63 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.message.contains("unsafe cross-page call"))
         );
+    }
+
+    #[test]
+    /// Verifies linker relaxation removes same-page page setup before a goto.
+    fn relaxes_same_page_goto_setpage() {
+        let mut program = AsmProgram {
+            lines: vec![
+                AsmLine::Org(0x0000),
+                AsmLine::Label("from".to_string()),
+                AsmLine::Instr(AsmInstr::SetPage("target".to_string())),
+                AsmLine::Instr(AsmInstr::Goto("target".to_string())),
+                AsmLine::Label("target".to_string()),
+                AsmLine::Instr(AsmInstr::Nop),
+            ],
+        };
+        let mut diagnostics = DiagnosticBag::default();
+
+        let stats = relax_page_setup(&mut program, &mut diagnostics);
+
+        assert_eq!(stats.removed_redundant_setpages, 1);
+        assert!(
+            !program
+                .lines
+                .iter()
+                .any(|line| matches!(line, AsmLine::Instr(AsmInstr::SetPage(_))))
+        );
+        assert!(encode_program(&program, &mut diagnostics).is_some());
+        assert!(!diagnostics.has_errors());
+    }
+
+    #[test]
+    /// Verifies linker relaxation keeps cross-page page setup before a call.
+    fn keeps_cross_page_call_setpage() {
+        let mut program = AsmProgram {
+            lines: vec![
+                AsmLine::Org(0x0000),
+                AsmLine::Label("from".to_string()),
+                AsmLine::Instr(AsmInstr::SetPage("target".to_string())),
+                AsmLine::Instr(AsmInstr::Call("target".to_string())),
+                AsmLine::Org(0x0800),
+                AsmLine::Label("target".to_string()),
+                AsmLine::Instr(AsmInstr::Return),
+            ],
+        };
+        let mut diagnostics = DiagnosticBag::default();
+
+        let stats = relax_page_setup(&mut program, &mut diagnostics);
+
+        assert_eq!(stats.removed_redundant_setpages, 0);
+        assert!(
+            program
+                .lines
+                .iter()
+                .any(|line| matches!(line, AsmLine::Instr(AsmInstr::SetPage(_))))
+        );
+        assert!(encode_program(&program, &mut diagnostics).is_some());
+        assert!(!diagnostics.has_errors());
     }
 }
 // SPDX-License-Identifier: GPL-3.0-or-later

@@ -6586,10 +6586,7 @@ fn page_range(page: u8) -> (u16, u16) {
     (start, start + 0x07FF)
 }
 
-fn build_page_layout(
-    target: &TargetDevice,
-    words: &BTreeMap<u16, u16>,
-) -> [PageLayoutSummary; 4] {
+fn build_page_layout(target: &TargetDevice, words: &BTreeMap<u16, u16>) -> [PageLayoutSummary; 4] {
     let mut pages = [PageLayoutSummary::default(); 4];
     for page in 0u8..4 {
         let (start, end) = page_range(page);
@@ -6598,7 +6595,9 @@ fn build_page_layout(
             .count() as u16;
         let used = words
             .keys()
-            .filter(|addr| **addr >= start && **addr <= end && target.program_memory.contains(**addr))
+            .filter(|addr| {
+                **addr >= start && **addr <= end && target.program_memory.contains(**addr)
+            })
             .count() as u16;
         pages[usize::from(page)] = PageLayoutSummary {
             page,
