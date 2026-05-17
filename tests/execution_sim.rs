@@ -1702,10 +1702,37 @@ void main(void) {
 }
 
 #[test]
-fn executes_phase32_float_muldiv_and_rom_tables_across_pages() {
+fn executes_phase32_float_muldiv_across_pages() {
     let (core, map) = run_source(
         "pic16f877a",
-        "phase32-float-rom-layout.c",
+        "phase32-float-layout.c",
+        r#"
+float fresult;
+unsigned char ok;
+
+void main(void) {
+    float raw;
+    float gain;
+
+    raw = 3.0f;
+    gain = 1.5f;
+    fresult = (raw * gain) / 1.5f;
+    ok = 1;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u8(&core, &map, "ok"), 1);
+    assert_eq!(symbol_u32(&core, &map, "fresult"), 0x4040_0000);
+    assert!(map.contains("Code Layout"));
+    assert!(code_symbol_pages(&map).len() > 1);
+}
+
+#[test]
+fn executes_phase32_rom_float_and_fixed_tables_across_pages() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase32-rom-table-layout.c",
         r#"
 const __rom float gains[] = { 1.0f, 1.5f, 2.0f };
 const __rom __fixed8_8 fixed_gains[] = { 1.0q8_8, 1.5q8_8, 2.0q8_8 };
@@ -1716,13 +1743,9 @@ unsigned char ok;
 
 void main(void) {
     unsigned char index;
-    float raw;
-    float gain;
 
     index = 1;
-    raw = 3.0f;
-    gain = gains[index];
-    fresult = (raw * gain) / 1.5f;
+    fresult = gains[index];
     qresult = fixed_gains[index];
     ok = 1;
 }
@@ -1730,12 +1753,11 @@ void main(void) {
     );
 
     assert_eq!(symbol_u8(&core, &map, "ok"), 1);
-    assert_eq!(symbol_u32(&core, &map, "fresult"), 0x4040_0000);
+    assert_eq!(symbol_u32(&core, &map, "fresult"), 0x3FC0_0000);
     assert_eq!(symbol_u16(&core, &map, "qresult"), 0x0180);
     assert!(map.contains("Code Layout"));
     assert!(map.contains("gains [rom, const"));
     assert!(map.contains("fixed_gains [rom, const"));
-    assert!(code_symbol_pages(&map).len() > 1);
 }
 
 #[test]
