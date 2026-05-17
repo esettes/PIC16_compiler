@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pic16cc::backend::pic16::devices::DeviceRegistry;
+use pic16cc::backend::pic16::midrange14::runtime::RuntimeProfile;
 use pic16cc::cli::{CliCommand, CliOptions, CompileCommand, OptimizationLevel, OutputArtifacts};
 use pic16cc::diagnostics::WarningProfile;
 use pic16cc::execute;
@@ -25,6 +26,45 @@ fn temp_file(name: &str) -> PathBuf {
 
 fn compile_source(target: &str, name: &str, source: &str) -> (PathBuf, String) {
     compile_source_with_stack_check(target, name, source, false)
+}
+
+fn compile_source_with_runtime_profile(
+    target: &str,
+    name: &str,
+    source: &str,
+    runtime_profile: RuntimeProfile,
+) -> (PathBuf, String) {
+    let input = temp_file(name);
+    fs::write(&input, source).expect("fixture");
+    let output = temp_file("out.hex");
+    execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: target.to_string(),
+            input,
+            output: output.clone(),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O2,
+            artifacts: OutputArtifacts {
+                map: true,
+                runtime_profile,
+                ..OutputArtifacts::default()
+            },
+            verbose: false,
+            opt_report: false,
+            stack_check: false,
+            stack_report: false,
+            stack_report_file: None,
+            warning_profile: WarningProfile {
+                wall: true,
+                wextra: true,
+                werror: false,
+            },
+        }),
+    })
+    .expect("compile source");
+    let map = fs::read_to_string(output.with_extension("map")).expect("map");
+    (output, map)
 }
 
 fn compile_source_with_stack_check(
@@ -117,6 +157,16 @@ fn run_fixture_to_symbol(target: &str, output: &Path, map: &str, stop_symbol: &s
 
 fn run_source(target: &str, name: &str, source: &str) -> (Pic16Core, String) {
     let (output, map) = compile_source(target, name, source);
+    (run_fixture_to_symbol(target, &output, &map, "__halt"), map)
+}
+
+fn run_source_with_runtime_profile(
+    target: &str,
+    name: &str,
+    source: &str,
+    runtime_profile: RuntimeProfile,
+) -> (Pic16Core, String) {
+    let (output, map) = compile_source_with_runtime_profile(target, name, source, runtime_profile);
     (run_fixture_to_symbol(target, &output, &map, "__halt"), map)
 }
 
@@ -1788,6 +1838,58 @@ void main(void) {
     assert_eq!(symbol_u32(&core, &map, "qresult"), 0x0001_8000);
     assert!(map.contains("__rt_div_u32"));
     assert!(map.contains("__rt_div_q16_16"));
+}
+
+#[test]
+fn executes_phase34_small_profile_u32_divmod_wrappers() {
+    let (core, map) = run_source_with_runtime_profile(
+        "pic16f877a",
+        "phase34-small-u32-divmod.c",
+        r#"
+unsigned long a;
+unsigned long b;
+unsigned long q;
+unsigned long r;
+
+void main(void) {
+    a = 100000UL;
+    b = 300UL;
+    q = a / b;
+    r = a % b;
+}
+"#,
+        RuntimeProfile::Small,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "q"), 333);
+    assert_eq!(symbol_u32(&core, &map, "r"), 100);
+    assert!(map.contains("__rt_u32_divmod_core"));
+}
+
+#[test]
+fn executes_phase34_small_profile_i32_divmod_wrappers() {
+    let (core, map) = run_source_with_runtime_profile(
+        "pic16f877a",
+        "phase34-small-i32-divmod.c",
+        r#"
+long a;
+long b;
+long q;
+long r;
+
+void main(void) {
+    a = -100000L;
+    b = 300L;
+    q = a / b;
+    r = a % b;
+}
+"#,
+        RuntimeProfile::Small,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "q"), 0xFFFF_FEB3);
+    assert_eq!(symbol_u32(&core, &map, "r"), 0xFFFF_FF9C);
+    assert!(map.contains("__rt_u32_divmod_core"));
 }
 
 #[test]
