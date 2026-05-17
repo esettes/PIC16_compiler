@@ -123,6 +123,21 @@ Rules:
 
 Phase 32 does not reorder code yet. If a future layout cannot be made safe by relaxation, compilation still fails with the Phase 31 backend diagnostic.
 
+### Phase 33 Runtime Helper Catalog + Cost Control
+
+Phase 33 keeps runtime semantics unchanged and makes helper cost explicit:
+
+- `RuntimeHelper` is the central catalog for helper label, ABI bytes, local/frame bytes, category, required-by metadata, dependency list, estimated words, page-sensitivity, and target constraints
+- helper dependency graph validation runs before helper bodies are emitted
+- helpers are still emitted only from marked runtime uses; type declarations and folded constants do not pull dead helper bodies
+- `--runtime-profile small|balanced|fast` selects the helper-budget warning policy
+- `--size` reports helper words by category: integer, division, fixed, float, conversion, shift, and dispatchers
+- `--memory-report` includes runtime helper contributors and a dependency graph section
+- `.map` groups runtime helpers by category while preserving page metadata
+- `.lst` comments annotate helper category and required-by metadata
+
+No C language feature is added in Phase 33.
+
 ### Phase 4 Stack-first ABI
 
 Current ABI is stack-first, caller-pushed, upward-growing.

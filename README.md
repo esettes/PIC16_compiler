@@ -33,7 +33,17 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 32: page-aware code layout and linker relaxation on top of Phase 31 backend page-safety, Phase 30 ROM float tables, Phase 29 dynamic float comparisons and 32-bit integer conversions, Phase 28 float hardening, Phase 27 basic finite software `float`, Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, and the earlier frontend/backend phases**.
+Current implementation is **Phase 33: runtime helper size reporting and target-aware runtime profiles on top of Phase 32 page-aware code layout, Phase 31 backend page-safety, Phase 30 ROM float tables, Phase 29 dynamic float comparisons and 32-bit integer conversions, Phase 28 float hardening, Phase 27 basic finite software `float`, Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, and the earlier frontend/backend phases**.
+
+Phase 33 scope:
+
+- centralized runtime helper catalog metadata for category, ABI size, stack frame, required-by text, dependency list, and target constraints
+- helper dependency graph validation before emitting runtime bodies
+- helper pruning remains demand-driven: literal-only `float`, `long`, and fixed-point declarations do not pull arithmetic helpers
+- `--runtime-profile small|balanced|fast` controls helper-budget warning policy; `small` is more aggressive, `fast` currently aliases balanced behavior
+- `--size`, `--memory-report`, and `.map` include runtime helper word totals by category
+- `.lst` helper comments show helper category and required-by metadata
+- no helper semantic changes, no `double`, no math library, no recursion, and no new C syntax
 
 Phase 32 scope:
 

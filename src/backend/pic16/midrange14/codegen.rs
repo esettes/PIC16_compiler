@@ -6381,11 +6381,7 @@ fn emit_runtime_budget_warning(
         return;
     }
     diagnostics.push(Diagnostic {
-        severity: if diagnostics.warning_profile.werror {
-            Severity::Error
-        } else {
-            Severity::Warning
-        },
+        severity: Severity::Warning,
         stage: "backend",
         message: format!(
             "runtime helpers use {} words on {} ({}% of program memory)",

@@ -37,3 +37,6 @@ Restrictions:
 - helper-heavy programs can exceed small-device stack or program-memory limits and are diagnosed through existing stack/program constraints
 
 Phase 27 float helpers reuse the same resource-reporting and stack-accounting paths. They store public values as f32 bits but use an internal Q16.16 work format, so helper-heavy float programs may also exceed target limits.
+## Phase 33 Cost Reporting
+
+Q16.16 dynamic helpers are categorized as fixed helpers in Phase 33. Reports include actual emitted words, estimated catalog words, ABI argument bytes, helper frame bytes, and page placement. Use `--memory-report` to see whether Q16.16 helpers dominate the target image.

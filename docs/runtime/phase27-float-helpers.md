@@ -26,3 +26,8 @@ Behavior:
 - Phase 30 adds ROM-backed float tables; those tables do not add new float arithmetic helpers
 
 Resource note: generic float helpers are large. Codegen includes inline fast paths for common finite `* 2.0f` and `/ 2.0f` to avoid pulling generic helpers when possible. ROM float reads are cheap, but using the read result in helper-backed arithmetic/comparison can still pull large helpers.
+## Phase 33 Cost Reporting
+
+Phase 33 records float helpers in the centralized runtime helper catalog. `--size`, `--memory-report`, `.map`, and `.lst` show float helper category, actual emitted words, stack frame size, required-by text, and target constraints.
+
+Large float helpers can exceed small targets. Use `--runtime-profile small --memory-report` before hardware builds when float is enabled.

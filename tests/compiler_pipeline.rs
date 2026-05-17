@@ -5642,6 +5642,28 @@ fn phase33_runtime_size_examples_compile_via_picc() {
 }
 
 #[test]
+/// Verifies unsupported runtime profile names are rejected at CLI parsing.
+fn phase33_rejects_unknown_runtime_profile() {
+    let output = Command::new(picc_bin())
+        .current_dir(repo("."))
+        .args([
+            "--target",
+            "pic16f877a",
+            "--runtime-profile",
+            "tiny",
+            "-o",
+            "ignored.hex",
+            "examples/pic16f877a/runtime_size_fixed.c",
+        ])
+        .output()
+        .expect("run picc");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unsupported runtime profile"));
+}
+
+#[test]
 /// Verifies `--size`, `--memory-report`, and `--memory-report-file` expose helper cost.
 fn phase25_resource_report_cli_outputs_helper_contribution() {
     let out_dir = temp_dir_path("phase25-memory-report");

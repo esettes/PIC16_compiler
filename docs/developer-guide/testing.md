@@ -6,6 +6,8 @@ Phase 31 backend page-safety validation lives in `src/backend/pic16/midrange14/e
 
 Phase 32 layout validation lives in the same backend and integration suites. It checks same-page `setpage` relaxation, cross-page `setpage` preservation, page-layout memory report output, map `Code Layout`, and simulator execution with float/fixed ROM tables plus large helper paths.
 
+Phase 33 runtime-cost validation lives in `src/backend/pic16/midrange14/runtime.rs`, `tests/compiler_pipeline.rs`, and `tests/execution_sim.rs`. It checks helper catalog metadata, dependency graph validation, runtime profile CLI parsing, helper cost reports, map grouping, unused-helper pruning, checked-in runtime-size examples, and simulator execution for integer plus Q16.16 helper paths.
+
 Phase 26 validation lives in `tests/compiler_pipeline.rs` and `src/hex/intel_hex.rs`. It checks raw and symbolic config words, duplicate/unknown config diagnostics, config emission in `.hex/.map/.lst`, final HEX validation reports, program overflow rejection without `--size`, programmer command printing, configurable Makefile flashing, and hardware smoke examples.
 
 Phase 25 resource-report validation lives in `tests/compiler_pipeline.rs`. It checks target descriptors, `--size`, `--memory-report`, `--memory-report-file`, map/listing resource summaries, helper contribution reporting, ROM-table contribution reporting, data-RAM overflow diagnostics, and stack-region overflow diagnostics.

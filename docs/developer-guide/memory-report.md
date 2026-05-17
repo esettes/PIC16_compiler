@@ -22,6 +22,7 @@ picc --target pic16f877a -I include --memory-report-file build/app.mem -o build/
 - estimated max stack
 - ROM table words
 - runtime helper count
+- runtime helper words by category
 - non-empty program pages
 - page setup relaxation count
 
@@ -37,7 +38,8 @@ picc --target pic16f877a -I include --memory-report-file build/app.mem -o build/
 - ROM table region
 - page layout with used/free words per page
 - program sections
-- helper contribution with stack frame cost
+- runtime helper contributors with actual words, estimated words, ABI args, local bytes, stack frame cost, category, required-by text, and target constraints
+- runtime helper dependency graph
 - float helper contribution when `__rt_f32_*` helpers are emitted
 - ROM float table contribution when `const __rom float[]` objects are emitted
 - largest program-memory contributors
@@ -90,3 +92,14 @@ Float helpers are reported as `float helper`. Phase 28 cast helpers use the same
 Generic helpers are large; prefer `--size` before hardware builds and expect resource fitting to reject programs that pull several float helpers on small targets.
 
 Phase 30 ROM float tables are reported as `ROM RETLW table` contributions, not as helpers. A three-element table uses one entry word plus twelve `retlw` payload words. The map name includes tags such as `calibration [rom, const, 3 element(s), 12 byte(s)]`.
+
+## Phase 33 Runtime Cost Interaction
+
+Phase 33 adds category totals:
+
+```text
+Runtime helpers: 3509 words
+  integer: 0  division: 0  fixed: 0  float: 3509  conversion: 0  shift: 0  dispatchers: 0
+```
+
+Use `--runtime-profile small` to get earlier helper-budget warnings. `balanced` is the default and `fast` currently uses the same helper bodies as balanced.
