@@ -6392,6 +6392,22 @@ fn render_size_summary(
     );
     let _ = writeln!(output, "ROM table words: {}", summary.rom_table_words);
     let _ = writeln!(output, "Helpers included: {}", summary.helpers_included);
+    let _ = writeln!(
+        output,
+        "Runtime helpers: {} words",
+        summary.runtime_helper_words
+    );
+    let _ = writeln!(
+        output,
+        "  integer: {}  division: {}  fixed: {}  float: {}  conversion: {}  shift: {}  dispatchers: {}",
+        summary.integer_helper_words,
+        summary.division_helper_words,
+        summary.fixed_helper_words,
+        summary.float_helper_words,
+        summary.conversion_helper_words,
+        summary.shift_helper_words,
+        summary.dispatcher_words
+    );
     let page_text = pages
         .iter()
         .filter(|page| page.used_words != 0)
@@ -6675,6 +6691,30 @@ fn build_code_sections(contributions: &[ResourceContribution]) -> Vec<CodeSectio
             }
         })
         .collect()
+}
+
+fn is_runtime_helper_contribution(item: &ResourceContribution) -> bool {
+    matches!(
+        item.kind,
+        ResourceContributionKind::RuntimeHelper
+            | ResourceContributionKind::FixedPointHelper
+            | ResourceContributionKind::FloatHelper
+            | ResourceContributionKind::ShiftHelper
+    )
+}
+
+fn helper_words_by_category(
+    contributions: &[ResourceContribution],
+    category: RuntimeHelperCategory,
+) -> u16 {
+    contributions
+        .iter()
+        .filter_map(|item| {
+            runtime_helper_by_label(&item.name)
+                .filter(|helper| helper.category() == category)
+                .map(|_| item.words)
+        })
+        .sum()
 }
 
 fn collect_resource_contributions(
