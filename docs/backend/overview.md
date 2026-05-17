@@ -2,7 +2,7 @@
 
 # PIC16 `midrange14` Backend
 
-Phase 26 extends the PIC16 backend/output path with explicit config words and final HEX validation. Phase 25 target resource fitting and Phase 24 dynamic Q16.16/UQ16.16 helpers remain supported.
+Phase 31 hardens the PIC16 backend against page-crossing `PCLATH` bugs. Phase 30 ROM float data, Phase 29 finite-float runtime completion, Phase 26 config/HEX validation, Phase 25 target resource fitting, and Phase 24 dynamic Q16.16/UQ16.16 helpers remain supported.
 
 Phase 21 extends the PIC16 backend to four-byte integer values. The return convention is `W` plus `__abi.return_high`, `__abi.return_upper0`, and `__abi.return_upper1`. Multi-byte carry/borrow codegen is shared by 8-, 16-, 32-bit, and fixed raw paths.
 
@@ -18,7 +18,7 @@ Shared backend responsibilities:
 - IR -> PIC16 asm lowering
 - 14-bit word encoding
 
-Current backend phase: **Phase 26 config/HEX workflow on top of Phase 25 resource fitting, Phase 24 dynamic Q16.16 helper codegen, Phase 23 fixed ROM table codegen, Phase 22 fixed-point codegen, Phase 21 32-bit integer codegen, Phase 20 simulator tooling, Phase 19 execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier backend phases**
+Current backend phase: **Phase 31 page-safety and code-layout hardening on top of Phase 30 ROM float table codegen, Phase 29 float compare/conversion helpers, Phase 26 config/HEX workflow, Phase 25 resource fitting, Phase 24 dynamic Q16.16 helper codegen, Phase 23 fixed ROM table codegen, Phase 22 fixed-point codegen, Phase 21 32-bit integer codegen, Phase 20 simulator tooling, Phase 19 execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier backend phases**
 
 Backend owns:
 
@@ -32,6 +32,8 @@ Backend owns:
 - Phase 5 runtime helper emission for multiply/divide/modulo and dynamic shifts
 - fixed-point raw storage, casts, comparisons, and Q8.8 helper-backed arithmetic
 - page-safe Q16.16/UQ16.16 dynamic multiply/divide helpers
+- page-safe conditional branch emission for PIC16 skip instructions
+- final layout validation of `goto` / `call` edges against tracked `PCLATH`
 - target memory fit validation after final encoding
 - compact and detailed resource report rendering
 - helper/dispatcher/ROM-table contribution reporting
@@ -64,6 +66,7 @@ Backend owns:
 - no backend jump tables and no backend-side recovery of labels nested under unrelated control statements in phase 9
 - no backend-side recovery for chained designators or incomplete-struct/union pointers; those stay frontend diagnostics
 - bank/page reuse tracking
+- `.map` code symbol page metadata and `.lst` page-safe pseudo-op comments
 
 Phase 19 execution-validation relationship:
 
@@ -114,6 +117,8 @@ Current backend docs:
 - [phase25-resource-fitting.md](phase25-resource-fitting.md)
 - [phase26-config-word.md](phase26-config-word.md)
 - [phase26-hex-validation.md](phase26-hex-validation.md)
+- [phase31-page-safety.md](phase31-page-safety.md)
+- [pic16-code-layout.md](pic16-code-layout.md)
 - [../runtime/phase22-fixed-helpers.md](../runtime/phase22-fixed-helpers.md)
 - [../runtime/phase24-q16-16-dynamic-helpers.md](../runtime/phase24-q16-16-dynamic-helpers.md)
 - [../ir/phase24-fixed-dynamic-lowering.md](../ir/phase24-fixed-dynamic-lowering.md)

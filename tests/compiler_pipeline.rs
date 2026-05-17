@@ -5408,6 +5408,37 @@ void main(void) {
 }
 
 #[test]
+/// Verifies Phase 31 page metadata and page-safe control-flow annotations reach artifacts.
+fn phase31_map_and_listing_include_page_safety_metadata() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase31-page-safety-artifacts.c",
+        r#"
+float a;
+float b;
+unsigned char result;
+
+void main(void) {
+    a = 3.0f;
+    b = 2.0f;
+    if (a > b) {
+        result = 1;
+    } else {
+        result = 0;
+    }
+}
+"#,
+    );
+
+    let map = read_artifact(&output, "map");
+    let listing = read_artifact(&output, "lst");
+    assert!(map.contains("page="));
+    assert!(map.contains("__rt_f32_cmp"));
+    assert!(listing.contains("page-safe control-flow target"));
+    assert!(listing.contains("__rt_f32_cmp"));
+}
+
+#[test]
 /// Verifies `--size`, `--memory-report`, and `--memory-report-file` expose helper cost.
 fn phase25_resource_report_cli_outputs_helper_contribution() {
     let out_dir = temp_dir_path("phase25-memory-report");

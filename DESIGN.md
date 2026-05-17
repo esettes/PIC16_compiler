@@ -93,6 +93,21 @@ Config resolution happens after preprocessing and before lexing. Final HEX valid
 
 Programmer integration stays external. `picc` can print or run a user-provided command, but no PICkit USB protocol or vendor path is built into the compiler.
 
+### Phase 31 Backend Page Safety
+
+Phase 31 hardens the PIC16 paging model after a real Q16.16 helper regression exposed stale `PCLATH` on page-crossing control flow.
+
+Rules:
+
+- unconditional backend jumps lower as `pagesel target` + `goto target`
+- helper calls and function calls use `pagesel target` + `call target`
+- conditional branches use centralized page-safe skip sequences instead of local branch stubs
+- the encoder validates final `goto` / `call` edges after layout is known
+- validation errors include source symbol, from/target address, from/target page, and the tracked `PCLATH` page
+- map/listing artifacts expose page metadata for debugging layout-sensitive bugs
+
+This is backend correctness only. It adds no language feature and does not change the Stack-first ABI.
+
 ### Phase 4 Stack-first ABI
 
 Current ABI is stack-first, caller-pushed, upward-growing.

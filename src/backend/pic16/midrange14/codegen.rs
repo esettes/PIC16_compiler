@@ -1256,7 +1256,7 @@ impl<'a> CodegenContext<'a> {
                     self.program.push(AsmLine::Instr(AsmInstr::Return));
                 }
             }
-            IrTerminator::Jump(target) => self.branch_to_label(&block_label(fn_name, *target)),
+            IrTerminator::Jump(target) => self.jump_to_label(&block_label(fn_name, *target)),
             IrTerminator::Branch {
                 condition,
                 then_block,
@@ -1504,7 +1504,7 @@ impl<'a> CodegenContext<'a> {
         self.program.push(AsmLine::Label(read_label.clone()));
         self.emit_dynamic_rom_byte_call(function.symbol, symbol, index, index_ty);
         self.store_w_to_temp_byte(function.symbol, dst, 0);
-        self.branch_to_label(&done_label);
+        self.jump_to_label(&done_label);
 
         self.program.push(AsmLine::Label(miss_label));
         self.emit_const_to_w(0);
@@ -1627,7 +1627,7 @@ impl<'a> CodegenContext<'a> {
         self.load_addr_to_w(self.layout.helpers.w_save);
         self.emit_dynamic_rom_byte_call_from_w(symbol);
         self.store_w_to_temp_byte(function.symbol, dst, 1);
-        self.branch_to_label(&done_label);
+        self.jump_to_label(&done_label);
 
         self.program.push(AsmLine::Label(miss_label));
         self.emit_const_to_w(0);
@@ -1759,7 +1759,7 @@ impl<'a> CodegenContext<'a> {
             self.emit_dynamic_rom_byte_call_from_w(symbol);
             self.store_w_to_temp_byte(function.symbol, dst, byte);
         }
-        self.branch_to_label(&done_label);
+        self.jump_to_label(&done_label);
 
         self.program.push(AsmLine::Label(miss_label));
         for byte in 0..4 {
@@ -1853,9 +1853,9 @@ impl<'a> CodegenContext<'a> {
                 };
                 if let (Operand::Constant(lhs), Operand::Constant(rhs)) = (lhs, rhs) {
                     if compare_rel(*op, *lhs, *rhs, *ty) {
-                        self.branch_to_label(targets.then_label);
+                        self.jump_to_label(targets.then_label);
                     } else {
-                        self.branch_to_label(targets.else_label);
+                        self.jump_to_label(targets.else_label);
                     }
                     return;
                 }
@@ -1914,7 +1914,7 @@ impl<'a> CodegenContext<'a> {
                             format!("non-comparison `{op:?}` reached compare branch lowering"),
                             None,
                         );
-                        self.branch_to_label(targets.else_label);
+                        self.jump_to_label(targets.else_label);
                     }
                 }
             }
@@ -1941,7 +1941,7 @@ impl<'a> CodegenContext<'a> {
                 ),
                 Some("phase 29 forbids float helper calls inside ISRs".to_string()),
             );
-            self.branch_to_label(targets.else_label);
+            self.jump_to_label(targets.else_label);
             return;
         }
 
@@ -1988,7 +1988,7 @@ impl<'a> CodegenContext<'a> {
                     format!("non-comparison `{op:?}` reached float compare lowering"),
                     None,
                 );
-                self.branch_to_label(targets.else_label);
+                self.jump_to_label(targets.else_label);
             }
         }
     }
@@ -1996,22 +1996,14 @@ impl<'a> CodegenContext<'a> {
     fn emit_scratch0_equals_branch(&mut self, value: u8, then_label: &str, else_label: &str) {
         self.load_addr_to_w(self.layout.helpers.scratch0);
         self.program.push(AsmLine::Instr(AsmInstr::Xorlw(value)));
-        self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
-            f: low7(STATUS_ADDR),
-            b: STATUS_Z_BIT,
-        }));
-        self.branch_to_label(then_label);
-        self.branch_to_label(else_label);
+        self.branch_if_bit_set(low7(STATUS_ADDR), STATUS_Z_BIT, then_label);
+        self.jump_to_label(else_label);
     }
 
     fn emit_scratch0_nonzero_branch(&mut self, then_label: &str, else_label: &str) {
         self.load_addr_to_w(self.layout.helpers.scratch0);
-        self.program.push(AsmLine::Instr(AsmInstr::Btfss {
-            f: low7(STATUS_ADDR),
-            b: STATUS_Z_BIT,
-        }));
-        self.branch_to_label(then_label);
-        self.branch_to_label(else_label);
+        self.branch_if_bit_clear(low7(STATUS_ADDR), STATUS_Z_BIT, then_label);
+        self.jump_to_label(else_label);
     }
 
     /// Branches on whether an 8-bit or 16-bit operand is zero or non-zero.
@@ -2025,22 +2017,18 @@ impl<'a> CodegenContext<'a> {
     ) {
         if let Operand::Constant(value) = value {
             if eval_binary(BinaryOp::NotEqual, value, 0, ty, Type::new(ScalarType::U8)) != 0 {
-                self.branch_to_label(then_label);
+                self.jump_to_label(then_label);
             } else {
-                self.branch_to_label(else_label);
+                self.jump_to_label(else_label);
             }
             return;
         }
 
         for byte in 0..ty.byte_width() {
             self.load_operand_byte_to_w(function_symbol, value, ty, byte);
-            self.program.push(AsmLine::Instr(AsmInstr::Btfss {
-                f: low7(STATUS_ADDR),
-                b: STATUS_Z_BIT,
-            }));
-            self.branch_to_label(then_label);
+            self.branch_if_bit_clear(low7(STATUS_ADDR), STATUS_Z_BIT, then_label);
         }
-        self.branch_to_label(else_label);
+        self.jump_to_label(else_label);
     }
 
     /// Emits equality or inequality branching, handling 16-bit values byte by byte.
@@ -2065,13 +2053,9 @@ impl<'a> CodegenContext<'a> {
         };
         for byte in (0..ty.byte_width()).rev() {
             self.compare_byte(function_symbol, lhs, rhs, ty, byte);
-            self.program.push(AsmLine::Instr(AsmInstr::Btfss {
-                f: low7(STATUS_ADDR),
-                b: STATUS_Z_BIT,
-            }));
-            self.branch_to_label(mismatch_label);
+            self.branch_if_bit_clear(low7(STATUS_ADDR), STATUS_Z_BIT, mismatch_label);
         }
-        self.branch_to_label(equal_label);
+        self.jump_to_label(equal_label);
     }
 
     /// Emits unsigned relational branching using PIC16 carry and zero flags.
@@ -2088,11 +2072,7 @@ impl<'a> CodegenContext<'a> {
             self.compare_byte(function_symbol, lhs, rhs, ty, byte);
             if byte != 0 {
                 let next_label = self.unique_label("cmp_next");
-                self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
-                    f: low7(STATUS_ADDR),
-                    b: STATUS_Z_BIT,
-                }));
-                self.branch_to_label(&next_label);
+                self.branch_if_bit_set(low7(STATUS_ADDR), STATUS_Z_BIT, &next_label);
                 self.branch_on_unsigned_result(op, targets.then_label, targets.else_label);
                 self.program.push(AsmLine::Label(next_label));
             } else {
@@ -2124,28 +2104,16 @@ impl<'a> CodegenContext<'a> {
             f: low7(self.layout.helpers.scratch1),
             d: Dest::F,
         }));
-        self.program.push(AsmLine::Instr(AsmInstr::Btfss {
-            f: low7(self.layout.helpers.scratch1),
-            b: 7,
-        }));
-        self.branch_to_label(&same_sign);
+        self.branch_if_bit_clear(low7(self.layout.helpers.scratch1), 7, &same_sign);
 
         match op {
             BinaryOp::Less | BinaryOp::LessEqual => {
-                self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
-                    f: low7(self.layout.helpers.scratch0),
-                    b: 7,
-                }));
-                self.branch_to_label(targets.then_label);
-                self.branch_to_label(targets.else_label);
+                self.branch_if_bit_set(low7(self.layout.helpers.scratch0), 7, targets.then_label);
+                self.jump_to_label(targets.else_label);
             }
             BinaryOp::Greater | BinaryOp::GreaterEqual => {
-                self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
-                    f: low7(self.layout.helpers.scratch0),
-                    b: 7,
-                }));
-                self.branch_to_label(targets.else_label);
-                self.branch_to_label(targets.then_label);
+                self.branch_if_bit_set(low7(self.layout.helpers.scratch0), 7, targets.else_label);
+                self.jump_to_label(targets.then_label);
             }
             _ => unreachable!("signed relation op"),
         }
@@ -2158,46 +2126,22 @@ impl<'a> CodegenContext<'a> {
     fn branch_on_unsigned_result(&mut self, op: BinaryOp, then_label: &str, else_label: &str) {
         match op {
             BinaryOp::Less => {
-                self.program.push(AsmLine::Instr(AsmInstr::Btfss {
-                    f: low7(STATUS_ADDR),
-                    b: STATUS_C_BIT,
-                }));
-                self.branch_to_label(then_label);
-                self.branch_to_label(else_label);
+                self.branch_if_bit_clear(low7(STATUS_ADDR), STATUS_C_BIT, then_label);
+                self.jump_to_label(else_label);
             }
             BinaryOp::LessEqual => {
-                self.program.push(AsmLine::Instr(AsmInstr::Btfss {
-                    f: low7(STATUS_ADDR),
-                    b: STATUS_C_BIT,
-                }));
-                self.branch_to_label(then_label);
-                self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
-                    f: low7(STATUS_ADDR),
-                    b: STATUS_Z_BIT,
-                }));
-                self.branch_to_label(then_label);
-                self.branch_to_label(else_label);
+                self.branch_if_bit_clear(low7(STATUS_ADDR), STATUS_C_BIT, then_label);
+                self.branch_if_bit_set(low7(STATUS_ADDR), STATUS_Z_BIT, then_label);
+                self.jump_to_label(else_label);
             }
             BinaryOp::Greater => {
-                self.program.push(AsmLine::Instr(AsmInstr::Btfss {
-                    f: low7(STATUS_ADDR),
-                    b: STATUS_C_BIT,
-                }));
-                self.branch_to_label(else_label);
-                self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
-                    f: low7(STATUS_ADDR),
-                    b: STATUS_Z_BIT,
-                }));
-                self.branch_to_label(else_label);
-                self.branch_to_label(then_label);
+                self.branch_if_bit_clear(low7(STATUS_ADDR), STATUS_C_BIT, else_label);
+                self.branch_if_bit_set(low7(STATUS_ADDR), STATUS_Z_BIT, else_label);
+                self.jump_to_label(then_label);
             }
             BinaryOp::GreaterEqual => {
-                self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
-                    f: low7(STATUS_ADDR),
-                    b: STATUS_C_BIT,
-                }));
-                self.branch_to_label(then_label);
-                self.branch_to_label(else_label);
+                self.branch_if_bit_set(low7(STATUS_ADDR), STATUS_C_BIT, then_label);
+                self.jump_to_label(else_label);
             }
             _ => unreachable!("unsigned relation op"),
         }
@@ -2260,6 +2204,7 @@ impl<'a> CodegenContext<'a> {
             }));
             if byte != 0 {
                 self.select_bank(self.layout.helpers.scratch1);
+                self.restore_code_page_after_call();
                 self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
                     f: low7(self.layout.helpers.scratch1),
                     b: 0,
@@ -2289,11 +2234,7 @@ impl<'a> CodegenContext<'a> {
             if byte != 0 {
                 let no_borrow = self.unique_label("sub_no_borrow");
                 self.clear_addr(self.layout.helpers.scratch1);
-                self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
-                    f: low7(STATUS_ADDR),
-                    b: STATUS_C_BIT,
-                }));
-                self.branch_to_label(&no_borrow);
+                self.branch_if_bit_set(low7(STATUS_ADDR), STATUS_C_BIT, &no_borrow);
                 self.program.push(AsmLine::Instr(AsmInstr::Addlw(1)));
                 self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
                     f: low7(STATUS_ADDR),
@@ -2314,6 +2255,7 @@ impl<'a> CodegenContext<'a> {
             }));
             if byte != 0 {
                 self.select_bank(self.layout.helpers.scratch1);
+                self.restore_code_page_after_call();
                 self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
                     f: low7(self.layout.helpers.scratch1),
                     b: 0,
@@ -2345,11 +2287,7 @@ impl<'a> CodegenContext<'a> {
             if byte != 0 {
                 let no_borrow = self.unique_label("neg_no_borrow");
                 self.clear_addr(self.layout.helpers.scratch1);
-                self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
-                    f: low7(STATUS_ADDR),
-                    b: STATUS_C_BIT,
-                }));
-                self.branch_to_label(&no_borrow);
+                self.branch_if_bit_set(low7(STATUS_ADDR), STATUS_C_BIT, &no_borrow);
                 self.program.push(AsmLine::Instr(AsmInstr::Addlw(1)));
                 self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
                     f: low7(STATUS_ADDR),
@@ -2370,6 +2308,7 @@ impl<'a> CodegenContext<'a> {
             }));
             if byte != 0 {
                 self.select_bank(self.layout.helpers.scratch1);
+                self.restore_code_page_after_call();
                 self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
                     f: low7(self.layout.helpers.scratch1),
                     b: 0,
@@ -2603,32 +2542,24 @@ impl<'a> CodegenContext<'a> {
         self.prepare_pointer_from_pair(self.layout.helpers.frame_ptr, byte2);
         self.select_bank(INDF_ADDR);
         if exponent_delta > 0 {
-            self.program.push(AsmLine::Instr(AsmInstr::Btfss {
-                f: low7(INDF_ADDR),
-                b: 7,
-            }));
-            self.branch_to_label(&set_low_label);
+            self.branch_if_bit_clear(low7(INDF_ADDR), 7, &set_low_label);
             self.program.push(AsmLine::Instr(AsmInstr::Bcf {
                 f: low7(INDF_ADDR),
                 b: 7,
             }));
-            self.branch_to_label(&adjust_high_label);
+            self.jump_to_label(&adjust_high_label);
             self.program.push(AsmLine::Label(set_low_label));
             self.program.push(AsmLine::Instr(AsmInstr::Bsf {
                 f: low7(INDF_ADDR),
                 b: 7,
             }));
-            self.branch_to_label(&done_label);
+            self.jump_to_label(&done_label);
             self.program.push(AsmLine::Label(adjust_high_label));
             self.load_frame_byte_to_w(function_symbol, byte3);
             self.program.push(AsmLine::Instr(AsmInstr::Addlw(1)));
             self.store_w_to_frame_byte(function_symbol, byte3);
         } else {
-            self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
-                f: low7(INDF_ADDR),
-                b: 7,
-            }));
-            self.branch_to_label(&adjust_high_label);
+            self.branch_if_bit_set(low7(INDF_ADDR), 7, &adjust_high_label);
             self.program.push(AsmLine::Instr(AsmInstr::Bsf {
                 f: low7(INDF_ADDR),
                 b: 7,
@@ -2636,7 +2567,7 @@ impl<'a> CodegenContext<'a> {
             self.load_frame_byte_to_w(function_symbol, byte3);
             self.program.push(AsmLine::Instr(AsmInstr::Addlw(0xFF)));
             self.store_w_to_frame_byte(function_symbol, byte3);
-            self.branch_to_label(&done_label);
+            self.jump_to_label(&done_label);
             self.program.push(AsmLine::Label(adjust_high_label));
             self.program.push(AsmLine::Instr(AsmInstr::Bcf {
                 f: low7(INDF_ADDR),
@@ -2851,16 +2782,12 @@ impl<'a> CodegenContext<'a> {
                     let negative = self.unique_label("sext_neg");
                     let end = self.unique_label("sext_end");
                     self.select_bank(self.layout.helpers.scratch0);
-                    self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
-                        f: low7(self.layout.helpers.scratch0),
-                        b: 7,
-                    }));
-                    self.branch_to_label(&negative);
+                    self.branch_if_bit_set(low7(self.layout.helpers.scratch0), 7, &negative);
                     for byte in src_ty.byte_width()..dst_ty.byte_width() {
                         self.emit_const_to_w(0);
                         self.store_w_to_temp_byte(function_symbol, dst_temp, byte);
                     }
-                    self.branch_to_label(&end);
+                    self.jump_to_label(&end);
                     self.program.push(AsmLine::Label(negative));
                     for byte in src_ty.byte_width()..dst_ty.byte_width() {
                         self.emit_const_to_w(0xFF);
@@ -3165,16 +3092,8 @@ impl<'a> CodegenContext<'a> {
             f: low7(self.layout.helpers.scratch1),
             d: Dest::W,
         }));
-        self.program.push(AsmLine::Instr(AsmInstr::Btfss {
-            f: low7(STATUS_ADDR),
-            b: STATUS_C_BIT,
-        }));
-        self.branch_to_label(&ok_label);
-        self.program.push(AsmLine::Instr(AsmInstr::Btfss {
-            f: low7(STATUS_ADDR),
-            b: STATUS_Z_BIT,
-        }));
-        self.branch_to_label("__stack_overflow_trap");
+        self.branch_if_bit_clear(low7(STATUS_ADDR), STATUS_C_BIT, &ok_label);
+        self.branch_if_bit_clear(low7(STATUS_ADDR), STATUS_Z_BIT, "__stack_overflow_trap");
 
         self.emit_const_to_w(low_byte(
             i64::from(self.layout.stack_limit),
@@ -3185,17 +3104,9 @@ impl<'a> CodegenContext<'a> {
             f: low7(self.layout.helpers.scratch0),
             d: Dest::W,
         }));
-        self.program.push(AsmLine::Instr(AsmInstr::Btfss {
-            f: low7(STATUS_ADDR),
-            b: STATUS_C_BIT,
-        }));
-        self.branch_to_label(&ok_label);
-        self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
-            f: low7(STATUS_ADDR),
-            b: STATUS_Z_BIT,
-        }));
-        self.branch_to_label(&ok_label);
-        self.branch_to_label("__stack_overflow_trap");
+        self.branch_if_bit_clear(low7(STATUS_ADDR), STATUS_C_BIT, &ok_label);
+        self.branch_if_bit_set(low7(STATUS_ADDR), STATUS_Z_BIT, &ok_label);
+        self.jump_to_label("__stack_overflow_trap");
         self.program.push(AsmLine::Label(ok_label));
     }
 
@@ -3283,14 +3194,8 @@ impl<'a> CodegenContext<'a> {
     ) {
         self.prepare_pointer_from_pair(self.layout.helpers.frame_ptr, offset);
         self.select_bank(INDF_ADDR);
-        self.restore_code_page_after_call();
-        self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
-            f: low7(INDF_ADDR),
-            b: bit,
-        }));
-        self.branch_to_label(set_label);
-        self.restore_code_page_after_call();
-        self.branch_to_label(clear_label);
+        self.branch_if_bit_set(low7(INDF_ADDR), bit, set_label);
+        self.jump_to_label(clear_label);
     }
 
     /// Clears one scalar slot that lives inside the active call frame.
@@ -3311,15 +3216,9 @@ impl<'a> CodegenContext<'a> {
     ) {
         for byte in 0..ty.byte_width() {
             self.load_current_frame_byte_to_w(offset + byte as u16);
-            self.restore_code_page_after_call();
-            self.program.push(AsmLine::Instr(AsmInstr::Btfss {
-                f: low7(STATUS_ADDR),
-                b: STATUS_Z_BIT,
-            }));
-            self.branch_to_label(then_label);
+            self.branch_if_bit_clear(low7(STATUS_ADDR), STATUS_Z_BIT, then_label);
         }
-        self.restore_code_page_after_call();
-        self.branch_to_label(else_label);
+        self.jump_to_label(else_label);
     }
 
     /// Branches on whether two active-frame scalar values are byte-exact equal.
@@ -3333,15 +3232,9 @@ impl<'a> CodegenContext<'a> {
     ) {
         for byte in 0..ty.byte_width() {
             self.compare_current_frame_byte(lhs_offset, rhs_offset, byte);
-            self.restore_code_page_after_call();
-            self.program.push(AsmLine::Instr(AsmInstr::Btfss {
-                f: low7(STATUS_ADDR),
-                b: STATUS_Z_BIT,
-            }));
-            self.branch_to_label(not_equal_label);
+            self.branch_if_bit_clear(low7(STATUS_ADDR), STATUS_Z_BIT, not_equal_label);
         }
-        self.restore_code_page_after_call();
-        self.branch_to_label(equal_label);
+        self.jump_to_label(equal_label);
     }
 
     /// Subtracts one active-frame byte from another and leaves compare flags live.
@@ -3369,30 +3262,13 @@ impl<'a> CodegenContext<'a> {
             self.compare_current_frame_byte(lhs_offset, rhs_offset, byte);
             if byte != 0 {
                 let next_label = self.unique_label("rt_cmp_next");
-                self.restore_code_page_after_call();
-                self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
-                    f: low7(STATUS_ADDR),
-                    b: STATUS_Z_BIT,
-                }));
-                self.branch_to_label(&next_label);
-                self.restore_code_page_after_call();
-                self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
-                    f: low7(STATUS_ADDR),
-                    b: STATUS_C_BIT,
-                }));
-                self.branch_to_label(ge_label);
-                self.restore_code_page_after_call();
-                self.branch_to_label(lt_label);
+                self.branch_if_bit_set(low7(STATUS_ADDR), STATUS_Z_BIT, &next_label);
+                self.branch_if_bit_set(low7(STATUS_ADDR), STATUS_C_BIT, ge_label);
+                self.jump_to_label(lt_label);
                 self.program.push(AsmLine::Label(next_label));
             } else {
-                self.restore_code_page_after_call();
-                self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
-                    f: low7(STATUS_ADDR),
-                    b: STATUS_C_BIT,
-                }));
-                self.branch_to_label(ge_label);
-                self.restore_code_page_after_call();
-                self.branch_to_label(lt_label);
+                self.branch_if_bit_set(low7(STATUS_ADDR), STATUS_C_BIT, ge_label);
+                self.jump_to_label(lt_label);
             }
         }
     }
@@ -3428,6 +3304,7 @@ impl<'a> CodegenContext<'a> {
             }));
             if byte != 0 {
                 self.select_bank(self.layout.helpers.scratch1);
+                self.restore_code_page_after_call();
                 self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
                     f: low7(self.layout.helpers.scratch1),
                     b: 0,
@@ -3450,12 +3327,7 @@ impl<'a> CodegenContext<'a> {
             if byte != 0 {
                 let no_borrow = self.unique_label("rt_sub_no_borrow");
                 self.clear_addr(self.layout.helpers.scratch1);
-                self.restore_code_page_after_call();
-                self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
-                    f: low7(STATUS_ADDR),
-                    b: STATUS_C_BIT,
-                }));
-                self.branch_to_label(&no_borrow);
+                self.branch_if_bit_set(low7(STATUS_ADDR), STATUS_C_BIT, &no_borrow);
                 self.program.push(AsmLine::Instr(AsmInstr::Addlw(1)));
                 self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
                     f: low7(STATUS_ADDR),
@@ -3497,12 +3369,7 @@ impl<'a> CodegenContext<'a> {
             if byte != 0 {
                 let no_borrow = self.unique_label("rt_neg_no_borrow");
                 self.clear_addr(self.layout.helpers.scratch1);
-                self.restore_code_page_after_call();
-                self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
-                    f: low7(STATUS_ADDR),
-                    b: STATUS_C_BIT,
-                }));
-                self.branch_to_label(&no_borrow);
+                self.branch_if_bit_set(low7(STATUS_ADDR), STATUS_C_BIT, &no_borrow);
                 self.program.push(AsmLine::Instr(AsmInstr::Addlw(1)));
                 self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
                     f: low7(STATUS_ADDR),
@@ -3893,19 +3760,38 @@ impl<'a> CodegenContext<'a> {
 
     /// Emits a page-safe unconditional branch to a label.
     fn branch_to_label(&mut self, label: &str) {
-        let stub_label = self.unique_label("branch_stub");
-        let after_label = self.unique_label("branch_after");
-        self.program
-            .push(AsmLine::Instr(AsmInstr::Goto(stub_label.clone())));
-        self.program
-            .push(AsmLine::Instr(AsmInstr::SetPage(after_label.clone())));
-        self.program
-            .push(AsmLine::Instr(AsmInstr::Goto(after_label.clone())));
-        self.program.push(AsmLine::Label(stub_label));
         self.program
             .push(AsmLine::Instr(AsmInstr::SetPage(label.to_string())));
         self.program
             .push(AsmLine::Instr(AsmInstr::Goto(label.to_string())));
+    }
+
+    /// Emits an unconditional page-safe branch.
+    fn jump_to_label(&mut self, label: &str) {
+        self.branch_to_label(label);
+    }
+
+    /// Branches to `label` when the selected bit is set, otherwise falls through.
+    fn branch_if_bit_set(&mut self, f: u8, b: u8, label: &str) {
+        let after_label = self.unique_label("branch_after");
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage(after_label.clone())));
+        self.program.push(AsmLine::Instr(AsmInstr::Btfss { f, b }));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Goto(after_label.clone())));
+        self.branch_to_label(label);
+        self.program.push(AsmLine::Label(after_label));
+    }
+
+    /// Branches to `label` when the selected bit is clear, otherwise falls through.
+    fn branch_if_bit_clear(&mut self, f: u8, b: u8, label: &str) {
+        let after_label = self.unique_label("branch_after");
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage(after_label.clone())));
+        self.program.push(AsmLine::Instr(AsmInstr::Btfsc { f, b }));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Goto(after_label.clone())));
+        self.branch_to_label(label);
         self.program.push(AsmLine::Label(after_label));
     }
 
@@ -4320,7 +4206,7 @@ impl<'a> CodegenContext<'a> {
                 self.program.push(AsmLine::Label(zero_label));
                 self.clear_current_frame_slot(arg0_offset, ty);
                 self.clear_current_frame_slot(work_offset, ty);
-                self.branch_to_label(&finish_label);
+                self.jump_to_label(&finish_label);
                 self.program.push(AsmLine::Label(finish_label));
                 let result_offset = if matches!(
                     helper,
@@ -4361,7 +4247,7 @@ impl<'a> CodegenContext<'a> {
                 self.program.push(AsmLine::Label(zero_label));
                 self.clear_current_frame_slot(arg0_offset, ty);
                 self.clear_current_frame_slot(work_offset, ty);
-                self.branch_to_label(&finish_label);
+                self.jump_to_label(&finish_label);
                 self.program.push(AsmLine::Label(finish_label));
 
                 if matches!(
@@ -4417,7 +4303,7 @@ impl<'a> CodegenContext<'a> {
                     );
                 }
                 self.decrement_current_frame_value(arg1_offset, ty);
-                self.branch_to_label(&loop_label);
+                self.jump_to_label(&loop_label);
                 self.program.push(AsmLine::Label(done_label));
                 self.emit_return_current_frame_value(arg0_offset, ty);
             }
@@ -4441,7 +4327,7 @@ impl<'a> CodegenContext<'a> {
         let main_label = self.unique_label("rt_f32_main");
         let convert_label = self.unique_label("rt_f32_to_q16_call");
 
-        self.branch_to_label(&main_label);
+        self.jump_to_label(&main_label);
         self.program.push(AsmLine::Label(convert_label.clone()));
         self.emit_float_to_q16_frame(
             0,
@@ -4560,7 +4446,7 @@ impl<'a> CodegenContext<'a> {
         self.program.push(AsmLine::Label(equal_label));
         self.emit_const_to_w(0);
         self.store_w_to_current_frame_byte(result_offset);
-        self.branch_to_label(&finish_label);
+        self.jump_to_label(&finish_label);
 
         self.program.push(AsmLine::Label(not_equal_label));
         self.branch_on_current_frame_bit(q0_offset + 3, 7, &lhs_neg_label, &lhs_nonneg_label);
@@ -4574,7 +4460,7 @@ impl<'a> CodegenContext<'a> {
         );
         self.program
             .push(AsmLine::Label(rhs_neg_from_lhs_neg_label));
-        self.branch_to_label(&same_sign_label);
+        self.jump_to_label(&same_sign_label);
 
         self.program.push(AsmLine::Label(lhs_nonneg_label));
         self.branch_on_current_frame_bit(
@@ -4585,7 +4471,7 @@ impl<'a> CodegenContext<'a> {
         );
         self.program
             .push(AsmLine::Label(rhs_neg_from_lhs_nonneg_label));
-        self.branch_to_label(&greater_label);
+        self.jump_to_label(&greater_label);
 
         self.program.push(AsmLine::Label(same_sign_label));
         self.emit_current_frame_unsigned_ge_branch(
@@ -4599,7 +4485,7 @@ impl<'a> CodegenContext<'a> {
         self.program.push(AsmLine::Label(less_label));
         self.emit_const_to_w(0xFF);
         self.store_w_to_current_frame_byte(result_offset);
-        self.branch_to_label(&finish_label);
+        self.jump_to_label(&finish_label);
 
         self.program.push(AsmLine::Label(greater_label));
         self.emit_const_to_w(1);
@@ -4710,14 +4596,14 @@ impl<'a> CodegenContext<'a> {
         self.emit_const_to_w(1);
         self.store_w_to_current_frame_byte(count_offset);
         self.add_current_frame_value_into_slot(count_offset, exp_offset, u8_ty);
-        self.branch_to_label(&high_loop_label);
+        self.jump_to_label(&high_loop_label);
 
         self.program.push(AsmLine::Label(low_loop_label.clone()));
         self.branch_on_current_frame_bit(mant_offset + 2, 7, &pack_label, &low_body_label);
         self.program.push(AsmLine::Label(low_body_label));
         self.shift_current_frame_value_left(mant_offset, i32_ty);
         self.decrement_current_frame_value(exp_offset, u8_ty);
-        self.branch_to_label(&low_loop_label);
+        self.jump_to_label(&low_loop_label);
 
         self.program.push(AsmLine::Label(pack_label));
         self.copy_current_frame_bytes(mant_offset, raw_offset, 2);
@@ -4995,14 +4881,14 @@ impl<'a> CodegenContext<'a> {
         self.emit_const_to_w(1);
         self.store_w_to_current_frame_byte(count_offset);
         self.add_current_frame_value_into_slot(count_offset, exp_offset, u8_ty);
-        self.branch_to_label(&high_loop_label);
+        self.jump_to_label(&high_loop_label);
 
         self.program.push(AsmLine::Label(low_loop_label.clone()));
         self.branch_on_current_frame_bit(mant_offset + 2, 7, &pack_label, &low_body_label);
         self.program.push(AsmLine::Label(low_body_label));
         self.shift_current_frame_value_left(mant_offset, q_ty);
         self.decrement_current_frame_value(exp_offset, u8_ty);
-        self.branch_to_label(&low_loop_label);
+        self.jump_to_label(&low_loop_label);
 
         self.program.push(AsmLine::Label(pack_label));
         self.copy_current_frame_bytes(mant_offset, raw_offset, 2);
@@ -5053,7 +4939,7 @@ impl<'a> CodegenContext<'a> {
             self.shift_current_frame_value_left(offset, ty);
         }
         self.decrement_current_frame_value(count_offset, Type::new(ScalarType::U8));
-        self.branch_to_label(&loop_label);
+        self.jump_to_label(&loop_label);
     }
 
     /// Emits Q8.8 fixed multiply: `(raw_a * raw_b) >> 8`, returning the low 16 result bytes.
@@ -5142,7 +5028,7 @@ impl<'a> CodegenContext<'a> {
         self.program.push(AsmLine::Label(zero_label));
         self.clear_current_frame_slot(dividend32_offset, wide_ty);
         self.clear_current_frame_slot(remainder32_offset, wide_ty);
-        self.branch_to_label(&finish_label);
+        self.jump_to_label(&finish_label);
         self.program.push(AsmLine::Label(finish_label));
         if signed {
             let negate_label = self.unique_label("rt_qdiv_neg");
@@ -5224,7 +5110,7 @@ impl<'a> CodegenContext<'a> {
             self.negate_current_frame_value(result32_offset, ty);
             self.program.push(AsmLine::Label(sign_done_label));
         }
-        self.branch_to_label(&done_label);
+        self.jump_to_label(&done_label);
         self.program.push(AsmLine::Label(core_label));
         self.emit_fixed_q16_16_mul16_core(
             multiplicand32_offset,
@@ -5348,7 +5234,7 @@ impl<'a> CodegenContext<'a> {
         self.program.push(AsmLine::Label(zero_label));
         self.clear_current_frame_slot(quotient32_offset, work_ty);
         self.clear_current_frame_slot(remainder32_offset, work_ty);
-        self.branch_to_label(&finish_label);
+        self.jump_to_label(&finish_label);
         self.program.push(AsmLine::Label(fraction_label));
         self.emit_const_to_w(16);
         self.store_w_to_current_frame_byte(count_offset);
@@ -5367,11 +5253,7 @@ impl<'a> CodegenContext<'a> {
             self.shift_current_frame_value_left(remainder32_offset, work_ty);
             let subtract_label = self.unique_label("rt_q16div_sub");
             let next_label = self.unique_label("rt_q16div_next");
-            self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
-                f: low7(STATUS_ADDR),
-                b: STATUS_C_BIT,
-            }));
-            self.branch_to_label(&subtract_label);
+            self.branch_if_bit_set(low7(STATUS_ADDR), STATUS_C_BIT, &subtract_label);
             self.emit_current_frame_unsigned_ge_branch(
                 remainder32_offset,
                 divisor32_offset,
@@ -5503,7 +5385,7 @@ impl<'a> CodegenContext<'a> {
         self.shift_current_frame_value_left(multiplicand_offset, ty);
         self.shift_current_frame_value_right(multiplier_offset, ty, false);
         self.decrement_current_frame_value(count_offset, Type::new(ScalarType::U8));
-        self.branch_to_label(&loop_label);
+        self.jump_to_label(&loop_label);
         self.program.push(AsmLine::Label(done_label));
     }
 
@@ -5625,12 +5507,8 @@ impl<'a> CodegenContext<'a> {
             f: low7(self.layout.helpers.scratch0),
             d: Dest::W,
         }));
-        self.program.push(AsmLine::Instr(AsmInstr::Btfsc {
-            f: low7(STATUS_ADDR),
-            b: STATUS_C_BIT,
-        }));
-        self.branch_to_label(&clamp_label);
-        self.branch_to_label(&done_label);
+        self.branch_if_bit_set(low7(STATUS_ADDR), STATUS_C_BIT, &clamp_label);
+        self.jump_to_label(&done_label);
         self.program.push(AsmLine::Label(clamp_label));
         self.emit_const_to_w(width);
         self.store_w_to_current_frame_byte(offset);
@@ -5730,11 +5608,7 @@ impl<'a> CodegenContext<'a> {
                 f: low7(self.layout.helpers.scratch1),
                 d: Dest::W,
             }));
-            self.program.push(AsmLine::Instr(AsmInstr::Btfss {
-                f: low7(STATUS_ADDR),
-                b: STATUS_Z_BIT,
-            }));
-            self.branch_to_label(&miss_label);
+            self.branch_if_bit_clear(low7(STATUS_ADDR), STATUS_Z_BIT, &miss_label);
 
             for target in &group.targets {
                 let next_label = format!("{label}__next_{}", target.id);
@@ -5746,11 +5620,7 @@ impl<'a> CodegenContext<'a> {
                 self.load_addr_to_w(self.layout.helpers.scratch0);
                 self.program
                     .push(AsmLine::Instr(AsmInstr::Xorlw(target.id as u8)));
-                self.program.push(AsmLine::Instr(AsmInstr::Btfss {
-                    f: low7(STATUS_ADDR),
-                    b: STATUS_Z_BIT,
-                }));
-                self.branch_to_label(&next_label);
+                self.branch_if_bit_clear(low7(STATUS_ADDR), STATUS_Z_BIT, &next_label);
                 self.program.push(AsmLine::Label(case_label));
                 let callee_label = function_label(self.symbol_name(target.function));
                 self.program.push(AsmLine::Comment(format!(
@@ -5763,7 +5633,7 @@ impl<'a> CodegenContext<'a> {
                 self.program
                     .push(AsmLine::Instr(AsmInstr::Call(callee_label)));
                 self.restore_code_page_after_call();
-                self.branch_to_label(&done_label);
+                self.jump_to_label(&done_label);
                 self.program.push(AsmLine::Label(next_label));
             }
 
@@ -6503,8 +6373,14 @@ fn render_memory_report(
         let end = item.start.saturating_add(item.words.saturating_sub(1));
         let _ = writeln!(
             output,
-            "0x{:04X}..0x{:04X}  {:>4} words  {:<27} {}",
-            item.start, end, item.words, item.kind, item.name
+            "0x{:04X}..0x{:04X}  page {}..{}  {:>4} words  {:<27} {}",
+            item.start,
+            end,
+            control_page(item.start),
+            control_page(end),
+            item.words,
+            item.kind,
+            item.name
         );
     }
 
@@ -6595,6 +6471,10 @@ fn render_memory_ranges(output: &mut String, title: &str, ranges: &[MemoryRange]
         .join(", ");
     let bytes = ranges.iter().map(|range| range.size()).sum::<u16>();
     let _ = writeln!(output, "{title}: {joined} ({bytes} bytes)");
+}
+
+fn control_page(addr: u16) -> u8 {
+    ((addr >> 11) & 0x03) as u8
 }
 
 fn collect_resource_contributions(

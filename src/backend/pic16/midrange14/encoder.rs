@@ -17,6 +17,9 @@ pub fn encode_program(
     diagnostics: &mut DiagnosticBag,
 ) -> Option<EncoderOutput> {
     let labels = collect_labels(program, diagnostics)?;
+    if !validate_page_safety(program, &labels, diagnostics) {
+        return None;
+    }
     let mut words = BTreeMap::new();
     let mut pc = 0u16;
 
@@ -162,6 +165,87 @@ fn collect_labels(
     Some(labels)
 }
 
+/// Validates that every encoded `goto` / `call` has PCLATH set for its target page.
+fn validate_page_safety(
+    program: &AsmProgram,
+    labels: &BTreeMap<String, u16>,
+    diagnostics: &mut DiagnosticBag,
+) -> bool {
+    let mut pc = 0u16;
+    let mut current_page = Some(control_page(pc));
+    let mut current_symbol = "<start>".to_string();
+    let start_errors = diagnostics.diagnostics.len();
+
+    for line in &program.lines {
+        match line {
+            AsmLine::Org(addr) => {
+                pc = *addr;
+                current_page = Some(control_page(pc));
+                current_symbol = format!("org_0x{pc:04X}");
+            }
+            AsmLine::Label(label) => {
+                current_symbol = label.clone();
+                current_page = Some(control_page(pc));
+            }
+            AsmLine::Comment(_) => {}
+            AsmLine::Instr(instr) => {
+                match instr {
+                    AsmInstr::SetPage(label) | AsmInstr::SetPclPage(label) => {
+                        let Some(addr) = labels.get(label).copied() else {
+                            diagnostics.error(
+                                "assembler",
+                                None,
+                                format!("undefined label `{label}`"),
+                                None,
+                            );
+                            return false;
+                        };
+                        current_page = Some(control_page(addr));
+                    }
+                    AsmInstr::Goto(label) | AsmInstr::Call(label) => {
+                        let Some(addr) = labels.get(label).copied() else {
+                            diagnostics.error(
+                                "assembler",
+                                None,
+                                format!("undefined label `{label}`"),
+                                None,
+                            );
+                            return false;
+                        };
+                        let target_page = control_page(addr);
+                        if current_page != Some(target_page) {
+                            let edge = if matches!(instr, AsmInstr::Call(_)) {
+                                "call"
+                            } else {
+                                "goto"
+                            };
+                            let from_page = control_page(pc);
+                            let known_page = current_page
+                                .map(|page| page.to_string())
+                                .unwrap_or_else(|| "unknown".to_string());
+                            diagnostics.error(
+                                "backend",
+                                None,
+                                format!("unsafe cross-page {edge} in `{current_symbol}`"),
+                                Some(format!(
+                                    "from: 0x{pc:04X} page {from_page}; target `{label}`: 0x{addr:04X} page {target_page}; PCLATH page before edge: {known_page}"
+                                )),
+                            );
+                        }
+                        if matches!(instr, AsmInstr::Call(_)) {
+                            current_page = Some(target_page);
+                        }
+                    }
+                    _ => {}
+                }
+                pc += instr.word_len();
+            }
+        }
+    }
+
+    diagnostics.diagnostics.len() == start_errors
+}
+
 /// Encodes one concrete PIC16 instruction into its 14-bit machine-word form.
 fn encode_instr(instr: &AsmInstr) -> u16 {
     match instr {
@@ -196,6 +280,11 @@ fn encode_instr(instr: &AsmInstr) -> u16 {
     }
 }
 
+/// Returns the two-bit page used by PIC16 `goto` / `call` through PCLATH<4:3>.
+const fn control_page(addr: u16) -> u8 {
+    ((addr >> 11) & 0x03) as u8
+}
+
 /// Stores one encoded instruction word while masking it to the 14-bit width.
 fn insert_word(words: &mut BTreeMap<u16, u16>, addr: u16, word: u16) {
     words.insert(addr, word & 0x3FFF);
@@ -211,8 +300,9 @@ const fn dest_bit(dest: Dest) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use super::encode_instr;
-    use crate::backend::pic16::midrange14::asm::{AsmInstr, Dest};
+    use super::{encode_instr, encode_program};
+    use crate::backend::pic16::midrange14::asm::{AsmInstr, AsmLine, AsmProgram, Dest};
+    use crate::diagnostics::DiagnosticBag;
 
     #[test]
     /// Verifies the interrupt return instruction encodes to the canonical PIC16 word.
@@ -236,6 +326,74 @@ mod tests {
     /// Verifies `retlw` keeps the literal in the low byte of the 14-bit word.
     fn encodes_retlw() {
         assert_eq!(encode_instr(&AsmInstr::Retlw(0x5A)), 0x345A);
+    }
+
+    #[test]
+    /// Verifies layout validation rejects raw cross-page gotos without PCLATH setup.
+    fn rejects_unsafe_cross_page_goto() {
+        let program = AsmProgram {
+            lines: vec![
+                AsmLine::Org(0x0000),
+                AsmLine::Label("from".to_string()),
+                AsmLine::Instr(AsmInstr::Goto("target".to_string())),
+                AsmLine::Org(0x0800),
+                AsmLine::Label("target".to_string()),
+                AsmLine::Instr(AsmInstr::Nop),
+            ],
+        };
+        let mut diagnostics = DiagnosticBag::default();
+
+        assert!(encode_program(&program, &mut diagnostics).is_none());
+        assert!(
+            diagnostics
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("unsafe cross-page goto"))
+        );
+    }
+
+    #[test]
+    /// Verifies SetPage marks a cross-page goto as page-safe.
+    fn accepts_page_safe_cross_page_goto() {
+        let program = AsmProgram {
+            lines: vec![
+                AsmLine::Org(0x0000),
+                AsmLine::Label("from".to_string()),
+                AsmLine::Instr(AsmInstr::SetPage("target".to_string())),
+                AsmLine::Instr(AsmInstr::Goto("target".to_string())),
+                AsmLine::Org(0x0800),
+                AsmLine::Label("target".to_string()),
+                AsmLine::Instr(AsmInstr::Nop),
+            ],
+        };
+        let mut diagnostics = DiagnosticBag::default();
+
+        assert!(encode_program(&program, &mut diagnostics).is_some());
+        assert!(!diagnostics.has_errors());
+    }
+
+    #[test]
+    /// Verifies layout validation rejects raw cross-page calls without PCLATH setup.
+    fn rejects_unsafe_cross_page_call() {
+        let program = AsmProgram {
+            lines: vec![
+                AsmLine::Org(0x0000),
+                AsmLine::Label("from".to_string()),
+                AsmLine::Instr(AsmInstr::Call("target".to_string())),
+                AsmLine::Org(0x0800),
+                AsmLine::Label("target".to_string()),
+                AsmLine::Instr(AsmInstr::Return),
+            ],
+        };
+        let mut diagnostics = DiagnosticBag::default();
+
+        assert!(encode_program(&program, &mut diagnostics).is_none());
+        assert!(
+            diagnostics
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("unsafe cross-page call"))
+        );
     }
 }
 // SPDX-License-Identifier: GPL-3.0-or-later

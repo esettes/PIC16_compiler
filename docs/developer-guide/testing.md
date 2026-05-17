@@ -2,6 +2,8 @@
 
 # Testing Guide
 
+Phase 31 backend page-safety validation lives in `src/backend/pic16/midrange14/encoder.rs`, `tests/compiler_pipeline.rs`, and `tests/execution_sim.rs`. It checks unsafe cross-page `goto` / `call` rejection, map/listing page metadata, Q16.16 helper execution across multi-page layouts, float/ROM/function-pointer page paths, and stack-check trap layout.
+
 Phase 26 validation lives in `tests/compiler_pipeline.rs` and `src/hex/intel_hex.rs`. It checks raw and symbolic config words, duplicate/unknown config diagnostics, config emission in `.hex/.map/.lst`, final HEX validation reports, program overflow rejection without `--size`, programmer command printing, configurable Makefile flashing, and hardware smoke examples.
 
 Phase 25 resource-report validation lives in `tests/compiler_pipeline.rs`. It checks target descriptors, `--size`, `--memory-report`, `--memory-report-file`, map/listing resource summaries, helper contribution reporting, ROM-table contribution reporting, data-RAM overflow diagnostics, and stack-region overflow diagnostics.

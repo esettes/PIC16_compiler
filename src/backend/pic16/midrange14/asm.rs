@@ -237,8 +237,12 @@ pub fn render_instr(instr: &AsmInstr) -> String {
         AsmInstr::Retlw(value) => format!("retlw 0x{value:02X}"),
         AsmInstr::Return => "return".to_string(),
         AsmInstr::Retfie => "retfie".to_string(),
-        AsmInstr::SetPage(label) => format!("; setpage {label}"),
-        AsmInstr::SetPclPage(label) => format!("; setpclpage {label}"),
+        AsmInstr::SetPage(label) => {
+            format!("; setpage {label} ; page-safe control-flow target")
+        }
+        AsmInstr::SetPclPage(label) => {
+            format!("; setpclpage {label} ; page-safe RETLW table target")
+        }
     }
 }
 

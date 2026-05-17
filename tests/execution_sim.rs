@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -73,6 +73,36 @@ fn map_symbol_address(map: &str, needle: &str) -> Option<u16> {
         let addr = line.split_whitespace().next()?;
         u16::from_str_radix(addr, 16).ok()
     })
+}
+
+fn code_symbol_pages(map: &str) -> BTreeSet<u16> {
+    let mut pages = BTreeSet::new();
+    let mut in_code = false;
+    for raw in map.lines() {
+        let line = raw.trim();
+        match line {
+            "Code Symbols" => {
+                in_code = true;
+                continue;
+            }
+            "Data Symbols" | "ROM Symbols" => {
+                in_code = false;
+                continue;
+            }
+            _ => {}
+        }
+        if !in_code {
+            continue;
+        }
+        if let Some(addr) = line
+            .split_whitespace()
+            .next()
+            .and_then(|addr| u16::from_str_radix(addr, 16).ok())
+        {
+            pages.insert(addr / 0x0800);
+        }
+    }
+    pages
 }
 
 fn run_fixture_to_symbol(target: &str, output: &Path, map: &str, stop_symbol: &str) -> Pic16Core {
@@ -1571,6 +1601,104 @@ void main(void) {{
 
         assert_eq!(symbol_u16(&core, &map, "result"), expected, "{name}");
     }
+}
+
+#[test]
+fn executes_phase31_page_crossing_q16_division_helpers() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase31-q16-page-cross.c",
+        r#"
+__ufixed16_16 ua;
+__ufixed16_16 ub;
+__ufixed16_16 ur;
+__fixed16_16 sa;
+__fixed16_16 sb;
+__fixed16_16 sr;
+
+void main(void) {
+    ua = 5.0uq16_16;
+    ub = 2.0uq16_16;
+    ur = ua / ub;
+    sa = -3.0q16_16;
+    sb = 2.0q16_16;
+    sr = sa / sb;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "ur"), 0x0002_8000);
+    assert_eq!(symbol_u32(&core, &map, "sr"), 0xFFFE_8000);
+    assert!(map.contains("page="));
+    assert!(code_symbol_pages(&map).len() > 1);
+}
+
+#[test]
+fn executes_phase31_page_crossing_float_rom_and_dispatcher_paths() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase31-float-rom-fnptr-page-cross.c",
+        r#"
+const __rom float calibration[] = {
+    1.0f,
+    1.5f,
+    2.0f
+};
+
+float value;
+unsigned char result;
+
+unsigned char pick(unsigned char raw) {
+    return raw + 1;
+}
+
+void main(void) {
+    unsigned char (*fn)(unsigned char);
+    unsigned char index;
+
+    fn = pick;
+    index = fn(1);
+    value = calibration[index];
+
+    if (value > 1.5f) {
+        result = 7;
+    } else {
+        result = 3;
+    }
+}
+"#,
+    );
+
+    assert_eq!(symbol_u8(&core, &map, "result"), 7);
+    assert_eq!(symbol_u32(&core, &map, "value"), 0x4000_0000);
+    assert!(map.contains("__fp_dispatch"));
+    assert!(map.contains("page="));
+    assert!(code_symbol_pages(&map).len() > 1);
+}
+
+#[test]
+fn executes_phase31_stack_trap_layout_with_stack_check() {
+    let (output, map) = compile_source_with_stack_check(
+        "pic16f877a",
+        "phase31-stack-trap-layout.c",
+        r#"
+unsigned char result;
+
+unsigned char inc(unsigned char value) {
+    return value + 1;
+}
+
+void main(void) {
+    result = inc(6);
+}
+"#,
+        true,
+    );
+    let core = run_fixture_to_symbol("pic16f877a", &output, &map, "__halt");
+
+    assert_eq!(symbol_u8(&core, &map, "result"), 7);
+    assert!(map.contains("__stack_overflow_trap"));
+    assert!(map.contains("page="));
 }
 
 #[test]

@@ -16,6 +16,13 @@ Always checked:
 - Intel HEX checksums are correct
 - EOF record exists
 
+Phase 31 adds backend layout validation before final HEX is accepted:
+
+- `goto` targets must match the currently tracked `PCLATH` page
+- `call` targets must match the currently tracked `PCLATH` page
+- `setpage` / `setpclpage` labels must resolve
+- unsafe page-crossing edges are hard backend errors before HEX emission
+
 `--verify-hex` prints the validation report. Validation errors are hard compile failures even when `--size` is not requested.
 
 This closes the Phase 25 gap where detailed resource reports were optional but invalid target output could still be generated for old oversized examples.

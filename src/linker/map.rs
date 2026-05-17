@@ -22,44 +22,65 @@ pub fn render_map(map: &MapFile) -> String {
         let _ = writeln!(output);
     }
     render_section(&mut output, "Code Symbols", &map.code_symbols);
-    render_grouped(&mut output, "  User Code", &map.code_symbols, |name| {
-        !name.starts_with("__rt_") && !name.starts_with("__")
-    });
+    render_grouped(
+        &mut output,
+        "  User Code",
+        true,
+        &map.code_symbols,
+        |name| !name.starts_with("__rt_") && !name.starts_with("__"),
+    );
     render_grouped(
         &mut output,
         "  Runtime Helpers",
+        true,
         &map.code_symbols,
         |name| name.starts_with("__rt_"),
     );
     render_grouped(
         &mut output,
         "  Internal / Vectors",
+        true,
         &map.code_symbols,
         |name| name.starts_with("__") && !name.starts_with("__rt_"),
     );
     let _ = writeln!(output);
     render_section(&mut output, "Data Symbols", &map.data_symbols);
-    render_grouped(&mut output, "  User Data", &map.data_symbols, |name| {
-        !name.starts_with("__")
-    });
+    render_grouped(
+        &mut output,
+        "  User Data",
+        false,
+        &map.data_symbols,
+        |name| !name.starts_with("__"),
+    );
     render_grouped(
         &mut output,
         "  String Literals",
+        false,
         &map.data_symbols,
         |name| name.starts_with("__strlit"),
     );
-    render_grouped(&mut output, "  ABI / Stack", &map.data_symbols, |name| {
-        name.starts_with("__abi.")
-            || name.starts_with("__stack.")
-            || name.starts_with("__stack_")
-            || name.starts_with("__frame_ptr")
-    });
-    render_grouped(&mut output, "  ISR Context", &map.data_symbols, |name| {
-        name.starts_with("__isr_ctx.")
-    });
+    render_grouped(
+        &mut output,
+        "  ABI / Stack",
+        false,
+        &map.data_symbols,
+        |name| {
+            name.starts_with("__abi.")
+                || name.starts_with("__stack.")
+                || name.starts_with("__stack_")
+                || name.starts_with("__frame_ptr")
+        },
+    );
+    render_grouped(
+        &mut output,
+        "  ISR Context",
+        false,
+        &map.data_symbols,
+        |name| name.starts_with("__isr_ctx."),
+    );
     let _ = writeln!(output);
     render_section(&mut output, "ROM Symbols", &map.rom_symbols);
-    render_grouped(&mut output, "  User ROM", &map.rom_symbols, |_| true);
+    render_grouped(&mut output, "  User ROM", true, &map.rom_symbols, |_| true);
     output
 }
 
@@ -73,8 +94,13 @@ fn render_section(output: &mut String, title: &str, symbols: &[(String, u16)]) {
 }
 
 /// Renders one filtered group of symbols with indentation for readability.
-fn render_grouped<F>(output: &mut String, title: &str, symbols: &[(String, u16)], mut include: F)
-where
+fn render_grouped<F>(
+    output: &mut String,
+    title: &str,
+    show_page: bool,
+    symbols: &[(String, u16)],
+    mut include: F,
+) where
     F: FnMut(&str) -> bool,
 {
     let group = symbols
@@ -86,7 +112,20 @@ where
     }
     let _ = writeln!(output, "{title}");
     for (name, addr) in group {
-        let _ = writeln!(output, "    {addr:04X}  {name}");
+        if show_page {
+            let _ = writeln!(
+                output,
+                "    {addr:04X}  {name}  page={}",
+                control_page(*addr)
+            );
+        } else {
+            let _ = writeln!(output, "    {addr:04X}  {name}");
+        }
     }
+}
+
+/// Returns the PIC16 program-control page selected by PCLATH<4:3>.
+const fn control_page(addr: u16) -> u8 {
+    ((addr >> 11) & 0x03) as u8
 }
 // SPDX-License-Identifier: GPL-3.0-or-later

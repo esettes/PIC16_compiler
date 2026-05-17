@@ -440,7 +440,7 @@ fn parse_symbol_line(line: &str) -> Option<(u16, String)> {
     if addr.len() != 4 || !addr.chars().all(|ch| ch.is_ascii_hexdigit()) {
         return None;
     }
-    let name = parts.collect::<Vec<_>>().join(" ");
+    let name = parts.next()?.to_string();
     if name.is_empty() {
         return None;
     }

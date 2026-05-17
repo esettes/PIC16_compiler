@@ -33,7 +33,17 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 30: ROM float tables and float static-data integration on top of Phase 29 dynamic float comparisons and 32-bit integer conversions, Phase 28 float hardening, Phase 27 basic finite software `float`, Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, and the earlier frontend/backend phases**.
+Current implementation is **Phase 31: backend page-safety and code layout hardening on top of Phase 30 ROM float tables, Phase 29 dynamic float comparisons and 32-bit integer conversions, Phase 28 float hardening, Phase 27 basic finite software `float`, Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, and the earlier frontend/backend phases**.
+
+Phase 31 scope:
+
+- page-safe backend emission for unconditional `goto` and `call` targets
+- centralized page-safe conditional branch helpers that do not rely on local stubs crossing page boundaries
+- final backend layout validation for raw `goto` / `call` edges after labels and addresses are known
+- `.map` code symbols include page metadata such as `page=1`
+- `.lst` page-control pseudo-ops annotate page-safe control-flow targets
+- simulator regressions cover Q16.16 helpers, float/ROM/function-pointer paths, and stack-check trap layout across multi-page programs
+- no new C syntax, no `double`, no math library, no recursion, and no broad optimization work
 
 Phase 30 scope:
 

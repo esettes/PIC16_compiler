@@ -78,6 +78,7 @@ For execution tests, SFRs like `PORTA`, `PORTB`, and `TRIS*` behave as ordinary 
 - `goto` / `call` combine their encoded target with `PCLATH<4:3>`
 - `retlw` sets `W` and pops the return stack
 - `retfie` currently behaves like a return-stack pop for execution-validation purposes
+- Phase 31 page-safety tests rely on this real `PCLATH` behavior to catch stale-page backend bugs
 
 Test runs normally stop by:
 
