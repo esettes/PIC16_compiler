@@ -5514,12 +5514,16 @@ fn phase33_runtime_helper_report_and_profile_cli() {
         r#"
 float raw;
 float gain;
-float result;
+unsigned char result;
 
 void main(void) {
     raw = 1.5f;
     gain = 2.0f;
-    result = raw * gain;
+    if (raw < gain) {
+        result = 1;
+    } else {
+        result = 0;
+    }
 }
 "#,
     )
@@ -5562,7 +5566,7 @@ void main(void) {
     let report = fs::read_to_string(report_path).expect("memory report");
     assert!(report.contains("Runtime Helper Contributors"));
     assert!(report.contains("Runtime Helper Dependency Graph"));
-    assert!(report.contains("__rt_f32_mul"));
+    assert!(report.contains("__rt_f32_cmp"));
     assert!(report.contains("category=float"));
     let map = read_artifact(&out_hex, "map");
     assert!(map.contains("Runtime helper words by category"));

@@ -1761,6 +1761,36 @@ void main(void) {
 }
 
 #[test]
+fn executes_phase33_pruned_runtime_regression_paths() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase33-runtime-regression.c",
+        r#"
+unsigned long ua;
+unsigned long ub;
+unsigned long uresult;
+__fixed16_16 qa;
+__fixed16_16 qb;
+__fixed16_16 qresult;
+
+void main(void) {
+    ua = 100000UL;
+    ub = 4UL;
+    uresult = ua / ub;
+    qa = 3.0q16_16;
+    qb = 2.0q16_16;
+    qresult = qa / qb;
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "uresult"), 25000);
+    assert_eq!(symbol_u32(&core, &map, "qresult"), 0x0001_8000);
+    assert!(map.contains("__rt_div_u32"));
+    assert!(map.contains("__rt_div_q16_16"));
+}
+
+#[test]
 fn executes_phase28_dynamic_unsigned_int_float_round_trip() {
     let (core, map) = run_source(
         "pic16f877a",

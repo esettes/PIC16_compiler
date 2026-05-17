@@ -1,9 +1,13 @@
-float raw;
-float gain;
-float result;
+float temperature;
+float threshold;
+unsigned char alarm;
 
 void main(void) {
-    raw = 1.5f;
-    gain = 2.0f;
-    result = raw * gain;
+    temperature = 31.5f;
+    threshold = 30.0f;
+    if (temperature > threshold) {
+        alarm = 1;
+    } else {
+        alarm = 0;
+    }
 }
