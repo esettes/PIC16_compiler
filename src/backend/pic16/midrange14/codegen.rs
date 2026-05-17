@@ -6374,8 +6374,8 @@ fn emit_runtime_budget_warning(
     let percent = (u32::from(report.summary.runtime_helper_words) * 100)
         / u32::from(report.summary.program_words_available.max(1));
     let threshold = match options.runtime_profile {
-        RuntimeProfile::Small => 20,
-        RuntimeProfile::Balanced | RuntimeProfile::Fast => 30,
+        RuntimeProfile::Small => 30,
+        RuntimeProfile::Balanced | RuntimeProfile::Fast => 75,
     };
     if percent < threshold {
         return;
