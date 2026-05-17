@@ -6380,7 +6380,9 @@ fn emit_runtime_budget_warning(
     if percent < threshold {
         return;
     }
-    diagnostics.push(Diagnostic {
+    // Advisory resource-budget warnings intentionally do not participate in
+    // `-Werror`; resource overflow remains a hard error separately.
+    diagnostics.diagnostics.push(Diagnostic {
         severity: Severity::Warning,
         stage: "backend",
         message: format!(
