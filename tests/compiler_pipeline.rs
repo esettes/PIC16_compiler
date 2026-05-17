@@ -5502,6 +5502,142 @@ void main(void) {
 }
 
 #[test]
+/// Verifies Phase 33 helper cost reports include categories, graph data, and runtime profiles.
+fn phase33_runtime_helper_report_and_profile_cli() {
+    let out_dir = temp_dir_path("phase33-runtime-report");
+    fs::create_dir_all(&out_dir).expect("out dir");
+    let out_hex = out_dir.join("runtime.hex");
+    let report_path = out_dir.join("runtime.mem");
+    let source = out_dir.join("runtime.c");
+    fs::write(
+        &source,
+        r#"
+float raw;
+float gain;
+float result;
+
+void main(void) {
+    raw = 1.5f;
+    gain = 2.0f;
+    result = raw * gain;
+}
+"#,
+    )
+    .expect("fixture");
+
+    let output = Command::new(picc_bin())
+        .current_dir(repo("."))
+        .args([
+            "--target",
+            "pic16f877a",
+            "-Wall",
+            "-Wextra",
+            "-O2",
+            "-I",
+            "include",
+            "--runtime-profile",
+            "small",
+            "--size",
+            "--memory-report",
+            "--memory-report-file",
+        ])
+        .arg(&report_path)
+        .args(["--map", "--list-file", "-o"])
+        .arg(&out_hex)
+        .arg(&source)
+        .output()
+        .expect("run picc runtime report");
+
+    if !output.status.success() {
+        panic!(
+            "picc failed: stdout={:?} stderr={:?}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Runtime helpers:"));
+    assert!(stdout.contains("float:"));
+    let report = fs::read_to_string(report_path).expect("memory report");
+    assert!(report.contains("Runtime Helper Contributors"));
+    assert!(report.contains("Runtime Helper Dependency Graph"));
+    assert!(report.contains("__rt_f32_mul"));
+    assert!(report.contains("category=float"));
+    let map = read_artifact(&out_hex, "map");
+    assert!(map.contains("Runtime helper words by category"));
+    assert!(map.contains("    float"));
+    assert_hex_is_programmable(&out_hex);
+}
+
+#[test]
+/// Verifies Phase 33 does not emit helpers just because runtime-capable types are present.
+fn phase33_prunes_unused_runtime_helpers() {
+    let input = temp_file("phase33-pruned-helpers.c");
+    fs::write(
+        &input,
+        r#"
+float f = 1.5f;
+long l = 3L;
+__fixed16_16 q = 1.0q16_16;
+
+void main(void) {
+}
+"#,
+    )
+    .expect("fixture");
+    let output = temp_file("phase33-pruned-helpers.hex");
+    execute(CliOptions {
+        command: CliCommand::Compile(CompileCommand {
+            target: "pic16f877a".to_string(),
+            input,
+            output: output.clone(),
+            include_dirs: vec![repo("include")],
+            defines: BTreeMap::new(),
+            optimization: OptimizationLevel::O2,
+            artifacts: OutputArtifacts {
+                map: true,
+                list_file: true,
+                size: true,
+                memory_report: true,
+                ..OutputArtifacts::default()
+            },
+            verbose: false,
+            opt_report: false,
+            stack_check: false,
+            stack_report: false,
+            stack_report_file: None,
+            warning_profile: WarningProfile::default(),
+        }),
+    })
+    .expect("compile pruned helper fixture");
+
+    let map = read_artifact(&output, "map");
+    assert!(!map.contains("__rt_f32_add"));
+    assert!(!map.contains("__rt_f32_mul"));
+    assert!(!map.contains("__rt_div_q16_16"));
+    assert!(!map.contains("__rt_div_u32"));
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies Phase 33 runtime-size examples remain buildable.
+fn phase33_runtime_size_examples_compile_via_picc() {
+    for (target, example) in [
+        ("pic16f877a", "examples/pic16f877a/runtime_size_float.c"),
+        ("pic16f877a", "examples/pic16f877a/runtime_size_fixed.c"),
+        ("pic16f628a", "examples/pic16f628a/runtime_size_small.c"),
+    ] {
+        let output = compile_example_via_picc_cli_with_extra_args(
+            target,
+            example,
+            &["--size", "--memory-report", "--runtime-profile", "balanced"],
+        );
+        assert_hex_is_programmable(&output);
+    }
+}
+
+#[test]
 /// Verifies `--size`, `--memory-report`, and `--memory-report-file` expose helper cost.
 fn phase25_resource_report_cli_outputs_helper_contribution() {
     let out_dir = temp_dir_path("phase25-memory-report");

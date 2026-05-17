@@ -662,7 +662,9 @@ pub fn binary_helper(op: BinaryOp, ty: Type) -> Option<RuntimeHelper> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeHelper, binary_helper};
+    use super::{
+        RuntimeHelper, RuntimeHelperCategory, binary_helper, validate_helper_dependency_graph,
+    };
     use crate::frontend::ast::BinaryOp;
     use crate::frontend::types::{ScalarType, Type};
 
@@ -681,6 +683,20 @@ mod tests {
             binary_helper(BinaryOp::ShiftRight, Type::new(ScalarType::I16)),
             Some(RuntimeHelper::ShrI16)
         );
+    }
+
+    #[test]
+    /// Verifies Phase 33 catalog metadata is centralized and dependency graph validates.
+    fn catalog_metadata_classifies_runtime_cost() {
+        let float = RuntimeHelper::F32Mul.catalog_entry();
+        assert_eq!(float.category, RuntimeHelperCategory::Float);
+        assert_eq!(float.required_by, "finite f32 arithmetic/comparison");
+        assert!(float.estimated_words > 0);
+
+        let fixed = RuntimeHelper::DivQ16_16.catalog_entry();
+        assert_eq!(fixed.category, RuntimeHelperCategory::Fixed);
+
+        assert!(validate_helper_dependency_graph(RuntimeHelper::ALL).is_ok());
     }
 }
 // SPDX-License-Identifier: GPL-3.0-or-later
