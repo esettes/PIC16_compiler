@@ -1234,7 +1234,6 @@ void main(void) {
 }
 
 #[test]
-#[ignore = "existing Phase 24 UQ16.16 dynamic division helper returns zero; keep disabled until helper is repaired"]
 fn executes_phase24_uq16_16_dynamic_division() {
     let (core, map) = run_source(
         "pic16f877a",
@@ -1253,6 +1252,38 @@ void main(void) {
     );
 
     assert_eq!(symbol_u32(&core, &map, "result"), 0x0001_8000);
+}
+
+#[test]
+fn executes_phase30_5_uq16_16_dynamic_division_regressions() {
+    for (name, lhs, rhs, expected) in [
+        ("3_2", "3.0uq16_16", "2.0uq16_16", 0x0001_8000),
+        ("1_2", "1.0uq16_16", "2.0uq16_16", 0x0000_8000),
+        ("5_2", "5.0uq16_16", "2.0uq16_16", 0x0002_8000),
+        ("half_half", "0.5uq16_16", "0.5uq16_16", 0x0001_0000),
+        ("div_zero", "3.0uq16_16", "__uq16_16(0)", 0),
+    ] {
+        let source = format!(
+            r#"
+__ufixed16_16 a;
+__ufixed16_16 b;
+__ufixed16_16 result;
+
+void main(void) {{
+    a = {lhs};
+    b = {rhs};
+    result = a / b;
+}}
+"#,
+        );
+        let (core, map) = run_source(
+            "pic16f877a",
+            &format!("phase30-5-uq16-dynamic-div-{name}.c"),
+            &source,
+        );
+
+        assert_eq!(symbol_u32(&core, &map, "result"), expected, "{name}");
+    }
 }
 
 #[test]
@@ -1488,7 +1519,6 @@ void main(void) {
 }
 
 #[test]
-#[ignore = "existing Phase 28 signed int/float dynamic cast round trip returns raw float bits; keep disabled until helper is repaired"]
 fn executes_phase28_dynamic_signed_int_float_round_trip() {
     let (core, map) = run_source(
         "pic16f877a",
@@ -1507,6 +1537,40 @@ void main(void) {
     );
 
     assert_eq!(symbol_u16(&core, &map, "si_result"), 0xFFFD);
+}
+
+#[test]
+fn executes_phase30_5_dynamic_signed_int_float_round_trip_regressions() {
+    for (name, input, expected) in [
+        ("zero", "0", 0x0000),
+        ("one", "1", 0x0001),
+        ("minus_one", "-1", 0xFFFF),
+        ("pos", "123", 0x007B),
+        ("neg", "-123", 0xFF85),
+        ("max", "32767", 0x7FFF),
+        ("min", "-32768", 0x8000),
+    ] {
+        let source = format!(
+            r#"
+int input;
+float temp;
+int result;
+
+void main(void) {{
+    input = {input};
+    temp = (float)input;
+    result = (int)temp;
+}}
+"#,
+        );
+        let (core, map) = run_source(
+            "pic16f877a",
+            &format!("phase30-5-float-int-casts-{name}.c"),
+            &source,
+        );
+
+        assert_eq!(symbol_u16(&core, &map, "result"), expected, "{name}");
+    }
 }
 
 #[test]

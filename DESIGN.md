@@ -127,6 +127,8 @@ Phase 28 keeps the finite-only model and hardens the unsafe edges:
 - cast helpers are listed as `float helper` in map, listing, memory report, and stack report data
 - ISR policy remains conservative: float helper casts/arithmetic/comparisons are rejected
 
+Phase 30.5 repairs the signed `int` round-trip path by routing dynamic integer/float casts through the Phase 29 32-bit helpers after sign/zero extension. Fixed-point float casts still use the Q16.16 bridge.
+
 ### Phase 29 Float Runtime Completion
 
 Phase 29 fills the main remaining finite-float runtime gaps:
@@ -135,6 +137,7 @@ Phase 29 fills the main remaining finite-float runtime gaps:
 - comparisons work in assignment and control-flow lowering (`if`, `while`, `for`)
 - dynamic `long` / `unsigned long` to `float` use `__rt_i32_to_f32` and `__rt_u32_to_f32`
 - dynamic `float` to `long` / `unsigned long` use `__rt_f32_to_i32` and `__rt_f32_to_u32`
+- dynamic narrower integer float casts sign/zero extend to the same helpers and truncate back after conversion
 - float-to-integer casts truncate toward zero; dynamic negative float to unsigned long returns zero
 - helper costs remain visible to Phase 25 resource fitting
 

@@ -6046,13 +6046,13 @@ void main(void) {
     let lst = fs::read_to_string(output.with_extension("lst")).expect("lst");
     let memory = fs::read_to_string(memory_report).expect("memory report");
     let stack = fs::read_to_string(stack_report).expect("stack report");
-    assert!(map.contains("__rt_q16_16_to_f32"));
-    assert!(map.contains("__rt_f32_to_q16_16"));
-    assert!(lst.contains("__rt_q16_16_to_f32"));
-    assert!(lst.contains("__rt_f32_to_q16_16"));
+    assert!(map.contains("__rt_i32_to_f32"));
+    assert!(map.contains("__rt_f32_to_i32"));
+    assert!(lst.contains("__rt_i32_to_f32"));
+    assert!(lst.contains("__rt_f32_to_i32"));
     assert!(memory.contains("float helper"));
-    assert!(memory.contains("__rt_q16_16_to_f32"));
-    assert!(memory.contains("__rt_f32_to_q16_16"));
+    assert!(memory.contains("__rt_i32_to_f32"));
+    assert!(memory.contains("__rt_f32_to_i32"));
     assert!(stack.contains("helper_extra="));
 }
 

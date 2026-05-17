@@ -1,6 +1,6 @@
 # Phase 29 Float / 32-bit Integer Conversions
 
-Phase 29 adds runtime helpers for dynamic 32-bit integer and float casts:
+Phase 29 adds runtime helpers for dynamic 32-bit integer and float casts. Phase 30.5 also uses these helpers for narrower integer casts by sign/zero-extending `char`/`int` to 32 bits before integer-to-float conversion, and narrowing the 32-bit helper result after float-to-integer conversion:
 
 - `__rt_i32_to_f32`
 - `__rt_u32_to_f32`

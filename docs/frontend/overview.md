@@ -52,8 +52,8 @@ Current Phase 18 frontend surface:
 - accepts one-dimensional fixed-point `const __rom` arrays for direct indexing
 - folds Q16.16 fixed multiply/divide constants and accepts dynamic Q16.16 helper-backed multiply/divide outside ISRs
 - accepts `float` declarations, finite decimal float literals, and constant float casts/comparisons/arithmetic
-- accepts Phase 28 dynamic 16-bit integer/fixed-point float casts through helper lowering
-- accepts Phase 29 dynamic 32-bit integer float casts and dynamic float comparisons
+- accepts dynamic integer/fixed-point float casts through helper lowering
+- accepts Phase 29 dynamic float comparisons
 - accepts Phase 30 file-scope `const __rom float[]` tables with direct indexing
 - rejects implicit mixed float/integer arithmetic, float bitfields, float switch expressions, ROM/data pointer mixing, and helper-backed float work in ISRs
 - validates pointer relational comparisons for compatible data-space pointer types

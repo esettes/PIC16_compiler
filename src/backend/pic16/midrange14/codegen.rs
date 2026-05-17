@@ -5385,6 +5385,7 @@ impl<'a> CodegenContext<'a> {
             self.program.push(AsmLine::Label(next_label));
         }
         self.decrement_current_frame_value(count_offset, Type::new(ScalarType::U8));
+        self.restore_code_page_after_call();
         self.branch_to_label(&loop_label);
         self.program.push(AsmLine::Label(finish_label));
         if signed {
@@ -5546,6 +5547,7 @@ impl<'a> CodegenContext<'a> {
         self.set_current_frame_bit(dividend_offset, 0);
         self.program.push(AsmLine::Label(next_label));
         self.decrement_current_frame_value(count_offset, Type::new(ScalarType::U8));
+        self.restore_code_page_after_call();
         self.branch_to_label(&loop_label);
     }
 

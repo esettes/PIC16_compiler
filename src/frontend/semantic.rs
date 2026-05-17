@@ -5430,8 +5430,14 @@ impl<'a> SemanticAnalyzer<'a> {
         }
 
         if target_ty.is_float() {
-            if matches!(expr.ty.scalar, ScalarType::I32 | ScalarType::U32) {
-                return self.build_i32_to_float_cast_expr(expr, target_ty, span);
+            if expr.ty.is_integer() {
+                let wide_ty = Type::new(if expr.ty.is_unsigned() {
+                    ScalarType::U32
+                } else {
+                    ScalarType::I32
+                });
+                let wide_expr = self.coerce_expr(expr, wide_ty, diagnostics, context, false);
+                return self.build_i32_to_float_cast_expr(wide_expr, target_ty, span);
             }
             let bridge_scalar = if expr.ty.is_unsigned() {
                 ScalarType::UQ16_16
@@ -5444,8 +5450,14 @@ impl<'a> SemanticAnalyzer<'a> {
         }
 
         if expr.ty.is_float() {
-            if matches!(target_ty.scalar, ScalarType::I32 | ScalarType::U32) {
-                return self.build_float_to_i32_cast_expr(expr, target_ty, span);
+            if target_ty.is_integer() {
+                let wide_ty = Type::new(if target_ty.is_unsigned() {
+                    ScalarType::U32
+                } else {
+                    ScalarType::I32
+                });
+                let wide_expr = self.build_float_to_i32_cast_expr(expr, wide_ty, span);
+                return self.coerce_expr(wide_expr, target_ty, diagnostics, context, false);
             }
             let q16_expr = self.build_float_to_q16_cast_expr(expr, span);
             if target_ty == q16_expr.ty {
