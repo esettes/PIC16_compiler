@@ -514,6 +514,12 @@ fn print_optimization_report(level: OptimizationLevel, report: &OptimizationRepo
         "  Helper calls avoided: {}",
         report.backend.helper_calls_avoided
     );
+    println!(
+        "  Linker relaxation: passes={} removed_setpages={} same_page_transitions={}",
+        report.backend.relaxation.passes,
+        report.backend.relaxation.removed_redundant_setpages,
+        report.backend.relaxation.relaxed_same_page_transitions
+    );
 }
 
 /// Prints one compact stack summary suitable for `--opt-report`.
