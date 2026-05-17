@@ -11,6 +11,34 @@ pub struct EncoderOutput {
     pub labels: BTreeMap<String, u16>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LinkerRelaxationStats {
+    pub passes: usize,
+    pub removed_redundant_setpages: usize,
+    pub relaxed_same_page_transitions: usize,
+}
+
+/// Removes provably redundant page setup pseudo-ops before final encoding.
+pub fn relax_page_setup(
+    program: &mut AsmProgram,
+    diagnostics: &mut DiagnosticBag,
+) -> LinkerRelaxationStats {
+    let mut total = LinkerRelaxationStats::default();
+    for pass in 0..8 {
+        let Some(labels) = collect_labels(program, diagnostics) else {
+            return total;
+        };
+        let (changed, stats) = relax_page_setup_once(program, &labels, diagnostics);
+        total.passes = pass + 1;
+        total.removed_redundant_setpages += stats.removed_redundant_setpages;
+        total.relaxed_same_page_transitions += stats.relaxed_same_page_transitions;
+        if diagnostics.has_errors() || !changed {
+            break;
+        }
+    }
+    total
+}
+
 /// Resolves labels and encodes the assembly program into 14-bit PIC16 words.
 pub fn encode_program(
     program: &AsmProgram,
@@ -135,6 +163,83 @@ pub fn encode_program(
     }
 
     Some(EncoderOutput { words, labels })
+}
+
+fn relax_page_setup_once(
+    program: &mut AsmProgram,
+    labels: &BTreeMap<String, u16>,
+    diagnostics: &mut DiagnosticBag,
+) -> (bool, LinkerRelaxationStats) {
+    let mut relaxed = Vec::with_capacity(program.lines.len());
+    let mut pc = 0u16;
+    let mut current_page = Some(control_page(pc));
+    let mut stats = LinkerRelaxationStats::default();
+    let mut changed = false;
+
+    for line in &program.lines {
+        match line {
+            AsmLine::Org(addr) => {
+                pc = *addr;
+                current_page = Some(control_page(pc));
+                relaxed.push(line.clone());
+            }
+            AsmLine::Label(label) => {
+                current_page = Some(control_page(pc));
+                relaxed.push(AsmLine::Label(label.clone()));
+            }
+            AsmLine::Comment(_) => relaxed.push(line.clone()),
+            AsmLine::Instr(AsmInstr::SetPage(label)) => {
+                let Some(addr) = labels.get(label).copied() else {
+                    diagnostics.error(
+                        "assembler",
+                        None,
+                        format!("undefined label `{label}`"),
+                        None,
+                    );
+                    return (changed, stats);
+                };
+                let target_page = control_page(addr);
+                if current_page == Some(target_page) {
+                    changed = true;
+                    stats.removed_redundant_setpages += 1;
+                    stats.relaxed_same_page_transitions += 1;
+                    pc += AsmInstr::SetPage(label.clone()).word_len();
+                    continue;
+                }
+                current_page = Some(target_page);
+                pc += AsmInstr::SetPage(label.clone()).word_len();
+                relaxed.push(line.clone());
+            }
+            AsmLine::Instr(AsmInstr::SetPclPage(label)) => {
+                let Some(addr) = labels.get(label).copied() else {
+                    diagnostics.error(
+                        "assembler",
+                        None,
+                        format!("undefined label `{label}`"),
+                        None,
+                    );
+                    return (changed, stats);
+                };
+                current_page = Some(control_page(addr));
+                pc += AsmInstr::SetPclPage(label.clone()).word_len();
+                relaxed.push(line.clone());
+            }
+            AsmLine::Instr(instr) => {
+                if let AsmInstr::Call(label) = instr
+                    && let Some(addr) = labels.get(label).copied()
+                {
+                    current_page = Some(control_page(addr));
+                }
+                pc += instr.word_len();
+                relaxed.push(line.clone());
+            }
+        }
+    }
+
+    if changed {
+        program.lines = relaxed;
+    }
+    (changed, stats)
 }
 
 /// Collects final program-counter addresses for every declared assembly label.

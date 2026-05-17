@@ -19,7 +19,7 @@ use crate::ir::model::{IrCondition, IrFunction, IrInstr, IrProgram, IrTerminator
 use crate::linker::map::MapFile;
 
 use super::asm::{AsmInstr, AsmLine, AsmProgram, Dest, PeepholeStats};
-use super::encoder::encode_program;
+use super::encoder::{LinkerRelaxationStats, encode_program, relax_page_setup};
 use super::runtime::{RuntimeHelper, RuntimeHelperInfo, binary_helper};
 
 const STATUS_ADDR: u16 = 0x03;
@@ -45,6 +45,7 @@ pub struct BackendOutput {
 pub struct BackendOptimizationReport {
     pub peephole: PeepholeStats,
     pub helper_calls_avoided: usize,
+    pub relaxation: LinkerRelaxationStats,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -65,6 +66,8 @@ pub struct ResourceReport {
     pub size_text: String,
     pub text: String,
     pub map_lines: Vec<String>,
+    pub page_layout: [PageLayoutSummary; 4],
+    pub code_sections: Vec<CodeSectionSummary>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -84,6 +87,28 @@ pub struct ResourceSummary {
     pub helpers_included: u16,
     pub function_pointer_dispatchers: u16,
     pub unknown_function_pointer_target_sets: u16,
+    pub page_setup_removed: u16,
+    pub page_relaxation_passes: u16,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PageLayoutSummary {
+    pub page: u8,
+    pub start: u16,
+    pub end: u16,
+    pub used_words: u16,
+    pub free_words: u16,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CodeSectionSummary {
+    pub name: String,
+    pub kind: String,
+    pub start: u16,
+    pub end: u16,
+    pub words: u16,
+    pub page_start: u8,
+    pub page_end: u8,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -322,9 +347,13 @@ pub fn compile_program(
         return None;
     }
 
-    let optimization = codegen.optimize_program();
+    let mut optimization = codegen.optimize_program();
     codegen.emit_stack_overflow_trap();
     codegen.emit_rom_objects(diagnostics);
+    if diagnostics.has_errors() {
+        return None;
+    }
+    optimization.relaxation = relax_page_setup(&mut codegen.program, diagnostics);
     if diagnostics.has_errors() {
         return None;
     }
@@ -341,6 +370,7 @@ pub fn compile_program(
         &encoded.words,
         &encoded.labels,
         &stack_report.summary,
+        optimization.relaxation,
     );
     validate_resource_fit(
         target,
@@ -357,6 +387,8 @@ pub fn compile_program(
         &layout,
         &encoded.labels,
         resource_report.map_lines.clone(),
+        &resource_report.code_sections,
+        &resource_report.page_layout,
     );
     Some(BackendOutput {
         program: codegen.program,
@@ -839,6 +871,7 @@ impl<'a> CodegenContext<'a> {
         BackendOptimizationReport {
             peephole: self.program.peephole_optimize(),
             helper_calls_avoided: self.helper_calls_avoided,
+            relaxation: LinkerRelaxationStats::default(),
         }
     }
 
@@ -6088,9 +6121,12 @@ fn build_resource_report(
     words: &BTreeMap<u16, u16>,
     labels: &BTreeMap<String, u16>,
     stack: &StackReportSummary,
+    relaxation: LinkerRelaxationStats,
 ) -> ResourceReport {
     let contributions =
         collect_resource_contributions(target, typed_program, layout, words, labels);
+    let page_layout = build_page_layout(target, words);
+    let code_sections = build_code_sections(&contributions);
     let program_words_used = u16::try_from(
         words
             .keys()
@@ -6150,13 +6186,25 @@ fn build_resource_report(
         function_pointer_dispatchers: u16::try_from(function_pointer_dispatchers)
             .unwrap_or(u16::MAX),
         unknown_function_pointer_target_sets: stack.unknown_function_pointer_target_sets,
+        page_setup_removed: u16::try_from(relaxation.removed_redundant_setpages)
+            .unwrap_or(u16::MAX),
+        page_relaxation_passes: u16::try_from(relaxation.passes).unwrap_or(u16::MAX),
     };
 
     ResourceReport {
         summary,
-        size_text: render_size_summary(target, &summary),
-        text: render_memory_report(target, layout, stack, &summary, &contributions),
-        map_lines: render_resource_map_lines(target, &summary),
+        size_text: render_size_summary(target, &summary, &page_layout),
+        text: render_memory_report(
+            target,
+            layout,
+            stack,
+            &summary,
+            &contributions,
+            &page_layout,
+        ),
+        map_lines: render_resource_map_lines(target, &summary, &page_layout),
+        page_layout,
+        code_sections,
     }
 }
 
@@ -6263,7 +6311,11 @@ fn validate_resource_fit(
     }
 }
 
-fn render_size_summary(target: &TargetDevice, summary: &ResourceSummary) -> String {
+fn render_size_summary(
+    target: &TargetDevice,
+    summary: &ResourceSummary,
+    pages: &[PageLayoutSummary; 4],
+) -> String {
     let mut output = String::new();
     let _ = writeln!(output, "Target: {}", target.name.to_ascii_uppercase());
     let _ = writeln!(
@@ -6291,6 +6343,26 @@ fn render_size_summary(target: &TargetDevice, summary: &ResourceSummary) -> Stri
     );
     let _ = writeln!(output, "ROM table words: {}", summary.rom_table_words);
     let _ = writeln!(output, "Helpers included: {}", summary.helpers_included);
+    let page_text = pages
+        .iter()
+        .filter(|page| page.used_words != 0)
+        .map(|page| format!("page {}: {} used", page.page, page.used_words))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let _ = writeln!(
+        output,
+        "Page layout: {}",
+        if page_text.is_empty() {
+            "empty".to_string()
+        } else {
+            page_text
+        }
+    );
+    let _ = writeln!(
+        output,
+        "Page setup relaxation: removed {} setpage(s) in {} pass(es)",
+        summary.page_setup_removed, summary.page_relaxation_passes
+    );
     output
 }
 
@@ -6300,6 +6372,7 @@ fn render_memory_report(
     stack: &StackReportSummary,
     summary: &ResourceSummary,
     contributions: &[ResourceContribution],
+    pages: &[PageLayoutSummary; 4],
 ) -> String {
     let mut output = String::new();
     let _ = writeln!(output, "Memory report");
@@ -6351,6 +6424,11 @@ fn render_memory_report(
         stack.function_pointer_targets,
         stack.unknown_function_pointer_target_sets
     );
+    let _ = writeln!(
+        output,
+        "page setup relaxation: removed_setpages={} passes={}",
+        summary.page_setup_removed, summary.page_relaxation_passes
+    );
     let _ = writeln!(output);
     render_memory_ranges(&mut output, "allocatable GPR", target.allocatable_gpr);
     render_memory_ranges(&mut output, "shared GPR", target.shared_gpr);
@@ -6365,6 +6443,17 @@ fn render_memory_report(
         "default stack candidate: 0x{:04X}..0x{:04X}",
         target.default_stack_region.start, target.default_stack_region.end
     );
+
+    let _ = writeln!(output);
+    let _ = writeln!(output, "Page layout");
+    let _ = writeln!(output, "-----------");
+    for page in pages {
+        let _ = writeln!(
+            output,
+            "page {}: 0x{:04X}..0x{:04X} used={} free={}",
+            page.page, page.start, page.end, page.used_words, page.free_words
+        );
+    }
 
     let _ = writeln!(output);
     let _ = writeln!(output, "Program sections");
@@ -6430,8 +6519,12 @@ fn render_memory_report(
     output
 }
 
-fn render_resource_map_lines(target: &TargetDevice, summary: &ResourceSummary) -> Vec<String> {
-    vec![
+fn render_resource_map_lines(
+    target: &TargetDevice,
+    summary: &ResourceSummary,
+    pages: &[PageLayoutSummary; 4],
+) -> Vec<String> {
+    let mut lines = vec![
         format!("Target: {}", target.name.to_ascii_uppercase()),
         format!(
             "Program words: {} / {}",
@@ -6456,7 +6549,18 @@ fn render_resource_map_lines(target: &TargetDevice, summary: &ResourceSummary) -
             "Unknown function pointer target sets: {}",
             summary.unknown_function_pointer_target_sets
         ),
-    ]
+        format!(
+            "Page setup relaxation: removed {} setpage(s) in {} pass(es)",
+            summary.page_setup_removed, summary.page_relaxation_passes
+        ),
+    ];
+    for page in pages {
+        lines.push(format!(
+            "Page {} words: {} used / {} free (0x{:04X}..0x{:04X})",
+            page.page, page.used_words, page.free_words, page.start, page.end
+        ));
+    }
+    lines
 }
 
 fn render_memory_ranges(output: &mut String, title: &str, ranges: &[MemoryRange]) {
@@ -6475,6 +6579,54 @@ fn render_memory_ranges(output: &mut String, title: &str, ranges: &[MemoryRange]
 
 fn control_page(addr: u16) -> u8 {
     ((addr >> 11) & 0x03) as u8
+}
+
+fn page_range(page: u8) -> (u16, u16) {
+    let start = u16::from(page) * 0x0800;
+    (start, start + 0x07FF)
+}
+
+fn build_page_layout(
+    target: &TargetDevice,
+    words: &BTreeMap<u16, u16>,
+) -> [PageLayoutSummary; 4] {
+    let mut pages = [PageLayoutSummary::default(); 4];
+    for page in 0u8..4 {
+        let (start, end) = page_range(page);
+        let available = (start..=end)
+            .filter(|addr| target.program_memory.contains(*addr))
+            .count() as u16;
+        let used = words
+            .keys()
+            .filter(|addr| **addr >= start && **addr <= end && target.program_memory.contains(**addr))
+            .count() as u16;
+        pages[usize::from(page)] = PageLayoutSummary {
+            page,
+            start,
+            end,
+            used_words: used,
+            free_words: available.saturating_sub(used),
+        };
+    }
+    pages
+}
+
+fn build_code_sections(contributions: &[ResourceContribution]) -> Vec<CodeSectionSummary> {
+    contributions
+        .iter()
+        .map(|item| {
+            let end = item.start.saturating_add(item.words.saturating_sub(1));
+            CodeSectionSummary {
+                name: item.name.clone(),
+                kind: item.kind.to_string(),
+                start: item.start,
+                end,
+                words: item.words,
+                page_start: control_page(item.start),
+                page_end: control_page(end),
+            }
+        })
+        .collect()
 }
 
 fn collect_resource_contributions(
@@ -6855,6 +7007,8 @@ fn build_map(
     layout: &StorageLayout,
     labels: &BTreeMap<String, u16>,
     resource_lines: Vec<String>,
+    sections: &[CodeSectionSummary],
+    pages: &[PageLayoutSummary; 4],
 ) -> MapFile {
     let rom_label_names = typed_program
         .symbols
@@ -6965,10 +7119,40 @@ fn build_map(
 
     MapFile {
         resource_lines,
+        code_layout_lines: render_code_layout_map_lines(sections, pages),
         code_symbols,
         data_symbols,
         rom_symbols,
     }
+}
+
+fn render_code_layout_map_lines(
+    sections: &[CodeSectionSummary],
+    pages: &[PageLayoutSummary; 4],
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    for page in pages {
+        lines.push(format!(
+            "page {}: used={} free={} range=0x{:04X}..0x{:04X}",
+            page.page, page.used_words, page.free_words, page.start, page.end
+        ));
+        for section in sections
+            .iter()
+            .filter(|section| section.page_start <= page.page && section.page_end >= page.page)
+        {
+            lines.push(format!(
+                "  0x{:04X}..0x{:04X} page {}..{} {:>4} words {:<27} {}",
+                section.start,
+                section.end,
+                section.page_start,
+                section.page_end,
+                section.words,
+                section.kind,
+                section.name
+            ));
+        }
+    }
+    lines
 }
 
 /// Formats one data symbol with simple qualifiers that help map/listing readers.

@@ -5,6 +5,7 @@ use std::fmt::Write;
 #[derive(Clone, Debug, Default)]
 pub struct MapFile {
     pub resource_lines: Vec<String>,
+    pub code_layout_lines: Vec<String>,
     pub code_symbols: Vec<(String, u16)>,
     pub data_symbols: Vec<(String, u16)>,
     pub rom_symbols: Vec<(String, u16)>,
@@ -17,6 +18,14 @@ pub fn render_map(map: &MapFile) -> String {
         let _ = writeln!(output, "Memory Summary");
         let _ = writeln!(output, "--------------");
         for line in &map.resource_lines {
+            let _ = writeln!(output, "{line}");
+        }
+        let _ = writeln!(output);
+    }
+    if !map.code_layout_lines.is_empty() {
+        let _ = writeln!(output, "Code Layout");
+        let _ = writeln!(output, "-----------");
+        for line in &map.code_layout_lines {
             let _ = writeln!(output, "{line}");
         }
         let _ = writeln!(output);
