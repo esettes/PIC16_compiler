@@ -69,6 +69,7 @@ pub enum RuntimeHelper {
     U32ToF32,
     F32ToI32,
     F32ToU32,
+    U32DivModCore,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -143,6 +144,7 @@ impl RuntimeHelper {
         RuntimeHelper::U32ToF32,
         RuntimeHelper::F32ToI32,
         RuntimeHelper::F32ToU32,
+        RuntimeHelper::U32DivModCore,
     ];
 
     pub const fn info(self) -> RuntimeHelperInfo {
@@ -469,6 +471,13 @@ impl RuntimeHelper {
                 local_bytes: 16,
                 frame_bytes: 18,
             },
+            Self::U32DivModCore => RuntimeHelperInfo {
+                label: "__rt_u32_divmod_core",
+                operand_ty: Type::new(ScalarType::U32),
+                arg_bytes: 9,
+                local_bytes: 6,
+                frame_bytes: 8,
+            },
         }
     }
 
@@ -515,7 +524,8 @@ impl RuntimeHelper {
             | Self::ModU16
             | Self::ModI16
             | Self::ModU32
-            | Self::ModI32 => RuntimeHelperCategory::Division,
+            | Self::ModI32
+            | Self::U32DivModCore => RuntimeHelperCategory::Division,
             _ => RuntimeHelperCategory::Integer,
         }
     }
@@ -533,6 +543,16 @@ impl RuntimeHelper {
 
     pub const fn dependencies(self) -> &'static [RuntimeHelper] {
         &[]
+    }
+
+    pub const fn dependencies_for_profile(self, profile: RuntimeProfile) -> &'static [RuntimeHelper] {
+        match (profile, self) {
+            (
+                RuntimeProfile::Small,
+                Self::DivU32 | Self::ModU32 | Self::DivI32 | Self::ModI32,
+            ) => &[Self::U32DivModCore],
+            _ => self.dependencies(),
+        }
     }
 
     pub const fn estimated_words(self) -> u16 {
@@ -577,9 +597,12 @@ pub fn runtime_helper_by_label(label: &str) -> Option<RuntimeHelper> {
         .find(|helper| helper.label() == label)
 }
 
-pub fn validate_helper_dependency_graph(helpers: &[RuntimeHelper]) -> Result<(), String> {
+pub fn validate_helper_dependency_graph(
+    helpers: &[RuntimeHelper],
+    profile: RuntimeProfile,
+) -> Result<(), String> {
     for helper in helpers {
-        for dependency in helper.dependencies() {
+        for dependency in helper.dependencies_for_profile(profile) {
             if !RuntimeHelper::ALL.contains(dependency) {
                 return Err(format!(
                     "unknown runtime helper dependency `{}` required by `{}`",
@@ -696,7 +719,7 @@ mod tests {
         let fixed = RuntimeHelper::DivQ16_16.catalog_entry();
         assert_eq!(fixed.category, RuntimeHelperCategory::Fixed);
 
-        assert!(validate_helper_dependency_graph(RuntimeHelper::ALL).is_ok());
+        assert!(validate_helper_dependency_graph(RuntimeHelper::ALL, Default::default()).is_ok());
     }
 }
 // SPDX-License-Identifier: GPL-3.0-or-later
