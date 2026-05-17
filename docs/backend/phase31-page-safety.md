@@ -46,4 +46,4 @@ The simulator remains unchanged. It already models `goto` / `call` through `PCLA
 
 ## Remaining Limits
 
-Phase 31 validates emitted edges; it does not add a linker relaxation pass or move code to optimize page placement. Oversized programs still fail through Phase 25/26 resource and HEX validation.
+Phase 32 adds a conservative linker relaxation pass that removes redundant same-page `setpage` pseudo-ops and then runs this same validator again. It still does not reorder code. Oversized programs still fail through Phase 25/26 resource and HEX validation.

@@ -60,6 +60,13 @@ If the static max stack cannot fit in the reserved stack region, compilation fai
 
 The `.map` file starts with a compact memory summary, and the `.lst` file starts with comment-form resource summary lines.
 
+Phase 32 extends these reports with page/layout data:
+
+- `--size` includes non-empty program pages and page-setup relaxation counts
+- `--memory-report` includes a `Page layout` block with used/free words per page
+- `.map` includes a `Code Layout` block grouping sections by page
+- section rows show page ranges for functions, helpers, dispatchers, ROM tables, and internal code
+
 ## Limitations
 
 - Banked RAM allocation is still conservative and does not yet exploit every GPR bank on larger devices.

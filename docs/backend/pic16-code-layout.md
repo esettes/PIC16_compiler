@@ -17,7 +17,7 @@ The backend emits:
 - stack overflow trap when `--stack-check` is enabled
 - config word at the target descriptor's config address
 
-Phase 25 checks resource fit. Phase 26 checks final HEX validity. Phase 31 checks page-safe control flow.
+Phase 25 checks resource fit. Phase 26 checks final HEX validity. Phase 31 checks page-safe control flow. Phase 32 reports per-page layout and removes redundant same-page page setup.
 
 ## Pages and `PCLATH`
 
@@ -41,8 +41,10 @@ picc --target pic16f877a --map --list-file --memory-report -o build/app.hex app.
 Then inspect:
 
 - `.map` symbol pages with `page=...`
+- `.map` `Code Layout` page usage
 - `.lst` `setpage` comments
 - memory report largest contributors
+- memory report `Page layout`
 - simulator traces around the failing PC
 
 Typical risky contributors are large Q16.16 helpers, float helpers, function-pointer dispatchers, and ROM RETLW tables.

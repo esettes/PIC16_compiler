@@ -33,7 +33,16 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 31: backend page-safety and code layout hardening on top of Phase 30 ROM float tables, Phase 29 dynamic float comparisons and 32-bit integer conversions, Phase 28 float hardening, Phase 27 basic finite software `float`, Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, and the earlier frontend/backend phases**.
+Current implementation is **Phase 32: page-aware code layout and linker relaxation on top of Phase 31 backend page-safety, Phase 30 ROM float tables, Phase 29 dynamic float comparisons and 32-bit integer conversions, Phase 28 float hardening, Phase 27 basic finite software `float`, Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, and the earlier frontend/backend phases**.
+
+Phase 32 scope:
+
+- explicit page/layout summaries in `--size`, `--memory-report`, and `.map`
+- inferred code-section metadata for vectors/startup, user functions, runtime helpers, dispatchers, ROM tables, and stack trap
+- linker relaxation removes provably redundant same-page `setpage` pseudo-ops before encoding
+- final Phase 31 page-safety validation still rejects unsafe `goto` / `call` edges after relaxation
+- `.map` includes a `Code Layout` section with per-page usage and section placement
+- no code reordering yet, no new C syntax, no `double`, no math library, and no recursion
 
 Phase 31 scope:
 

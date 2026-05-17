@@ -22,6 +22,8 @@ picc --target pic16f877a -I include --memory-report-file build/app.mem -o build/
 - estimated max stack
 - ROM table words
 - runtime helper count
+- non-empty program pages
+- page setup relaxation count
 
 ## Detailed Report
 
@@ -33,6 +35,7 @@ picc --target pic16f877a -I include --memory-report-file build/app.mem -o build/
 - function-pointer uncertainty
 - allocatable/shared/reserved RAM ranges
 - ROM table region
+- page layout with used/free words per page
 - program sections
 - helper contribution with stack frame cost
 - float helper contribution when `__rt_f32_*` helpers are emitted
@@ -44,6 +47,8 @@ The report is deterministic so generated files can be diffed in CI.
 ## Map And Listing
 
 When `--map` is enabled, the map begins with `Memory Summary`.
+
+Phase 32 also adds a `Code Layout` section with per-page used/free words and section placement.
 
 When `--list-file` is enabled, the listing begins with comment-form resource summary lines before the word dump.
 

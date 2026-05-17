@@ -108,6 +108,21 @@ Rules:
 
 This is backend correctness only. It adds no language feature and does not change the Stack-first ABI.
 
+### Phase 32 Page-Aware Layout + Relaxation
+
+Phase 32 keeps the Phase 31 validator and adds layout quality metadata plus safe linker relaxation.
+
+Rules:
+
+- code sections are inferred from final symbols: vectors/startup, functions, runtime helpers, fixed/float helpers, dispatchers, ROM RETLW tables, and stack trap
+- per-page usage is reported in `--size`, `--memory-report`, and `.map`
+- redundant same-page `setpage` pseudo-ops are removed before final encoding
+- cross-page `setpage` is kept
+- relaxation is iterative and final layout still passes the Phase 31 `goto` / `call` validator
+- `.map` includes a `Code Layout` section for page debugging
+
+Phase 32 does not reorder code yet. If a future layout cannot be made safe by relaxation, compilation still fails with the Phase 31 backend diagnostic.
+
 ### Phase 4 Stack-first ABI
 
 Current ABI is stack-first, caller-pushed, upward-growing.
