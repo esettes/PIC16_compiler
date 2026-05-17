@@ -28,10 +28,36 @@ pub fn relax_page_setup(
         let Some(labels) = collect_labels(program, diagnostics) else {
             return total;
         };
-        let (changed, stats) = relax_page_setup_once(program, &labels, diagnostics);
         total.passes = pass + 1;
-        total.removed_redundant_setpages += stats.removed_redundant_setpages;
-        total.relaxed_same_page_transitions += stats.relaxed_same_page_transitions;
+        let mut changed = false;
+        let mut index = 0usize;
+        while index < program.lines.len() {
+            let Some(is_redundant) = setpage_is_redundant_at(program, &labels, index, diagnostics)
+            else {
+                return total;
+            };
+            if !is_redundant {
+                index += 1;
+                continue;
+            }
+
+            let mut candidate = program.clone();
+            candidate.lines.remove(index);
+            let mut candidate_diagnostics = DiagnosticBag::default();
+            let candidate_safe = collect_labels(&candidate, &mut candidate_diagnostics)
+                .is_some_and(|candidate_labels| {
+                    validate_page_safety(&candidate, &candidate_labels, &mut candidate_diagnostics)
+                });
+            if candidate_safe {
+                *program = candidate;
+                total.removed_redundant_setpages += 1;
+                total.relaxed_same_page_transitions += 1;
+                changed = true;
+                continue;
+            }
+
+            index += 1;
+        }
         if diagnostics.has_errors() || !changed {
             break;
         }
@@ -165,30 +191,48 @@ pub fn encode_program(
     Some(EncoderOutput { words, labels })
 }
 
-fn relax_page_setup_once(
-    program: &mut AsmProgram,
+fn setpage_is_redundant_at(
+    program: &AsmProgram,
     labels: &BTreeMap<String, u16>,
+    index: usize,
     diagnostics: &mut DiagnosticBag,
-) -> (bool, LinkerRelaxationStats) {
-    let mut relaxed = Vec::with_capacity(program.lines.len());
+) -> Option<bool> {
+    let Some(AsmLine::Instr(AsmInstr::SetPage(label))) = program.lines.get(index) else {
+        return Some(false);
+    };
+    let Some(addr) = labels.get(label).copied() else {
+        diagnostics.error(
+            "assembler",
+            None,
+            format!("undefined label `{label}`"),
+            None,
+        );
+        return None;
+    };
+    Some(page_before_line(program, labels, index, diagnostics)? == Some(control_page(addr)))
+}
+
+fn page_before_line(
+    program: &AsmProgram,
+    labels: &BTreeMap<String, u16>,
+    index: usize,
+    diagnostics: &mut DiagnosticBag,
+) -> Option<Option<u8>> {
     let mut pc = 0u16;
     let mut current_page = Some(control_page(pc));
-    let mut stats = LinkerRelaxationStats::default();
-    let mut changed = false;
 
-    for line in &program.lines {
+    for line in program.lines.iter().take(index) {
         match line {
             AsmLine::Org(addr) => {
                 pc = *addr;
                 current_page = Some(control_page(pc));
-                relaxed.push(line.clone());
             }
             AsmLine::Label(label) => {
+                let _ = label;
                 current_page = Some(control_page(pc));
-                relaxed.push(AsmLine::Label(label.clone()));
             }
-            AsmLine::Comment(_) => relaxed.push(line.clone()),
-            AsmLine::Instr(AsmInstr::SetPage(label)) => {
+            AsmLine::Comment(_) => {}
+            AsmLine::Instr(AsmInstr::SetPage(label) | AsmInstr::SetPclPage(label)) => {
                 let Some(addr) = labels.get(label).copied() else {
                     diagnostics.error(
                         "assembler",
@@ -196,33 +240,10 @@ fn relax_page_setup_once(
                         format!("undefined label `{label}`"),
                         None,
                     );
-                    return (changed, stats);
-                };
-                let target_page = control_page(addr);
-                if current_page == Some(target_page) {
-                    changed = true;
-                    stats.removed_redundant_setpages += 1;
-                    stats.relaxed_same_page_transitions += 1;
-                    pc += AsmInstr::SetPage(label.clone()).word_len();
-                    continue;
-                }
-                current_page = Some(target_page);
-                pc += AsmInstr::SetPage(label.clone()).word_len();
-                relaxed.push(line.clone());
-            }
-            AsmLine::Instr(AsmInstr::SetPclPage(label)) => {
-                let Some(addr) = labels.get(label).copied() else {
-                    diagnostics.error(
-                        "assembler",
-                        None,
-                        format!("undefined label `{label}`"),
-                        None,
-                    );
-                    return (changed, stats);
+                    return None;
                 };
                 current_page = Some(control_page(addr));
-                pc += AsmInstr::SetPclPage(label.clone()).word_len();
-                relaxed.push(line.clone());
+                pc += line_word_len(line);
             }
             AsmLine::Instr(instr) => {
                 if let AsmInstr::Call(label) = instr
@@ -231,15 +252,18 @@ fn relax_page_setup_once(
                     current_page = Some(control_page(addr));
                 }
                 pc += instr.word_len();
-                relaxed.push(line.clone());
             }
         }
     }
 
-    if changed {
-        program.lines = relaxed;
+    Some(current_page)
+}
+
+fn line_word_len(line: &AsmLine) -> u16 {
+    match line {
+        AsmLine::Instr(instr) => instr.word_len(),
+        _ => 0,
     }
-    (changed, stats)
 }
 
 /// Collects final program-counter addresses for every declared assembly label.
