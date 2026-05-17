@@ -5702,6 +5702,55 @@ fn phase33_runtime_size_examples_compile_via_picc() {
 }
 
 #[test]
+/// Verifies Phase 34 `small` selects a shared u32 div/mod core and reduces code size.
+fn phase34_small_profile_compacts_u32_divmod_helpers() {
+    let input = "examples/pic16f877a/runtime_profile_small_divmod.c";
+    let (balanced_hex, balanced_stdout, balanced_report) =
+        compile_profile_size_report("balanced", input, "phase34-balanced-divmod", &[]);
+    let (small_hex, small_stdout, small_report) =
+        compile_profile_size_report("small", input, "phase34-small-divmod", &["--stack-report"]);
+
+    let balanced_words = parse_program_words(&balanced_stdout);
+    let small_words = parse_program_words(&small_stdout);
+    assert!(
+        small_words < balanced_words,
+        "small profile should reduce div/mod program words: small={small_words} balanced={balanced_words}"
+    );
+    assert!(small_stdout.contains("Runtime profile: small"));
+    assert!(balanced_stdout.contains("Runtime profile: balanced"));
+    assert!(small_stdout.contains("helper_extra="));
+
+    assert!(small_report.contains("__rt_u32_divmod_core"));
+    assert!(small_report.contains("variant=small"));
+    assert!(small_report.contains("deps=__rt_u32_divmod_core"));
+    assert!(!balanced_report.contains("__rt_u32_divmod_core"));
+
+    let small_map = read_artifact(&small_hex, "map");
+    let small_lst = read_artifact(&small_hex, "lst");
+    assert!(small_map.contains("__rt_u32_divmod_core"));
+    assert!(small_lst.contains("helper=__rt_u32_divmod_core"));
+    assert_hex_is_programmable(&balanced_hex);
+    assert_hex_is_programmable(&small_hex);
+}
+
+#[test]
+/// Verifies Phase 34 runtime-profile examples compile and keep HEX validation intact.
+fn phase34_runtime_profile_examples_compile_via_picc() {
+    for example in [
+        "examples/pic16f877a/runtime_profile_small_divmod.c",
+        "examples/pic16f877a/runtime_profile_small_fixed.c",
+        "examples/pic16f877a/runtime_profile_compare.c",
+    ] {
+        let output = compile_example_via_picc_cli_with_extra_args(
+            "pic16f877a",
+            example,
+            &["--size", "--memory-report", "--runtime-profile", "small"],
+        );
+        assert_hex_is_programmable(&output);
+    }
+}
+
+#[test]
 /// Verifies unsupported runtime profile names are rejected at CLI parsing.
 fn phase33_rejects_unknown_runtime_profile() {
     let output = Command::new(picc_bin())
