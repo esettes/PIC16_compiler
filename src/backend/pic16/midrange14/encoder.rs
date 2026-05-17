@@ -225,11 +225,10 @@ fn page_before_line(
         match line {
             AsmLine::Org(addr) => {
                 pc = *addr;
-                current_page = Some(control_page(pc));
+                current_page = None;
             }
-            AsmLine::Label(label) => {
-                let _ = label;
-                current_page = Some(control_page(pc));
+            AsmLine::Label(_) => {
+                current_page = None;
             }
             AsmLine::Comment(_) => {}
             AsmLine::Instr(AsmInstr::SetPage(label) | AsmInstr::SetPclPage(label)) => {
@@ -246,10 +245,26 @@ fn page_before_line(
                 pc += line_word_len(line);
             }
             AsmLine::Instr(instr) => {
-                if let AsmInstr::Call(label) = instr
-                    && let Some(addr) = labels.get(label).copied()
-                {
-                    current_page = Some(control_page(addr));
+                match instr {
+                    AsmInstr::Call(label) => {
+                        let Some(addr) = labels.get(label).copied() else {
+                            diagnostics.error(
+                                "assembler",
+                                None,
+                                format!("undefined label `{label}`"),
+                                None,
+                            );
+                            return None;
+                        };
+                        current_page = Some(control_page(addr));
+                    }
+                    AsmInstr::Goto(_)
+                    | AsmInstr::Return
+                    | AsmInstr::Retfie
+                    | AsmInstr::Retlw(_) => {
+                        current_page = None;
+                    }
+                    _ => {}
                 }
                 pc += instr.word_len();
             }
@@ -533,8 +548,12 @@ mod tests {
                 AsmLine::Org(0x0000),
                 AsmLine::Label("from".to_string()),
                 AsmLine::Instr(AsmInstr::SetPage("target".to_string())),
-                AsmLine::Instr(AsmInstr::Goto("target".to_string())),
                 AsmLine::Label("target".to_string()),
+                AsmLine::Instr(AsmInstr::Return),
+                AsmLine::Instr(AsmInstr::Call("target".to_string())),
+                AsmLine::Instr(AsmInstr::SetPage("done".to_string())),
+                AsmLine::Instr(AsmInstr::Goto("done".to_string())),
+                AsmLine::Label("done".to_string()),
                 AsmLine::Instr(AsmInstr::Nop),
             ],
         };
@@ -543,11 +562,13 @@ mod tests {
         let stats = relax_page_setup(&mut program, &mut diagnostics);
 
         assert_eq!(stats.removed_redundant_setpages, 1);
-        assert!(
-            !program
+        assert_eq!(
+            program
                 .lines
                 .iter()
-                .any(|line| matches!(line, AsmLine::Instr(AsmInstr::SetPage(_))))
+                .filter(|line| matches!(line, AsmLine::Instr(AsmInstr::SetPage(_))))
+                .count(),
+            1
         );
         assert!(encode_program(&program, &mut diagnostics).is_some());
         assert!(!diagnostics.has_errors());
