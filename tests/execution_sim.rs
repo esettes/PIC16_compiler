@@ -1702,6 +1702,48 @@ void main(void) {
 }
 
 #[test]
+fn executes_phase32_float_muldiv_and_rom_tables_across_pages() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase32-float-rom-layout.c",
+        r#"
+const __rom float gains[] = { 1.0f, 1.5f, 2.0f };
+const __rom __fixed8_8 fixed_gains[] = { 1.0q8_8, 1.5q8_8, 2.0q8_8 };
+
+float fresult;
+__fixed8_8 qresult;
+unsigned char ok;
+
+void main(void) {
+    unsigned char index;
+    float raw;
+    float gain;
+
+    index = 1;
+    raw = 3.0f;
+    gain = gains[index];
+    fresult = (raw * gain) / 1.5f;
+    qresult = fixed_gains[index];
+
+    if (fresult == 3.0f) {
+        ok = 1;
+    } else {
+        ok = 0;
+    }
+}
+"#,
+    );
+
+    assert_eq!(symbol_u8(&core, &map, "ok"), 1);
+    assert_eq!(symbol_u32(&core, &map, "fresult"), 0x4040_0000);
+    assert_eq!(symbol_u16(&core, &map, "qresult"), 0x0180);
+    assert!(map.contains("Code Layout"));
+    assert!(map.contains("gains [rom, const"));
+    assert!(map.contains("fixed_gains [rom, const"));
+    assert!(code_symbol_pages(&map).len() > 1);
+}
+
+#[test]
 fn executes_phase28_dynamic_unsigned_int_float_round_trip() {
     let (core, map) = run_source(
         "pic16f877a",
