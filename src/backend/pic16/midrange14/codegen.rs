@@ -6494,6 +6494,18 @@ fn render_memory_report(
         "page setup relaxation: removed_setpages={} passes={}",
         summary.page_setup_removed, summary.page_relaxation_passes
     );
+    let _ = writeln!(
+        output,
+        "runtime helpers: total={} integer={} division={} fixed={} float={} conversion={} shift={} dispatchers={}",
+        summary.runtime_helper_words,
+        summary.integer_helper_words,
+        summary.division_helper_words,
+        summary.fixed_helper_words,
+        summary.float_helper_words,
+        summary.conversion_helper_words,
+        summary.shift_helper_words,
+        summary.dispatcher_words
+    );
     let _ = writeln!(output);
     render_memory_ranges(&mut output, "allocatable GPR", target.allocatable_gpr);
     render_memory_ranges(&mut output, "shared GPR", target.shared_gpr);
@@ -6540,27 +6552,68 @@ fn render_memory_report(
 
     let helpers = contributions
         .iter()
-        .filter(|item| {
-            matches!(
-                item.kind,
-                ResourceContributionKind::RuntimeHelper
-                    | ResourceContributionKind::FixedPointHelper
-                    | ResourceContributionKind::FloatHelper
-                    | ResourceContributionKind::ShiftHelper
-            )
-        })
+        .filter(|item| is_runtime_helper_contribution(item))
         .collect::<Vec<_>>();
     if !helpers.is_empty() {
         let _ = writeln!(output);
         let _ = writeln!(output, "Runtime helper contribution");
+        let _ = writeln!(output, "Runtime Helper Contributors");
         let _ = writeln!(output, "---------------------------");
         for helper in helpers {
             let frame = helper.stack_frame.unwrap_or(0);
-            let _ = writeln!(
-                output,
-                "{}: {} words, frame {} bytes",
-                helper.name, helper.words, frame
-            );
+            if let Some(runtime_helper) = runtime_helper_by_label(&helper.name) {
+                let catalog = runtime_helper.catalog_entry();
+                let dependencies = if catalog.dependencies.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    catalog
+                        .dependencies
+                        .iter()
+                        .map(|dependency| dependency.label())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let _ = writeln!(
+                    output,
+                    "{}: category={} actual={} estimated={} args={} locals={} frame={} required_by={} deps={} constraints={}",
+                    helper.name,
+                    catalog.category.as_str(),
+                    helper.words,
+                    catalog.estimated_words,
+                    catalog.arg_bytes,
+                    catalog.local_bytes,
+                    frame,
+                    catalog.required_by,
+                    dependencies,
+                    catalog.target_constraints
+                );
+            } else {
+                let _ = writeln!(
+                    output,
+                    "{}: category=unknown actual={} frame={}",
+                    helper.name, helper.words, frame
+                );
+            }
+        }
+
+        let _ = writeln!(output);
+        let _ = writeln!(output, "Runtime Helper Dependency Graph");
+        let _ = writeln!(output, "-------------------------------");
+        for helper in contributions
+            .iter()
+            .filter_map(|item| runtime_helper_by_label(&item.name))
+        {
+            let dependencies = helper.dependencies();
+            if dependencies.is_empty() {
+                let _ = writeln!(output, "{} -> (none)", helper.label());
+            } else {
+                let joined = dependencies
+                    .iter()
+                    .map(|dependency| dependency.label())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let _ = writeln!(output, "{} -> {joined}", helper.label());
+            }
         }
     }
 
@@ -6606,6 +6659,17 @@ fn render_resource_map_lines(
         format!("Estimated max stack: {} bytes", summary.estimated_max_stack),
         format!("ROM table words: {}", summary.rom_table_words),
         format!("Helpers included: {}", summary.helpers_included),
+        format!("Runtime helpers: {} words", summary.runtime_helper_words),
+        format!(
+            "Runtime helper words by category: integer={} division={} fixed={} float={} conversion={} shift={} dispatchers={}",
+            summary.integer_helper_words,
+            summary.division_helper_words,
+            summary.fixed_helper_words,
+            summary.float_helper_words,
+            summary.conversion_helper_words,
+            summary.shift_helper_words,
+            summary.dispatcher_words
+        ),
         format!(
             "Function pointer dispatchers: {}",
             summary.function_pointer_dispatchers
