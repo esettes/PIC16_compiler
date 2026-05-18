@@ -376,16 +376,16 @@ pub fn compile_program(
         summary: stack_analysis.summary,
         text: render_stack_report(target, typed_program, &layout, &stack_analysis, *options),
     };
-    let resource_report = build_resource_report(
+    let resource_report = build_resource_report(ResourceReportInputs {
         target,
         typed_program,
-        &layout,
-        &encoded.words,
-        &encoded.labels,
-        &stack_report.summary,
-        optimization.relaxation,
-        options.runtime_profile,
-    );
+        layout: &layout,
+        words: &encoded.words,
+        labels: &encoded.labels,
+        stack: &stack_report.summary,
+        relaxation: optimization.relaxation,
+        runtime_profile: options.runtime_profile,
+    });
     validate_resource_fit(
         target,
         &resource_report,
@@ -6313,17 +6313,29 @@ fn runtime_helper_stack_cost(helper: RuntimeHelper, profile: RuntimeProfile) -> 
         .saturating_add(dependency_cost)
 }
 
-/// Builds deterministic target resource usage data for `--size`, maps, and reports.
-fn build_resource_report(
-    target: &TargetDevice,
-    typed_program: &TypedProgram,
-    layout: &StorageLayout,
-    words: &BTreeMap<u16, u16>,
-    labels: &BTreeMap<String, u16>,
-    stack: &StackReportSummary,
+struct ResourceReportInputs<'a> {
+    target: &'a TargetDevice,
+    typed_program: &'a TypedProgram,
+    layout: &'a StorageLayout,
+    words: &'a BTreeMap<u16, u16>,
+    labels: &'a BTreeMap<String, u16>,
+    stack: &'a StackReportSummary,
     relaxation: LinkerRelaxationStats,
     runtime_profile: RuntimeProfile,
-) -> ResourceReport {
+}
+
+/// Builds deterministic target resource usage data for `--size`, maps, and reports.
+fn build_resource_report(inputs: ResourceReportInputs<'_>) -> ResourceReport {
+    let ResourceReportInputs {
+        target,
+        typed_program,
+        layout,
+        words,
+        labels,
+        stack,
+        relaxation,
+        runtime_profile,
+    } = inputs;
     let contributions =
         collect_resource_contributions(target, typed_program, layout, words, labels);
     let page_layout = build_page_layout(target, words);
