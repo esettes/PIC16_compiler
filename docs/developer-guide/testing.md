@@ -8,6 +8,8 @@ Phase 32 layout validation lives in the same backend and integration suites. It 
 
 Phase 33 runtime-cost validation lives in `src/backend/pic16/midrange14/runtime.rs`, `tests/compiler_pipeline.rs`, and `tests/execution_sim.rs`. It checks helper catalog metadata, dependency graph validation, runtime profile CLI parsing, helper cost reports, map grouping, unused-helper pruning, checked-in runtime-size examples, and simulator execution for integer plus Q16.16 helper paths.
 
+Phase 34 runtime-compaction validation lives in `tests/compiler_pipeline.rs` and `tests/execution_sim.rs`. It checks that `--runtime-profile small` selects `__rt_u32_divmod_core`, reports `variant=small` and helper dependencies, reduces representative unsigned 32-bit div/mod output versus `balanced`, keeps stack-report helper accounting visible, compiles checked-in profile examples, and executes unsigned/signed 32-bit div/mod wrappers through the simulator.
+
 Phase 26 validation lives in `tests/compiler_pipeline.rs` and `src/hex/intel_hex.rs`. It checks raw and symbolic config words, duplicate/unknown config diagnostics, config emission in `.hex/.map/.lst`, final HEX validation reports, program overflow rejection without `--size`, programmer command printing, configurable Makefile flashing, and hardware smoke examples.
 
 Phase 25 resource-report validation lives in `tests/compiler_pipeline.rs`. It checks target descriptors, `--size`, `--memory-report`, `--memory-report-file`, map/listing resource summaries, helper contribution reporting, ROM-table contribution reporting, data-RAM overflow diagnostics, and stack-region overflow diagnostics.

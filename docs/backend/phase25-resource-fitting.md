@@ -66,6 +66,7 @@ Phase 32 extends these reports with page/layout data:
 - `--memory-report` includes a `Page layout` block with used/free words per page
 - `.map` includes a `Code Layout` block grouping sections by page
 - Phase 33 adds runtime helper category totals and dependency graph data to the same reports
+- Phase 34 adds selected helper variants and shared primitive dependencies to the same report sections
 - section rows show page ranges for functions, helpers, dispatchers, ROM tables, and internal code
 
 ## Limitations

@@ -102,4 +102,14 @@ Runtime helpers: 3509 words
   integer: 0  division: 0  fixed: 0  float: 3509  conversion: 0  shift: 0  dispatchers: 0
 ```
 
-Use `--runtime-profile small` to get earlier helper-budget warnings. `balanced` is the default and `fast` currently uses the same helper bodies as balanced.
+Use `--runtime-profile small` to select compact helper variants where implemented and to get earlier helper-budget warnings. `balanced` is the default. `fast` currently uses the same helper bodies as balanced.
+
+Phase 34 adds variant/dependency detail for compact helpers:
+
+```text
+__rt_div_u32: category=division variant=small ... deps=__rt_u32_divmod_core
+Runtime Helper Dependency Graph
+__rt_div_u32 -> __rt_u32_divmod_core
+```
+
+This means `small` can reduce program words but may add helper-to-helper call depth. Check `--stack-report` when using compact helpers on small targets.

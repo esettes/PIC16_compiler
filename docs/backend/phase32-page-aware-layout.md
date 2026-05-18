@@ -46,7 +46,7 @@ page 0: 0x0000..0x07FF used=... free=...
 
 The map includes `Code Layout` with page usage and section placement.
 
-Phase 33 extends the same reports with runtime helper category totals so page pressure can be traced back to integer, fixed, float, conversion, shift, dispatcher, or ROM-table costs.
+Phase 33 extends the same reports with runtime helper category totals so page pressure can be traced back to integer, fixed, float, conversion, shift, dispatcher, or ROM-table costs. Phase 34 adds profile-selected helper dependencies; helper-to-helper calls still pass through the same page-safe call emission and final page-safety validation.
 
 ## Placement Policy
 

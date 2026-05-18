@@ -33,17 +33,19 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 33: runtime helper size reporting and target-aware runtime profiles on top of Phase 32 page-aware code layout, Phase 31 backend page-safety, Phase 30 ROM float tables, Phase 29 dynamic float comparisons and 32-bit integer conversions, Phase 28 float hardening, Phase 27 basic finite software `float`, Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, and the earlier frontend/backend phases**.
+Current implementation is **Phase 34: runtime helper compaction and a real `small` runtime profile on top of Phase 33 runtime helper reporting, Phase 32 page-aware code layout, Phase 31 backend page-safety, Phase 30 ROM float tables, Phase 29 dynamic float comparisons and 32-bit integer conversions, Phase 28 float hardening, Phase 27 basic finite software `float`, Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, and the earlier frontend/backend phases**.
 
-Phase 33 scope:
+Phase 34 scope:
 
 - centralized runtime helper catalog metadata for category, ABI size, stack frame, required-by text, dependency list, and target constraints
 - helper dependency graph validation before emitting runtime bodies
 - helper pruning remains demand-driven: literal-only `float`, `long`, and fixed-point declarations do not pull arithmetic helpers
-- `--runtime-profile small|balanced|fast` controls helper-budget warning policy; `small` is more aggressive, `fast` currently aliases balanced behavior
+- `--runtime-profile small` now selects compact unsigned/signed 32-bit div/mod wrappers around shared `__rt_u32_divmod_core`
+- `--runtime-profile balanced` keeps the standalone helper bodies; `fast` remains documented as balanced behavior for now
 - `--size`, `--memory-report`, and `.map` include runtime helper word totals by category
+- `--memory-report` shows selected helper variants and dependencies
 - `.lst` helper comments show helper category and required-by metadata
-- no helper semantic changes, no `double`, no math library, no recursion, and no new C syntax
+- no arithmetic semantic changes, no `double`, no math library, no recursion, and no new C syntax
 
 Phase 32 scope:
 
@@ -1102,6 +1104,8 @@ picc --list-targets
 - [docs/frontend/phase30-rom-float.md](docs/frontend/phase30-rom-float.md)
 - [docs/ir/phase30-rom-float-lowering.md](docs/ir/phase30-rom-float-lowering.md)
 - [docs/backend/phase30-rom-float-tables.md](docs/backend/phase30-rom-float-tables.md)
+- [docs/runtime/phase34-shared-helper-primitives.md](docs/runtime/phase34-shared-helper-primitives.md)
+- [docs/runtime/phase34-small-profile.md](docs/runtime/phase34-small-profile.md)
 - [docs/migration/phase3-to-phase4-abi.md](docs/migration/phase3-to-phase4-abi.md)
 - [docs/developer-guide/adding-device.md](docs/developer-guide/adding-device.md)
 
@@ -1114,4 +1118,4 @@ picc --list-targets
 
 ## Current Limits
 
-Phase 30 completes ROM-backed float calibration tables, but current hard limits remain: no `double`, no math library (`sin`, `cos`, `sqrt`, etc.), no full IEEE NaN/Inf/subnormal compliance, no dynamic mixed float/integer arithmetic, no general ROM pointer model, no code-space pointers, no address-of ROM elements, no ROM/data pointer mixing, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no function-pointer calls inside ISR, no fixed-point modulo, no raw computed PIC16 indirect calls, and no recursion. Float helpers are large; resource fitting can reject helper-heavy programs on real targets. Helper-backed float expressions are most robust when ROM-read values are first copied into RAM globals/statics before arithmetic or comparison. The emulator is intentionally core-only: no full peripheral timing model, no asynchronous interrupt scheduling, and no claim of complete PIC16 device emulation.
+Phase 34 compacts the first runtime helper family, but current hard limits remain: no `double`, no math library (`sin`, `cos`, `sqrt`, etc.), no full IEEE NaN/Inf/subnormal compliance, no dynamic mixed float/integer arithmetic, no general ROM pointer model, no code-space pointers, no address-of ROM elements, no ROM/data pointer mixing, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no function-pointer calls inside ISR, no fixed-point modulo, no raw computed PIC16 indirect calls, and no recursion. Float helpers are large; resource fitting can reject helper-heavy programs on real targets. Helper-backed float expressions are most robust when ROM-read values are first copied into RAM globals/statics before arithmetic or comparison. The emulator is intentionally core-only: no full peripheral timing model, no asynchronous interrupt scheduling, and no claim of complete PIC16 device emulation.

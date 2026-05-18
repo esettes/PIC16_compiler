@@ -2,7 +2,7 @@
 
 # Phase 33 Runtime Helper Catalog
 
-Phase 33 centralizes runtime helper metadata in `RuntimeHelper`.
+Phase 33 centralizes runtime helper metadata in `RuntimeHelper`. Phase 34 uses that metadata for profile-selected helper variants.
 
 Each helper records:
 
@@ -30,7 +30,19 @@ The catalog feeds codegen, stack estimates, memory reports, map grouping, listin
 
 ## Dependency Graph
 
-Helpers currently keep independent bodies, so most dependency lists are empty. The graph is still validated before helper emission so future shared helper primitives cannot introduce unknown or cyclic dependencies silently.
+The graph is validated before helper emission so shared helper primitives cannot introduce unknown or cyclic dependencies silently.
+
+Phase 34 adds the first profile-dependent dependency:
+
+```text
+--runtime-profile small
+__rt_div_u32 -> __rt_u32_divmod_core
+__rt_mod_u32 -> __rt_u32_divmod_core
+__rt_div_i32 -> __rt_u32_divmod_core
+__rt_mod_i32 -> __rt_u32_divmod_core
+```
+
+Under `balanced`, those helpers keep standalone bodies and have no dependency on `__rt_u32_divmod_core`.
 
 ## Pruning
 
@@ -51,6 +63,12 @@ __fixed16_16 q = 1.0q16_16;
 ```text
 Runtime Helper Contributors
 Runtime Helper Dependency Graph
+```
+
+For Phase 34 compact helpers, contributor lines include the selected variant and dependency list:
+
+```text
+__rt_div_u32: category=division variant=small ... deps=__rt_u32_divmod_core
 ```
 
 `.lst` helper bodies include comments such as:

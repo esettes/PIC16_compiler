@@ -138,6 +138,19 @@ Phase 33 keeps runtime semantics unchanged and makes helper cost explicit:
 
 No C language feature is added in Phase 33.
 
+### Phase 34 Runtime Helper Compaction
+
+Phase 34 keeps the Phase 33 catalog and makes `--runtime-profile small` select a real compact helper family:
+
+- unsigned and signed 32-bit division/modulo wrappers depend on shared `__rt_u32_divmod_core`
+- helper variants are selected from the active runtime profile and reflected in the dependency graph
+- `--memory-report` shows `variant=small` and `deps=__rt_u32_divmod_core` for compact wrappers
+- helper-to-helper calls still use page-safe emission and Phase 31/32 validation
+- stack reports include the extra helper-to-helper stack cost instead of hiding it
+- representative `unsigned long` `/` plus `%` output is smaller under `small` than `balanced`
+
+`balanced` keeps the standalone helper bodies. `fast` is still reserved and currently follows balanced behavior. No C language feature is added in Phase 34.
+
 ### Phase 4 Stack-first ABI
 
 Current ABI is stack-first, caller-pushed, upward-growing.

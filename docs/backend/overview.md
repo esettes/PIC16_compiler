@@ -2,7 +2,7 @@
 
 # PIC16 `midrange14` Backend
 
-Phase 32 adds page-aware layout reporting and safe linker relaxation on top of the Phase 31 `PCLATH` page-safety validator. Phase 30 ROM float data, Phase 29 finite-float runtime completion, Phase 26 config/HEX validation, Phase 25 target resource fitting, and Phase 24 dynamic Q16.16/UQ16.16 helpers remain supported.
+Phase 34 adds compact runtime helper variants on top of the Phase 33 helper catalog. Phase 32 page-aware layout reporting and safe linker relaxation, Phase 31 `PCLATH` page-safety validation, Phase 30 ROM float data, Phase 29 finite-float runtime completion, Phase 26 config/HEX validation, Phase 25 target resource fitting, and Phase 24 dynamic Q16.16/UQ16.16 helpers remain supported.
 
 Phase 21 extends the PIC16 backend to four-byte integer values. The return convention is `W` plus `__abi.return_high`, `__abi.return_upper0`, and `__abi.return_upper1`. Multi-byte carry/borrow codegen is shared by 8-, 16-, 32-bit, and fixed raw paths.
 
@@ -18,7 +18,7 @@ Shared backend responsibilities:
 - IR -> PIC16 asm lowering
 - 14-bit word encoding
 
-Current backend phase: **Phase 32 page-aware layout and linker relaxation on top of Phase 31 page-safety, Phase 30 ROM float table codegen, Phase 29 float compare/conversion helpers, Phase 26 config/HEX workflow, Phase 25 resource fitting, Phase 24 dynamic Q16.16 helper codegen, Phase 23 fixed ROM table codegen, Phase 22 fixed-point codegen, Phase 21 32-bit integer codegen, Phase 20 simulator tooling, Phase 19 execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier backend phases**
+Current backend phase: **Phase 34 runtime helper compaction on top of Phase 33 helper catalog/reporting, Phase 32 page-aware layout and linker relaxation, Phase 31 page-safety, Phase 30 ROM float table codegen, Phase 29 float compare/conversion helpers, Phase 26 config/HEX workflow, Phase 25 resource fitting, Phase 24 dynamic Q16.16 helper codegen, Phase 23 fixed ROM table codegen, Phase 22 fixed-point codegen, Phase 21 32-bit integer codegen, Phase 20 simulator tooling, Phase 19 execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier backend phases**
 
 Backend owns:
 
@@ -39,6 +39,7 @@ Backend owns:
 - target memory fit validation after final encoding
 - compact and detailed resource report rendering
 - helper/dispatcher/ROM-table contribution reporting
+- runtime-profile-selected helper variants and helper dependency graph reporting
 - config-word resolution from `#pragma config` and raw `__config(...)`
 - final Intel HEX validation for target range, vectors, config, word width, checksum, and EOF
 - fixed-point ROM table reads through `RomRead16`/`RomRead32`
