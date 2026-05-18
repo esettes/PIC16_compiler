@@ -481,8 +481,8 @@ impl RuntimeHelper {
                 label: "__rt_f32_sqrt",
                 operand_ty: Type::new(ScalarType::F32),
                 arg_bytes: 4,
-                local_bytes: 12,
-                frame_bytes: 14,
+                local_bytes: 34,
+                frame_bytes: 36,
             },
             Self::F32ToQ16 => RuntimeHelperInfo {
                 label: "__rt_f32_to_q16_16",
@@ -609,7 +609,6 @@ impl RuntimeHelper {
             Self::F32Floor => &[Self::F32ToQ16, Self::I32ToF32],
             Self::F32Ceil => &[Self::F32Floor],
             Self::F32Round => &[Self::F32ToQ16, Self::I32ToF32],
-            Self::F32Sqrt => &[Self::F32Div, Self::F32Add],
             _ => &[],
         }
     }

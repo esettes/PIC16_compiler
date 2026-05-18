@@ -4805,48 +4805,90 @@ impl<'a> CodegenContext<'a> {
         self.emit_return_current_frame_value(q_offset, Type::new(ScalarType::F32));
     }
 
-    /// Emits finite `sqrtf` by using a fixed-count f32 Newton iteration.
+    /// Emits finite `sqrtf` through an internal Q16.16 Newton iteration.
     fn emit_float_f32_sqrt_helper(&mut self, arg_offset: u16, local_base: u16) {
-        let f32_ty = Type::new(ScalarType::F32);
-        let guess_offset = local_base;
+        let q_ty = Type::new(ScalarType::I32);
+        let uq_ty = Type::new(ScalarType::U32);
+        let q_offset = local_base;
+        let guess_offset = q_offset + 4;
         let quotient_offset = guess_offset + 4;
-        let two_offset = quotient_offset + 4;
+        let mant_offset = quotient_offset + 4;
+        let exp_offset = mant_offset + 4;
+        let count_offset = exp_offset + 1;
+        let const_offset = count_offset + 1;
+        let flag_offset = const_offset + 1;
+        let div_local_base = flag_offset + 1;
         let zero_label = self.unique_label("rt_f32_sqrt_zero");
         let positive_label = self.unique_label("rt_f32_sqrt_positive");
+        let init_guess_label = self.unique_label("rt_f32_sqrt_init_guess");
+        let use_one_label = self.unique_label("rt_f32_sqrt_use_one");
         let iterate_label = self.unique_label("rt_f32_sqrt_iterate");
+        let div_label = self.unique_label("rt_f32_sqrt_div");
+        let main_label = self.unique_label("rt_f32_sqrt_main");
 
-        self.emit_current_frame_nonzero_branch(arg_offset, f32_ty, &positive_label, &zero_label);
+        self.jump_to_label(&main_label);
+        self.program.push(AsmLine::Label(div_label.clone()));
+        self.emit_fixed_q16_16_div_helper(Type::new(ScalarType::Q16_16), div_local_base, true);
+        self.program.push(AsmLine::Instr(AsmInstr::Return));
+
+        self.program.push(AsmLine::Label(main_label));
+        self.emit_float_to_q16_frame(
+            arg_offset,
+            q_offset,
+            mant_offset,
+            exp_offset,
+            count_offset,
+            const_offset,
+            flag_offset,
+        );
+        self.emit_current_frame_nonzero_branch(q_offset, q_ty, &positive_label, &zero_label);
         self.program.push(AsmLine::Label(positive_label));
-        self.branch_on_current_frame_bit(arg_offset + 3, 7, &zero_label, &iterate_label);
+        self.branch_on_current_frame_bit(q_offset + 3, 7, &zero_label, &init_guess_label);
+
+        self.program.push(AsmLine::Label(init_guess_label));
+        self.copy_current_frame_bytes(q_offset, guess_offset, 4);
+        self.store_i32_const_to_current_frame(quotient_offset, 0x0001_0000);
+        self.emit_current_frame_unsigned_ge_branch(
+            q_offset,
+            quotient_offset,
+            uq_ty,
+            &iterate_label,
+            &use_one_label,
+        );
+        self.program.push(AsmLine::Label(use_one_label));
+        self.copy_current_frame_bytes(quotient_offset, guess_offset, 4);
+        self.jump_to_label(&iterate_label);
 
         self.program.push(AsmLine::Label(iterate_label));
-        self.copy_current_frame_bytes(arg_offset, guess_offset, 4);
-        self.store_i32_const_to_current_frame(two_offset, 0x4000_0000);
-        for _ in 0..8 {
-            self.emit_call_binary_runtime_helper_32(
-                RuntimeHelper::F32Div,
-                arg_offset,
-                guess_offset,
-                quotient_offset,
-            );
-            self.emit_call_binary_runtime_helper_32(
-                RuntimeHelper::F32Add,
-                guess_offset,
-                quotient_offset,
-                guess_offset,
-            );
-            self.emit_call_binary_runtime_helper_32(
-                RuntimeHelper::F32Div,
-                guess_offset,
-                two_offset,
-                guess_offset,
-            );
+        for _ in 0..4 {
+            self.copy_current_frame_bytes(q_offset, 0, 4);
+            self.copy_current_frame_bytes(guess_offset, 4, 4);
+            self.program
+                .push(AsmLine::Instr(AsmInstr::SetPage(div_label.clone())));
+            self.program
+                .push(AsmLine::Instr(AsmInstr::Call(div_label.clone())));
+            self.restore_code_page_after_call();
+            self.store_w_to_current_frame_byte(quotient_offset);
+            for byte in 1..4usize {
+                self.load_return_byte_to_w(byte);
+                self.store_w_to_current_frame_byte(quotient_offset + byte as u16);
+            }
+            self.add_current_frame_value_into_slot(quotient_offset, guess_offset, q_ty);
+            self.shift_current_frame_value_right(guess_offset, q_ty, false);
         }
-        self.emit_return_current_frame_value(guess_offset, f32_ty);
+        self.emit_q16_to_float_frame(
+            guess_offset,
+            quotient_offset,
+            mant_offset,
+            exp_offset,
+            count_offset,
+            flag_offset,
+        );
+        self.emit_return_current_frame_value(quotient_offset, Type::new(ScalarType::F32));
 
         self.program.push(AsmLine::Label(zero_label));
-        self.clear_current_frame_slot(guess_offset, f32_ty);
-        self.emit_return_current_frame_value(guess_offset, f32_ty);
+        self.clear_current_frame_slot(quotient_offset, Type::new(ScalarType::F32));
+        self.emit_return_current_frame_value(quotient_offset, Type::new(ScalarType::F32));
     }
 
     /// Emits compact Phase 35 f32 subtraction as `lhs + (-rhs)` through `__rt_f32_add`.

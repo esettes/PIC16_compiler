@@ -20,7 +20,7 @@ Behavior:
 - `floorf` converts to Q16.16 and arithmetically shifts away the fractional bits
 - `ceilf` reuses the floor helper through the identity `ceilf(x) = -floorf(-x)`
 - `roundf` converts to absolute Q16.16, adds raw `0.5`, truncates to an integer, reapplies the sign, and converts back to f32
-- Phase 37 `sqrtf` runs a fixed-count finite f32 Newton iteration and returns `0.0f` for negative inputs
+- Phase 37 `sqrtf` runs a compact internal Q16.16 Newton iteration and returns `0.0f` for negative inputs
 
 Runtime integration:
 
