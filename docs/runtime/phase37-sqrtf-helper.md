@@ -10,16 +10,15 @@ __rt_f32_sqrt
 
 Algorithm:
 
-- convert finite f32 input to signed Q16.16
-- return raw `0.0f` when the Q16.16 input is zero or negative
-- choose an initial Q16.16 guess of `max(x, 1.0)`
+- return raw `0.0f` when the finite f32 input is zero or negative
+- initialize the f32 guess from the input value
 - run eight deterministic Newton iterations: `guess = (guess + x / guess) / 2`
-- convert the Q16.16 result back to f32
+- use the existing finite f32 add/divide helpers for the iteration
 
 Runtime integration:
 
 - category: `math`
-- dependencies: `__rt_f32_to_q16_16`, `__rt_div_q16_16`, `__rt_q16_16_to_f32`
+- dependencies: `__rt_f32_div`, `__rt_f32_add`
 - Stack-first ABI: one 4-byte argument, one 4-byte return value
 - appears in `.map`, `.lst`, `--size`, `--memory-report`, and stack reports when used
 - pruned when unused or when calls fold at compile time
