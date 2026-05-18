@@ -2926,6 +2926,17 @@ impl<'a> SemanticAnalyzer<'a> {
         }
 
         let typed_args = self.analyze_call_arguments(args, &parameter_types, diagnostics);
+        if Self::is_float_math_builtin(callee_name)
+            && let Some(folded) =
+                Self::eval_float_math_call_constant(callee_name, &typed_args, span, diagnostics)
+        {
+            return Some(TypedExpr {
+                kind: TypedExprKind::IntLiteral(folded),
+                ty: self.symbols[function].ty,
+                span,
+                value_category: ValueCategory::RValue,
+            });
+        }
         Some(TypedExpr {
             kind: TypedExprKind::Call {
                 function,
@@ -2935,6 +2946,52 @@ impl<'a> SemanticAnalyzer<'a> {
             span,
             value_category: ValueCategory::RValue,
         })
+    }
+
+    /// Returns true for the finite-only Phase 36 float math subset.
+    fn is_float_math_builtin(name: &str) -> bool {
+        matches!(name, "fabsf" | "truncf" | "floorf" | "ceilf" | "roundf")
+    }
+
+    /// Constant-folds one Phase 36 float math call when the single argument is a constant f32.
+    fn eval_float_math_call_constant(
+        name: &str,
+        args: &[TypedExpr],
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<i64> {
+        if args.len() != 1 || !args[0].ty.is_float() {
+            return None;
+        }
+        let bits = eval_integer_constant_expr(&args[0])?;
+        let value = f32::from_bits(normalize_value(bits, Type::new(ScalarType::F32)) as u32);
+        if !value.is_finite() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "unsupported special float value in finite math call",
+                Some("Phase 36 math.h supports finite float values only".to_string()),
+            );
+            return None;
+        }
+        let result = match name {
+            "fabsf" => value.abs(),
+            "truncf" => value.trunc(),
+            "floorf" => value.floor(),
+            "ceilf" => value.ceil(),
+            "roundf" => value.round(),
+            _ => return None,
+        };
+        if !result.is_finite() {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                "finite math call result is outside supported float range",
+                Some("use a smaller finite input value".to_string()),
+            );
+            return None;
+        }
+        Some(i64::from(result.to_bits()))
     }
 
     /// Analyzes, counts, and coerces one argument list against one already-known parameter list.
@@ -6991,6 +7048,26 @@ impl<'a> SemanticAnalyzer<'a> {
                 function: callee,
                 args,
             } => {
+                if Self::is_float_math_builtin(&self.symbols[*callee].name) {
+                    for arg in args {
+                        self.walk_interrupt_expr(function, arg, diagnostics);
+                    }
+                    if self.symbols[*callee].name == "fabsf" {
+                        return;
+                    }
+                    diagnostics.error(
+                        "semantic",
+                        Some(expr.span),
+                        format!(
+                            "interrupt handler `{}` cannot call `{}` because it requires a float math helper",
+                            self.symbols[function].name, self.symbols[*callee].name
+                        ),
+                        Some(
+                            "Phase 36 allows only inline `fabsf` inside ISRs; call other math helpers from normal code".to_string(),
+                        ),
+                    );
+                    return;
+                }
                 diagnostics.error(
                     "semantic",
                     Some(expr.span),

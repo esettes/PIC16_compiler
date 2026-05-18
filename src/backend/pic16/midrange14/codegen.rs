@@ -6479,6 +6479,7 @@ fn build_resource_report(inputs: ResourceReportInputs<'_>) -> ResourceReport {
                 ResourceContributionKind::RuntimeHelper
                     | ResourceContributionKind::FixedPointHelper
                     | ResourceContributionKind::FloatHelper
+                    | ResourceContributionKind::MathHelper
                     | ResourceContributionKind::ShiftHelper
             )
         })
@@ -6492,6 +6493,7 @@ fn build_resource_report(inputs: ResourceReportInputs<'_>) -> ResourceReport {
         helper_words_by_category(&contributions, RuntimeHelperCategory::Integer);
     let fixed_helper_words = helper_words_by_category(&contributions, RuntimeHelperCategory::Fixed);
     let float_helper_words = helper_words_by_category(&contributions, RuntimeHelperCategory::Float);
+    let math_helper_words = helper_words_by_category(&contributions, RuntimeHelperCategory::Math);
     let conversion_helper_words =
         helper_words_by_category(&contributions, RuntimeHelperCategory::Conversion);
     let shift_helper_words = helper_words_by_category(&contributions, RuntimeHelperCategory::Shift);
@@ -6525,6 +6527,7 @@ fn build_resource_report(inputs: ResourceReportInputs<'_>) -> ResourceReport {
         integer_helper_words,
         fixed_helper_words,
         float_helper_words,
+        math_helper_words,
         conversion_helper_words,
         shift_helper_words,
         division_helper_words,
@@ -6689,8 +6692,9 @@ fn emit_runtime_budget_warning(
         ),
         span: None,
         note: Some(format!(
-            "top helper categories: float={} fixed={} conversion={} division={}",
+            "top helper categories: float={} math={} fixed={} conversion={} division={}",
             report.summary.float_helper_words,
+            report.summary.math_helper_words,
             report.summary.fixed_helper_words,
             report.summary.conversion_helper_words,
             report.summary.division_helper_words
@@ -6747,11 +6751,12 @@ fn render_size_summary(
     );
     let _ = writeln!(
         output,
-        "  integer: {}  division: {}  fixed: {}  float: {}  conversion: {}  shift: {}  dispatchers: {}",
+        "  integer: {}  division: {}  fixed: {}  float: {}  math: {}  conversion: {}  shift: {}  dispatchers: {}",
         summary.integer_helper_words,
         summary.division_helper_words,
         summary.fixed_helper_words,
         summary.float_helper_words,
+        summary.math_helper_words,
         summary.conversion_helper_words,
         summary.shift_helper_words,
         summary.dispatcher_words
@@ -6849,12 +6854,13 @@ fn render_memory_report(
     );
     let _ = writeln!(
         output,
-        "runtime helpers: total={} integer={} division={} fixed={} float={} conversion={} shift={} dispatchers={}",
+        "runtime helpers: total={} integer={} division={} fixed={} float={} math={} conversion={} shift={} dispatchers={}",
         summary.runtime_helper_words,
         summary.integer_helper_words,
         summary.division_helper_words,
         summary.fixed_helper_words,
         summary.float_helper_words,
+        summary.math_helper_words,
         summary.conversion_helper_words,
         summary.shift_helper_words,
         summary.dispatcher_words
@@ -7020,11 +7026,12 @@ fn render_resource_map_lines(
         format!("Helpers included: {}", summary.helpers_included),
         format!("Runtime helpers: {} words", summary.runtime_helper_words),
         format!(
-            "Runtime helper words by category: integer={} division={} fixed={} float={} conversion={} shift={} dispatchers={}",
+            "Runtime helper words by category: integer={} division={} fixed={} float={} math={} conversion={} shift={} dispatchers={}",
             summary.integer_helper_words,
             summary.division_helper_words,
             summary.fixed_helper_words,
             summary.float_helper_words,
+            summary.math_helper_words,
             summary.conversion_helper_words,
             summary.shift_helper_words,
             summary.dispatcher_words
@@ -7122,6 +7129,7 @@ fn is_runtime_helper_contribution(item: &ResourceContribution) -> bool {
         ResourceContributionKind::RuntimeHelper
             | ResourceContributionKind::FixedPointHelper
             | ResourceContributionKind::FloatHelper
+            | ResourceContributionKind::MathHelper
             | ResourceContributionKind::ShiftHelper
     )
 }
@@ -7278,6 +7286,7 @@ fn push_label_if_present(
 fn runtime_helper_resource_kind(helper: RuntimeHelper) -> ResourceContributionKind {
     match helper.category() {
         RuntimeHelperCategory::Fixed => ResourceContributionKind::FixedPointHelper,
+        RuntimeHelperCategory::Math => ResourceContributionKind::MathHelper,
         RuntimeHelperCategory::Float | RuntimeHelperCategory::Conversion => {
             ResourceContributionKind::FloatHelper
         }
