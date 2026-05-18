@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 
-# Phase 33/34 Helper Size Reduction
+# Phase 33-35 Helper Size Reduction
 
 Phase 33 focuses on cost visibility and safe pruning.
 
@@ -15,6 +15,8 @@ Implemented behavior:
 
 Phase 34 adds the first real shared primitive path. With `--runtime-profile small`, 32-bit division and modulo wrappers share `__rt_u32_divmod_core` instead of emitting fully independent standalone bodies.
 
+Phase 35 adds compact wrappers for signed Q16.16 multiply/divide and finite f32 subtraction.
+
 Representative `unsigned long` division plus modulo on `PIC16F877A`:
 
 ```text
@@ -23,6 +25,20 @@ small:    Program words 3659, runtime helpers 2773
 ```
 
 The saving is intentionally modest: correctness, page safety, and stack reporting are preserved. Shared helpers may add helper-to-helper calls, so inspect `--stack-report` when using `small`.
+
+Representative Q16.16 signed plus unsigned division:
+
+```text
+balanced: Program words 6951, runtime helpers 6037
+small:    Program words 4981, runtime helpers 4067
+```
+
+Representative f32 add plus subtract:
+
+```text
+balanced: Program words 8040, runtime helpers 7150
+small:    Program words 5102, runtime helpers 4212
+```
 
 ## Budget Warnings
 

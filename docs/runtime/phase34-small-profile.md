@@ -52,6 +52,15 @@ small:    Program words 3659, runtime helpers 2773
 
 Exact counts can change as backend lowering evolves. Tests assert the ordering, not fragile exact numbers.
 
+Phase 35 representative results:
+
+```text
+Q16 div balanced: Program words 6951, runtime helpers 6037
+Q16 div small:    Program words 4981, runtime helpers 4067
+f32 add/sub balanced: Program words 8040, runtime helpers 7150
+f32 add/sub small:    Program words 5102, runtime helpers 4212
+```
+
 ## Stack Tradeoff
 
 Compact helpers may add helper-to-helper calls. Use:

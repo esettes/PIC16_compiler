@@ -18,7 +18,7 @@ Shared backend responsibilities:
 - IR -> PIC16 asm lowering
 - 14-bit word encoding
 
-Current backend phase: **Phase 34 runtime helper compaction on top of Phase 33 helper catalog/reporting, Phase 32 page-aware layout and linker relaxation, Phase 31 page-safety, Phase 30 ROM float table codegen, Phase 29 float compare/conversion helpers, Phase 26 config/HEX workflow, Phase 25 resource fitting, Phase 24 dynamic Q16.16 helper codegen, Phase 23 fixed ROM table codegen, Phase 22 fixed-point codegen, Phase 21 32-bit integer codegen, Phase 20 simulator tooling, Phase 19 execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier backend phases**
+Current backend phase: **Phase 35 fixed/float runtime helper compaction on top of Phase 34 integer helper compaction, Phase 33 helper catalog/reporting, Phase 32 page-aware layout and linker relaxation, Phase 31 page-safety, Phase 30 ROM float table codegen, Phase 29 float compare/conversion helpers, Phase 26 config/HEX workflow, Phase 25 resource fitting, Phase 24 dynamic Q16.16 helper codegen, Phase 23 fixed ROM table codegen, Phase 22 fixed-point codegen, Phase 21 32-bit integer codegen, Phase 20 simulator tooling, Phase 19 execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier backend phases**
 
 Backend owns:
 
