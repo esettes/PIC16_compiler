@@ -5767,6 +5767,148 @@ fn phase34_runtime_profile_examples_compile_via_picc() {
 }
 
 #[test]
+/// Verifies Phase 35 `small` compacts signed Q16.16 division through the unsigned helper.
+fn phase35_small_profile_compacts_q16_div_helpers() {
+    let input = "examples/pic16f877a/runtime_profile_small_q16.c";
+    let (balanced_hex, balanced_stdout, balanced_report) =
+        compile_profile_size_report("balanced", input, "phase35-balanced-q16-div", &[]);
+    let (small_hex, small_stdout, small_report) =
+        compile_profile_size_report("small", input, "phase35-small-q16-div", &["--stack-report"]);
+
+    let balanced_words = parse_program_words(&balanced_stdout);
+    let small_words = parse_program_words(&small_stdout);
+    assert!(
+        small_words < balanced_words,
+        "small profile should reduce q16 division words: small={small_words} balanced={balanced_words}"
+    );
+    assert!(small_stdout.contains("helper_extra="));
+    assert!(small_report.contains("__rt_div_q16_16"));
+    assert!(small_report.contains("variant=small"));
+    assert!(small_report.contains("deps=__rt_div_uq16_16"));
+    assert!(!balanced_report.contains("deps=__rt_div_uq16_16"));
+    assert_hex_is_programmable(&balanced_hex);
+    assert_hex_is_programmable(&small_hex);
+}
+
+#[test]
+/// Verifies Phase 35 `small` compacts signed Q16.16 multiplication through the unsigned helper.
+fn phase35_small_profile_compacts_q16_mul_helpers() {
+    let source = r#"
+__ufixed16_16 ua;
+__ufixed16_16 ub;
+__ufixed16_16 ur;
+__fixed16_16 sa;
+__fixed16_16 sb;
+__fixed16_16 sr;
+
+void main(void) {
+    ua = 1.5uq16_16;
+    ub = 2.0uq16_16;
+    ur = ua * ub;
+    sa = -1.5q16_16;
+    sb = 2.0q16_16;
+    sr = sa * sb;
+}
+"#;
+    let (small_hex, small_stdout, small_report) =
+        compile_profile_source_size_report("small", "phase35-small-q16-mul", source, &[]);
+
+    let small_words = parse_program_words(&small_stdout);
+    assert!(
+        small_words < 8192,
+        "small profile should keep q16 multiply fixture within target: small={small_words}"
+    );
+    assert!(small_report.contains("__rt_mul_q16_16"));
+    assert!(small_report.contains("variant=small"));
+    assert!(small_report.contains("deps=__rt_mul_uq16_16"));
+    assert_hex_is_programmable(&small_hex);
+}
+
+#[test]
+/// Verifies Phase 35 `small` compacts float subtraction through float addition.
+fn phase35_small_profile_compacts_float_sub_helper() {
+    let input = "examples/pic16f877a/runtime_profile_small_float.c";
+    let (balanced_hex, balanced_stdout, balanced_report) =
+        compile_profile_size_report("balanced", input, "phase35-balanced-float", &[]);
+    let (small_hex, small_stdout, small_report) =
+        compile_profile_size_report("small", input, "phase35-small-float", &["--stack-report"]);
+
+    let balanced_words = parse_program_words(&balanced_stdout);
+    let small_words = parse_program_words(&small_stdout);
+    assert!(
+        small_words < balanced_words,
+        "small profile should reduce float add/sub words: small={small_words} balanced={balanced_words}"
+    );
+    assert!(small_stdout.contains("helper_extra="));
+    assert!(small_report.contains("__rt_f32_sub"));
+    assert!(small_report.contains("variant=small"));
+    assert!(small_report.contains("deps=__rt_f32_add"));
+    assert!(!balanced_report.contains("deps=__rt_f32_add"));
+    assert_hex_is_programmable(&balanced_hex);
+    assert_hex_is_programmable(&small_hex);
+}
+
+#[test]
+/// Verifies Phase 35 profiles remain monotonic for conversion and mixed numeric programs.
+fn phase35_small_profile_size_comparisons_cover_conversion_and_mixed() {
+    let conversion = r#"
+long lvalue;
+long lresult;
+float fvalue;
+
+void main(void) {
+    lvalue = -1000L;
+    fvalue = (float)lvalue;
+    lresult = (long)fvalue;
+}
+"#;
+    let (balanced_hex, balanced_stdout, _) = compile_profile_source_size_report(
+        "balanced",
+        "phase35-balanced-conversion",
+        conversion,
+        &[],
+    );
+    let (small_hex, small_stdout, _) =
+        compile_profile_source_size_report("small", "phase35-small-conversion", conversion, &[]);
+    assert!(parse_program_words(&small_stdout) <= parse_program_words(&balanced_stdout));
+    assert_hex_is_programmable(&balanced_hex);
+    assert_hex_is_programmable(&small_hex);
+
+    let (balanced_hex, balanced_stdout, _) = compile_profile_size_report(
+        "balanced",
+        "examples/pic16f877a/runtime_profile_small_mixed_numeric.c",
+        "phase35-balanced-mixed",
+        &[],
+    );
+    let (small_hex, small_stdout, _) = compile_profile_size_report(
+        "small",
+        "examples/pic16f877a/runtime_profile_small_mixed_numeric.c",
+        "phase35-small-mixed",
+        &[],
+    );
+    assert!(parse_program_words(&small_stdout) < parse_program_words(&balanced_stdout));
+    assert_hex_is_programmable(&balanced_hex);
+    assert_hex_is_programmable(&small_hex);
+}
+
+#[test]
+/// Verifies Phase 35 runtime-profile examples compile and keep HEX validation intact.
+fn phase35_runtime_profile_examples_compile_via_picc() {
+    for example in [
+        "examples/pic16f877a/runtime_profile_small_q16.c",
+        "examples/pic16f877a/runtime_profile_small_float.c",
+        "examples/pic16f877a/runtime_profile_small_mixed_numeric.c",
+    ] {
+        let output = compile_example_via_picc_cli_with_extra_args(
+            "pic16f877a",
+            example,
+            &["--size", "--memory-report", "--runtime-profile", "small"],
+        );
+        assert_hex_is_programmable(&output);
+    }
+}
+
+#[test]
 /// Verifies unsupported runtime profile names are rejected at CLI parsing.
 fn phase33_rejects_unknown_runtime_profile() {
     let output = Command::new(picc_bin())

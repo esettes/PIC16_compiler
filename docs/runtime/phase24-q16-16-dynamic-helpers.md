@@ -40,3 +40,14 @@ Phase 27 float helpers reuse the same resource-reporting and stack-accounting pa
 ## Phase 33 Cost Reporting
 
 Q16.16 dynamic helpers are categorized as fixed helpers in Phase 33. Reports include actual emitted words, estimated catalog words, ABI argument bytes, helper frame bytes, and page placement. Use `--memory-report` to see whether Q16.16 helpers dominate the target image.
+
+## Phase 35 Small Profile
+
+Under `--runtime-profile small`, signed Q16.16 helpers use compact wrappers:
+
+```text
+__rt_mul_q16_16 -> __rt_mul_uq16_16
+__rt_div_q16_16 -> __rt_div_uq16_16
+```
+
+The wrappers normalize signs, call the unsigned helper through a page-safe helper-to-helper call, and reapply the result sign. `balanced` keeps standalone signed helper bodies.

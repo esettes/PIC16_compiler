@@ -23,3 +23,5 @@ Policy:
 - no helper use inside ISR
 
 The conversion bridge is intentionally Q16.16 based. It is useful for sensor scaling and fixed-point interop, not a complete IEEE conversion library.
+
+Phase 35 does not compact the conversion bridge internals. `--runtime-profile small` still reports conversion helpers and keeps their behavior unchanged.

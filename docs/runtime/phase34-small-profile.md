@@ -2,7 +2,7 @@
 
 # Phase 34 Small Runtime Profile
 
-`--runtime-profile small` is now more than an early-warning profile. It selects compact helper variants for the first supported helper family: 32-bit integer division/modulo.
+`--runtime-profile small` is now more than an early-warning profile. It selects compact helper variants.
 
 ## Behavior
 
@@ -10,7 +10,7 @@
 picc --target pic16f877a -I include --runtime-profile small --size --memory-report -o build/app.hex app.c
 ```
 
-For code using both `/` and `%` on 32-bit integers, `small` emits:
+For code using both `/` and `%` on 32-bit integers, Phase 34 `small` emits:
 
 ```text
 __rt_div_u32 -> __rt_u32_divmod_core
@@ -18,6 +18,16 @@ __rt_mod_u32 -> __rt_u32_divmod_core
 ```
 
 Signed wrappers use the same unsigned core after sign normalization.
+
+Phase 35 adds more compact wrappers:
+
+```text
+__rt_mul_q16_16 -> __rt_mul_uq16_16
+__rt_div_q16_16 -> __rt_div_uq16_16
+__rt_f32_sub -> __rt_f32_add
+```
+
+The Q16.16 wrappers normalize signs before calling the unsigned helper and reapply the result sign. The f32 subtraction wrapper flips the RHS sign bit and calls f32 addition.
 
 ## Report Output
 

@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 
-# Phase 34 Shared Helper Primitives
+# Shared Helper Primitives
 
 Phase 34 adds the first real shared runtime primitive:
 
@@ -44,4 +44,10 @@ Wrapper-to-core calls are emitted as normal page-safe helper calls. Phase 31/32 
 
 ## Limits
 
-Phase 34 does not yet compact Q16.16, Q8.8, or float helper internals. Those helpers remain candidates for later size work after separate simulator coverage.
+Phase 35 adds wrapper-level sharing for Q16.16 and float:
+
+- `__rt_mul_q16_16` depends on `__rt_mul_uq16_16` under `small`
+- `__rt_div_q16_16` depends on `__rt_div_uq16_16` under `small`
+- `__rt_f32_sub` depends on `__rt_f32_add` under `small`
+
+This is not full pack/unpack or normalization factoring. Q8.8 helpers, float multiply/divide internals, and float conversion internals remain standalone.

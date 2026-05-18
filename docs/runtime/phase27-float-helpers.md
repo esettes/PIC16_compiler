@@ -31,3 +31,13 @@ Resource note: generic float helpers are large. Codegen includes inline fast pat
 Phase 33 records float helpers in the centralized runtime helper catalog. `--size`, `--memory-report`, `.map`, and `.lst` show float helper category, actual emitted words, stack frame size, required-by text, and target constraints.
 
 Large float helpers can exceed small targets. Use `--runtime-profile small --memory-report` before hardware builds when float is enabled.
+
+## Phase 35 Small Profile
+
+Under `--runtime-profile small`, `__rt_f32_sub` is emitted as a compact wrapper around `__rt_f32_add`:
+
+```text
+__rt_f32_sub -> __rt_f32_add
+```
+
+The wrapper flips the RHS sign bit and calls the addition helper. Float add, multiply, divide, compare, and conversion helpers remain standalone.

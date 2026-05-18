@@ -42,3 +42,5 @@ Phase 30 ROM float reads produce ordinary raw f32 values. Comparing a ROM-read v
 ## Phase 33 Catalog Entry
 
 `__rt_f32_cmp` is categorized as a float helper in Phase 33 reports. Its emitted word count, frame bytes, page placement, and dependency graph entry appear in `--memory-report` and `.map`.
+
+Phase 35 leaves `__rt_f32_cmp` standalone. The compact float helper added in Phase 35 is `__rt_f32_sub -> __rt_f32_add`.

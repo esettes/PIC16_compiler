@@ -151,6 +151,18 @@ Phase 34 keeps the Phase 33 catalog and makes `--runtime-profile small` select a
 
 `balanced` keeps the standalone helper bodies. `fast` is still reserved and currently follows balanced behavior. No C language feature is added in Phase 34.
 
+### Phase 35 Fixed/Float Helper Compaction
+
+Phase 35 extends compact helper selection beyond integer division/modulo:
+
+- signed Q16.16 multiply uses a small sign-normalizing wrapper around `__rt_mul_uq16_16`
+- signed Q16.16 divide uses a small sign-normalizing wrapper around `__rt_div_uq16_16`
+- finite `float` subtraction uses a compact `lhs + (-rhs)` wrapper around `__rt_f32_add`
+- selected dependencies appear in `--memory-report` and the runtime helper graph
+- helper-to-helper calls use the same page-safe call path and stack accounting as Phase 34
+
+`balanced` keeps standalone helper bodies. `fast` still follows balanced behavior. No C language feature is added in Phase 35.
+
 ### Phase 4 Stack-first ABI
 
 Current ABI is stack-first, caller-pushed, upward-growing.

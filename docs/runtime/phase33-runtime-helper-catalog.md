@@ -32,7 +32,7 @@ The catalog feeds codegen, stack estimates, memory reports, map grouping, listin
 
 The graph is validated before helper emission so shared helper primitives cannot introduce unknown or cyclic dependencies silently.
 
-Phase 34 adds the first profile-dependent dependency:
+Phase 34 adds the first profile-dependent dependencies:
 
 ```text
 --runtime-profile small
@@ -42,7 +42,16 @@ __rt_div_i32 -> __rt_u32_divmod_core
 __rt_mod_i32 -> __rt_u32_divmod_core
 ```
 
-Under `balanced`, those helpers keep standalone bodies and have no dependency on `__rt_u32_divmod_core`.
+Phase 35 adds:
+
+```text
+--runtime-profile small
+__rt_mul_q16_16 -> __rt_mul_uq16_16
+__rt_div_q16_16 -> __rt_div_uq16_16
+__rt_f32_sub -> __rt_f32_add
+```
+
+Under `balanced`, those helpers keep standalone bodies and have no compact-profile dependency.
 
 ## Pruning
 
@@ -65,10 +74,11 @@ Runtime Helper Contributors
 Runtime Helper Dependency Graph
 ```
 
-For Phase 34 compact helpers, contributor lines include the selected variant and dependency list:
+For compact helpers, contributor lines include the selected variant and dependency list:
 
 ```text
 __rt_div_u32: category=division variant=small ... deps=__rt_u32_divmod_core
+__rt_f32_sub: category=float variant=small ... deps=__rt_f32_add
 ```
 
 `.lst` helper bodies include comments such as:

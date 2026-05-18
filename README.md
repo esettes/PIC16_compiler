@@ -33,14 +33,16 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 34: runtime helper compaction and a real `small` runtime profile on top of Phase 33 runtime helper reporting, Phase 32 page-aware code layout, Phase 31 backend page-safety, Phase 30 ROM float tables, Phase 29 dynamic float comparisons and 32-bit integer conversions, Phase 28 float hardening, Phase 27 basic finite software `float`, Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, and the earlier frontend/backend phases**.
+Current implementation is **Phase 35: fixed/float helper compaction and runtime profile refinement on top of Phase 34 integer helper compaction, Phase 33 runtime helper reporting, Phase 32 page-aware code layout, Phase 31 backend page-safety, Phase 30 ROM float tables, Phase 29 dynamic float comparisons and 32-bit integer conversions, Phase 28 float hardening, Phase 27 basic finite software `float`, Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, and the earlier frontend/backend phases**.
 
-Phase 34 scope:
+Phase 35 scope:
 
 - centralized runtime helper catalog metadata for category, ABI size, stack frame, required-by text, dependency list, and target constraints
 - helper dependency graph validation before emitting runtime bodies
 - helper pruning remains demand-driven: literal-only `float`, `long`, and fixed-point declarations do not pull arithmetic helpers
 - `--runtime-profile small` now selects compact unsigned/signed 32-bit div/mod wrappers around shared `__rt_u32_divmod_core`
+- `--runtime-profile small` also shares signed Q16.16 multiply/divide through unsigned Q16.16 helpers
+- `--runtime-profile small` lowers `__rt_f32_sub` as a compact wrapper around `__rt_f32_add`
 - `--runtime-profile balanced` keeps the standalone helper bodies; `fast` remains documented as balanced behavior for now
 - `--size`, `--memory-report`, and `.map` include runtime helper word totals by category
 - `--memory-report` shows selected helper variants and dependencies
