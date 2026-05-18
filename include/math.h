@@ -8,5 +8,6 @@ float truncf(float x);
 float floorf(float x);
 float ceilf(float x);
 float roundf(float x);
+float sqrtf(float x);
 
 #endif

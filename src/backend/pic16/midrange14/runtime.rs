@@ -69,6 +69,7 @@ pub enum RuntimeHelper {
     F32Floor,
     F32Ceil,
     F32Round,
+    F32Sqrt,
     F32ToQ16,
     Q16ToF32,
     I32ToF32,
@@ -149,6 +150,7 @@ impl RuntimeHelper {
         RuntimeHelper::F32Floor,
         RuntimeHelper::F32Ceil,
         RuntimeHelper::F32Round,
+        RuntimeHelper::F32Sqrt,
         RuntimeHelper::F32ToQ16,
         RuntimeHelper::Q16ToF32,
         RuntimeHelper::I32ToF32,
@@ -475,6 +477,13 @@ impl RuntimeHelper {
                 local_bytes: 9,
                 frame_bytes: 11,
             },
+            Self::F32Sqrt => RuntimeHelperInfo {
+                label: "__rt_f32_sqrt",
+                operand_ty: Type::new(ScalarType::F32),
+                arg_bytes: 4,
+                local_bytes: 16,
+                frame_bytes: 18,
+            },
             Self::F32ToQ16 => RuntimeHelperInfo {
                 label: "__rt_f32_to_q16_16",
                 operand_ty: Type::new(ScalarType::F32),
@@ -544,9 +553,12 @@ impl RuntimeHelper {
             Self::F32Add | Self::F32Sub | Self::F32Mul | Self::F32Div | Self::F32Cmp => {
                 RuntimeHelperCategory::Float
             }
-            Self::F32Fabs | Self::F32Trunc | Self::F32Floor | Self::F32Ceil | Self::F32Round => {
-                RuntimeHelperCategory::Math
-            }
+            Self::F32Fabs
+            | Self::F32Trunc
+            | Self::F32Floor
+            | Self::F32Ceil
+            | Self::F32Round
+            | Self::F32Sqrt => RuntimeHelperCategory::Math,
             Self::F32ToQ16
             | Self::Q16ToF32
             | Self::I32ToF32
@@ -597,6 +609,7 @@ impl RuntimeHelper {
             Self::F32Floor => &[Self::F32ToQ16, Self::I32ToF32],
             Self::F32Ceil => &[Self::F32Floor],
             Self::F32Round => &[Self::F32ToQ16, Self::I32ToF32],
+            Self::F32Sqrt => &[Self::F32ToQ16, Self::DivQ16_16, Self::Q16ToF32],
             _ => &[],
         }
     }

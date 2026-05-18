@@ -2948,12 +2948,15 @@ impl<'a> SemanticAnalyzer<'a> {
         })
     }
 
-    /// Returns true for the finite-only Phase 36 float math subset.
+    /// Returns true for the finite-only Phase 36/37 float math subset.
     fn is_float_math_builtin(name: &str) -> bool {
-        matches!(name, "fabsf" | "truncf" | "floorf" | "ceilf" | "roundf")
+        matches!(
+            name,
+            "fabsf" | "truncf" | "floorf" | "ceilf" | "roundf" | "sqrtf"
+        )
     }
 
-    /// Constant-folds one Phase 36 float math call when the single argument is a constant f32.
+    /// Constant-folds one finite float math call when the single argument is a constant f32.
     fn eval_float_math_call_constant(
         name: &str,
         args: &[TypedExpr],
@@ -2970,7 +2973,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 "semantic",
                 Some(span),
                 "unsupported special float value in finite math call",
-                Some("Phase 36 math.h supports finite float values only".to_string()),
+                Some("Phase 36/37 math.h supports finite float values only".to_string()),
             );
             return None;
         }
@@ -2980,6 +2983,13 @@ impl<'a> SemanticAnalyzer<'a> {
             "floorf" => value.floor(),
             "ceilf" => value.ceil(),
             "roundf" => value.round(),
+            "sqrtf" => {
+                if value < 0.0 {
+                    0.0
+                } else {
+                    value.sqrt()
+                }
+            }
             _ => return None,
         };
         if !result.is_finite() {
@@ -7063,7 +7073,7 @@ impl<'a> SemanticAnalyzer<'a> {
                             self.symbols[function].name, self.symbols[*callee].name
                         ),
                         Some(
-                            "Phase 36 allows only inline `fabsf` inside ISRs; call other math helpers from normal code".to_string(),
+                            "Phase 36/37 allows only inline `fabsf` inside ISRs; call other math helpers from normal code".to_string(),
                         ),
                     );
                     return;

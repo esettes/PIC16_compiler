@@ -4240,6 +4240,9 @@ impl<'a> CodegenContext<'a> {
             RuntimeHelper::F32Round => {
                 self.emit_float_f32_round_helper(arg0_offset, local_base);
             }
+            RuntimeHelper::F32Sqrt => {
+                self.emit_float_f32_sqrt_helper(arg0_offset, local_base);
+            }
             RuntimeHelper::F32ToQ16 => {
                 self.emit_float_to_q16_frame(
                     0,
@@ -4800,6 +4803,58 @@ impl<'a> CodegenContext<'a> {
         self.program.push(AsmLine::Label(done_label));
         self.emit_call_unary_runtime_helper_32(RuntimeHelper::I32ToF32, q_offset, q_offset);
         self.emit_return_current_frame_value(q_offset, Type::new(ScalarType::F32));
+    }
+
+    /// Emits finite `sqrtf` by using a Q16.16 Newton iteration bridge.
+    fn emit_float_f32_sqrt_helper(&mut self, arg_offset: u16, local_base: u16) {
+        let q_ty = Type::new(ScalarType::I32);
+        let uq_ty = Type::new(ScalarType::U32);
+        let x_offset = local_base;
+        let guess_offset = x_offset + 4;
+        let quotient_offset = guess_offset + 4;
+        let one_offset = quotient_offset + 4;
+        let zero_label = self.unique_label("rt_f32_sqrt_zero");
+        let positive_label = self.unique_label("rt_f32_sqrt_positive");
+        let init_guess_label = self.unique_label("rt_f32_sqrt_init_guess");
+        let use_one_label = self.unique_label("rt_f32_sqrt_use_one");
+        let iterate_label = self.unique_label("rt_f32_sqrt_iterate");
+
+        self.emit_call_unary_runtime_helper_32(RuntimeHelper::F32ToQ16, arg_offset, x_offset);
+        self.emit_current_frame_nonzero_branch(x_offset, q_ty, &positive_label, &zero_label);
+        self.program.push(AsmLine::Label(positive_label));
+        self.branch_on_current_frame_bit(x_offset + 3, 7, &zero_label, &init_guess_label);
+
+        self.program.push(AsmLine::Label(init_guess_label));
+        self.copy_current_frame_bytes(x_offset, guess_offset, 4);
+        self.store_i32_const_to_current_frame(one_offset, 0x0001_0000);
+        self.emit_current_frame_unsigned_ge_branch(
+            x_offset,
+            one_offset,
+            uq_ty,
+            &iterate_label,
+            &use_one_label,
+        );
+        self.program.push(AsmLine::Label(use_one_label));
+        self.copy_current_frame_bytes(one_offset, guess_offset, 4);
+        self.jump_to_label(&iterate_label);
+
+        self.program.push(AsmLine::Label(iterate_label));
+        for _ in 0..8 {
+            self.emit_call_binary_runtime_helper_32(
+                RuntimeHelper::DivQ16_16,
+                x_offset,
+                guess_offset,
+                quotient_offset,
+            );
+            self.add_current_frame_value_into_slot(quotient_offset, guess_offset, q_ty);
+            self.shift_current_frame_value_right(guess_offset, q_ty, false);
+        }
+        self.emit_call_unary_runtime_helper_32(RuntimeHelper::Q16ToF32, guess_offset, guess_offset);
+        self.emit_return_current_frame_value(guess_offset, Type::new(ScalarType::F32));
+
+        self.program.push(AsmLine::Label(zero_label));
+        self.clear_current_frame_slot(guess_offset, Type::new(ScalarType::F32));
+        self.emit_return_current_frame_value(guess_offset, Type::new(ScalarType::F32));
     }
 
     /// Emits compact Phase 35 f32 subtraction as `lhs + (-rhs)` through `__rt_f32_add`.
@@ -7535,6 +7590,7 @@ fn runtime_helper_for_math_call(name: &str) -> Option<RuntimeHelper> {
         "floorf" => Some(RuntimeHelper::F32Floor),
         "ceilf" => Some(RuntimeHelper::F32Ceil),
         "roundf" => Some(RuntimeHelper::F32Round),
+        "sqrtf" => Some(RuntimeHelper::F32Sqrt),
         _ => None,
     }
 }
