@@ -12,9 +12,8 @@ Algorithm:
 
 - convert finite f32 input to signed Q16.16 inside the helper
 - return raw `0.0f` when the Q16.16 input is zero or negative
-- choose an initial Q16.16 guess of `max(x, 1.0)`
-- run four deterministic Newton iterations: `guess = (guess + x / guess) / 2`
-- use an internal local unsigned Q16.16 division block instead of emitting external conversion/division helpers
+- search the Q16.16 interval `[0, max(x, 1.0)]` with 20 bisection iterations
+- use an internal local unsigned Q16.16 multiplication block instead of emitting external conversion/multiply helpers
 
 Runtime integration:
 
