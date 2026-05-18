@@ -1108,6 +1108,8 @@ picc --list-targets
 - [docs/backend/phase30-rom-float-tables.md](docs/backend/phase30-rom-float-tables.md)
 - [docs/runtime/phase34-shared-helper-primitives.md](docs/runtime/phase34-shared-helper-primitives.md)
 - [docs/runtime/phase34-small-profile.md](docs/runtime/phase34-small-profile.md)
+- [docs/runtime/phase35-fixed-float-helper-compaction.md](docs/runtime/phase35-fixed-float-helper-compaction.md)
+- [docs/runtime/phase35-runtime-profile-variants.md](docs/runtime/phase35-runtime-profile-variants.md)
 - [docs/migration/phase3-to-phase4-abi.md](docs/migration/phase3-to-phase4-abi.md)
 - [docs/developer-guide/adding-device.md](docs/developer-guide/adding-device.md)
 

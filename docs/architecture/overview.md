@@ -58,9 +58,10 @@ Current Phase 26 keeps that split intact while extending:
 - Phase 26 config-word descriptors, `#pragma config`, raw `__config`, `--verify-hex`, and external programmer command workflow
 - Phase 28 finite 32-bit software `float` hardening, dynamic 16-bit/fixed casts, helper reporting, and simulator validation
 - Phase 34 runtime helper compaction through profile-selected shared primitives and helper dependency reports
+- Phase 35 fixed/float helper compaction for signed Q16.16 wrappers and f32 subtraction
 - PIC16 banking/paging without backend duplication per device
 
-Phase 34 keeps the compiler layering unchanged:
+Phase 35 keeps the compiler layering unchanged:
 
 - frontend still produces typed trees only
 - IR still stays target-aware but encoding-agnostic

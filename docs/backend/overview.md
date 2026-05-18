@@ -2,7 +2,7 @@
 
 # PIC16 `midrange14` Backend
 
-Phase 34 adds compact runtime helper variants on top of the Phase 33 helper catalog. Phase 32 page-aware layout reporting and safe linker relaxation, Phase 31 `PCLATH` page-safety validation, Phase 30 ROM float data, Phase 29 finite-float runtime completion, Phase 26 config/HEX validation, Phase 25 target resource fitting, and Phase 24 dynamic Q16.16/UQ16.16 helpers remain supported.
+Phase 35 adds fixed/float compact runtime helper variants on top of the Phase 34 integer compaction and Phase 33 helper catalog. Phase 32 page-aware layout reporting and safe linker relaxation, Phase 31 `PCLATH` page-safety validation, Phase 30 ROM float data, Phase 29 finite-float runtime completion, Phase 26 config/HEX validation, Phase 25 target resource fitting, and Phase 24 dynamic Q16.16/UQ16.16 helpers remain supported.
 
 Phase 21 extends the PIC16 backend to four-byte integer values. The return convention is `W` plus `__abi.return_high`, `__abi.return_upper0`, and `__abi.return_upper1`. Multi-byte carry/borrow codegen is shared by 8-, 16-, 32-bit, and fixed raw paths.
 
