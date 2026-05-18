@@ -458,22 +458,22 @@ impl RuntimeHelper {
                 label: "__rt_f32_floor",
                 operand_ty: Type::new(ScalarType::F32),
                 arg_bytes: 4,
-                local_bytes: 10,
-                frame_bytes: 12,
+                local_bytes: 12,
+                frame_bytes: 14,
             },
             Self::F32Ceil => RuntimeHelperInfo {
                 label: "__rt_f32_ceil",
                 operand_ty: Type::new(ScalarType::F32),
                 arg_bytes: 4,
-                local_bytes: 10,
-                frame_bytes: 12,
+                local_bytes: 12,
+                frame_bytes: 14,
             },
             Self::F32Round => RuntimeHelperInfo {
                 label: "__rt_f32_round",
                 operand_ty: Type::new(ScalarType::F32),
                 arg_bytes: 4,
-                local_bytes: 8,
-                frame_bytes: 10,
+                local_bytes: 9,
+                frame_bytes: 11,
             },
             Self::F32ToQ16 => RuntimeHelperInfo {
                 label: "__rt_f32_to_q16_16",
@@ -594,9 +594,8 @@ impl RuntimeHelper {
     pub const fn dependencies(self) -> &'static [RuntimeHelper] {
         match self {
             Self::F32Trunc => &[Self::F32ToI32, Self::I32ToF32],
-            Self::F32Floor => &[Self::F32Trunc, Self::F32Cmp, Self::F32Sub],
-            Self::F32Ceil => &[Self::F32Trunc, Self::F32Cmp, Self::F32Add],
-            Self::F32Round => &[Self::F32Floor, Self::F32Ceil, Self::F32Add, Self::F32Sub],
+            Self::F32Floor | Self::F32Ceil => &[Self::F32ToI32, Self::F32ToQ16, Self::I32ToF32],
+            Self::F32Round => &[Self::F32ToQ16, Self::I32ToF32],
             _ => &[],
         }
     }
