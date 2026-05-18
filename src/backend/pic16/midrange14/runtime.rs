@@ -16,6 +16,7 @@ pub enum RuntimeHelperCategory {
     Integer,
     Fixed,
     Float,
+    Math,
     Conversion,
     Shift,
     Division,
@@ -63,6 +64,11 @@ pub enum RuntimeHelper {
     F32Mul,
     F32Div,
     F32Cmp,
+    F32Fabs,
+    F32Trunc,
+    F32Floor,
+    F32Ceil,
+    F32Round,
     F32ToQ16,
     Q16ToF32,
     I32ToF32,
@@ -138,6 +144,11 @@ impl RuntimeHelper {
         RuntimeHelper::F32Mul,
         RuntimeHelper::F32Div,
         RuntimeHelper::F32Cmp,
+        RuntimeHelper::F32Fabs,
+        RuntimeHelper::F32Trunc,
+        RuntimeHelper::F32Floor,
+        RuntimeHelper::F32Ceil,
+        RuntimeHelper::F32Round,
         RuntimeHelper::F32ToQ16,
         RuntimeHelper::Q16ToF32,
         RuntimeHelper::I32ToF32,
@@ -429,6 +440,41 @@ impl RuntimeHelper {
                 local_bytes: 16,
                 frame_bytes: 18,
             },
+            Self::F32Fabs => RuntimeHelperInfo {
+                label: "__rt_f32_fabs",
+                operand_ty: Type::new(ScalarType::F32),
+                arg_bytes: 4,
+                local_bytes: 0,
+                frame_bytes: 2,
+            },
+            Self::F32Trunc => RuntimeHelperInfo {
+                label: "__rt_f32_trunc",
+                operand_ty: Type::new(ScalarType::F32),
+                arg_bytes: 4,
+                local_bytes: 4,
+                frame_bytes: 6,
+            },
+            Self::F32Floor => RuntimeHelperInfo {
+                label: "__rt_f32_floor",
+                operand_ty: Type::new(ScalarType::F32),
+                arg_bytes: 4,
+                local_bytes: 10,
+                frame_bytes: 12,
+            },
+            Self::F32Ceil => RuntimeHelperInfo {
+                label: "__rt_f32_ceil",
+                operand_ty: Type::new(ScalarType::F32),
+                arg_bytes: 4,
+                local_bytes: 10,
+                frame_bytes: 12,
+            },
+            Self::F32Round => RuntimeHelperInfo {
+                label: "__rt_f32_round",
+                operand_ty: Type::new(ScalarType::F32),
+                arg_bytes: 4,
+                local_bytes: 8,
+                frame_bytes: 10,
+            },
             Self::F32ToQ16 => RuntimeHelperInfo {
                 label: "__rt_f32_to_q16_16",
                 operand_ty: Type::new(ScalarType::F32),
@@ -498,6 +544,11 @@ impl RuntimeHelper {
             Self::F32Add | Self::F32Sub | Self::F32Mul | Self::F32Div | Self::F32Cmp => {
                 RuntimeHelperCategory::Float
             }
+            Self::F32Fabs
+            | Self::F32Trunc
+            | Self::F32Floor
+            | Self::F32Ceil
+            | Self::F32Round => RuntimeHelperCategory::Math,
             Self::F32ToQ16
             | Self::Q16ToF32
             | Self::I32ToF32
@@ -535,6 +586,7 @@ impl RuntimeHelper {
             RuntimeHelperCategory::Integer => "integer arithmetic",
             RuntimeHelperCategory::Fixed => "fixed-point arithmetic",
             RuntimeHelperCategory::Float => "finite f32 arithmetic/comparison",
+            RuntimeHelperCategory::Math => "finite float math function",
             RuntimeHelperCategory::Conversion => "numeric conversion",
             RuntimeHelperCategory::Shift => "dynamic shift",
             RuntimeHelperCategory::Division => "integer division/modulo",
@@ -542,7 +594,13 @@ impl RuntimeHelper {
     }
 
     pub const fn dependencies(self) -> &'static [RuntimeHelper] {
-        &[]
+        match self {
+            Self::F32Trunc => &[Self::F32ToI32, Self::I32ToF32],
+            Self::F32Floor => &[Self::F32Trunc, Self::F32Cmp, Self::F32Sub],
+            Self::F32Ceil => &[Self::F32Trunc, Self::F32Cmp, Self::F32Add],
+            Self::F32Round => &[Self::F32Floor, Self::F32Ceil, Self::F32Add, Self::F32Sub],
+            _ => &[],
+        }
     }
 
     pub const fn dependencies_for_profile(
@@ -572,6 +630,9 @@ impl RuntimeHelper {
     pub const fn target_constraints(self) -> &'static str {
         match self.category() {
             RuntimeHelperCategory::Float => "large on PIC16F628A; prefer PIC16F877A or fixed-point",
+            RuntimeHelperCategory::Math => {
+                "float math helpers may be large; prefer PIC16F877A for math-heavy code"
+            }
             RuntimeHelperCategory::Fixed => "Q16.16 helpers may be large on small targets",
             _ => "normal program-memory and stack limits",
         }
@@ -632,6 +693,7 @@ impl RuntimeHelperCategory {
             Self::Integer => "integer",
             Self::Fixed => "fixed",
             Self::Float => "float",
+            Self::Math => "math",
             Self::Conversion => "conversion",
             Self::Shift => "shift",
             Self::Division => "division",
