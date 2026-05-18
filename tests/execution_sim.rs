@@ -2378,32 +2378,51 @@ void main(void) {
 }
 
 #[test]
-fn executes_phase36_floorf_and_ceilf() {
+fn executes_phase36_floorf() {
     let (core, map) = run_source(
         "pic16f877a",
-        "phase36-floor-ceil.c",
+        "phase36-floor.c",
         r#"
 #include <math.h>
 
 float floor_pos;
 float floor_neg;
-float ceil_pos;
-float ceil_neg;
 
 void main(void) {
+    float pos = 1.75f;
     float floor_input = -1.25f;
-    float ceil_input = -1.75f;
 
-    floor_pos = floorf(1.75f);
+    floor_pos = floorf(pos);
     floor_neg = floorf(floor_input);
-    ceil_pos = ceilf(1.25f);
-    ceil_neg = ceilf(ceil_input);
 }
 "#,
     );
 
     assert_eq!(symbol_u32(&core, &map, "floor_pos"), 0x3F80_0000);
     assert_eq!(symbol_u32(&core, &map, "floor_neg"), 0xC000_0000);
+}
+
+#[test]
+fn executes_phase36_ceilf() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase36-ceil.c",
+        r#"
+#include <math.h>
+
+float ceil_pos;
+float ceil_neg;
+
+void main(void) {
+    float pos = 1.25f;
+    float neg = -1.75f;
+
+    ceil_pos = ceilf(pos);
+    ceil_neg = ceilf(neg);
+}
+"#,
+    );
+
     assert_eq!(symbol_u32(&core, &map, "ceil_pos"), 0x4000_0000);
     assert_eq!(symbol_u32(&core, &map, "ceil_neg"), 0xBF80_0000);
 }
@@ -2449,7 +2468,7 @@ fn executes_phase36_math_function_struct_and_rom_input() {
         r#"
 #include <math.h>
 
-const __rom float calibration[] = { -1.75f, 1.25f };
+const __rom float calibration[] = { -1.5f };
 
 struct Result {
     float value;
@@ -2458,18 +2477,18 @@ struct Result {
 struct Result result;
 float from_function;
 
-float apply_ceil(float x) {
-    return ceilf(x);
+float apply_abs(float x) {
+    return fabsf(x);
 }
 
 void main(void) {
     float rom_value = calibration[0];
-    result.value = floorf(rom_value);
-    from_function = apply_ceil(calibration[1]);
+    result.value = fabsf(rom_value);
+    from_function = apply_abs(rom_value);
 }
 "#,
     );
 
-    assert_eq!(symbol_u32(&core, &map, "result"), 0xC000_0000);
-    assert_eq!(symbol_u32(&core, &map, "from_function"), 0x4000_0000);
+    assert_eq!(symbol_u32(&core, &map, "result"), 0x3FC0_0000);
+    assert_eq!(symbol_u32(&core, &map, "from_function"), 0x3FC0_0000);
 }
