@@ -2492,3 +2492,82 @@ void main(void) {
     assert_eq!(symbol_u32(&core, &map, "result"), 0x3FC0_0000);
     assert_eq!(symbol_u32(&core, &map, "from_function"), 0x3FC0_0000);
 }
+
+#[test]
+fn executes_phase37_sqrtf_core_values() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase37-sqrt-core.c",
+        r#"
+#include <math.h>
+
+float sqrt_zero;
+float sqrt_one;
+float sqrt_four;
+float sqrt_nine;
+float sqrt_two25;
+float sqrt_quarter;
+float sqrt_negative;
+
+void main(void) {
+    float value;
+
+    value = 0.0f;
+    sqrt_zero = sqrtf(value);
+    value = 1.0f;
+    sqrt_one = sqrtf(value);
+    value = 4.0f;
+    sqrt_four = sqrtf(value);
+    value = 9.0f;
+    sqrt_nine = sqrtf(value);
+    value = 2.25f;
+    sqrt_two25 = sqrtf(value);
+    value = 0.25f;
+    sqrt_quarter = sqrtf(value);
+    value = -1.0f;
+    sqrt_negative = sqrtf(value);
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "sqrt_zero"), 0x0000_0000);
+    assert_eq!(symbol_u32(&core, &map, "sqrt_one"), 0x3F80_0000);
+    assert_eq!(symbol_u32(&core, &map, "sqrt_four"), 0x4000_0000);
+    assert_eq!(symbol_u32(&core, &map, "sqrt_nine"), 0x4040_0000);
+    assert_eq!(symbol_u32(&core, &map, "sqrt_two25"), 0x3FC0_0000);
+    assert_eq!(symbol_u32(&core, &map, "sqrt_quarter"), 0x3F00_0000);
+    assert_eq!(symbol_u32(&core, &map, "sqrt_negative"), 0x0000_0000);
+}
+
+#[test]
+fn executes_phase37_sqrtf_struct_rom_and_function_input() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase37-sqrt-rom-struct.c",
+        r#"
+#include <math.h>
+
+const __rom float roots[] = { 2.25f };
+
+struct Result {
+    float value;
+};
+
+struct Result result;
+float from_function;
+
+float apply_sqrt(float x) {
+    return sqrtf(x);
+}
+
+void main(void) {
+    float rom_value = roots[0];
+    result.value = sqrtf(rom_value);
+    from_function = apply_sqrt(rom_value);
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0x3FC0_0000);
+    assert_eq!(symbol_u32(&core, &map, "from_function"), 0x3FC0_0000);
+}

@@ -7076,3 +7076,93 @@ fn phase36_math_examples_compile_via_picc() {
         assert_hex_is_programmable(&output);
     }
 }
+
+#[test]
+/// Verifies Phase 37 sqrtf is reported, pruned, and constant-folded.
+fn phase37_sqrtf_reporting_pruning_and_folding() {
+    let sqrt_source = r#"
+#include <math.h>
+
+float input;
+float output;
+
+void main(void) {
+    input = 2.25f;
+    output = sqrtf(input);
+}
+"#;
+    let (_hex, stdout, memory_report) =
+        compile_profile_source_size_report("balanced", "phase37-sqrt-report", sqrt_source, &[]);
+    assert!(stdout.contains("math:"));
+    assert!(memory_report.contains("__rt_f32_sqrt"));
+    assert!(memory_report.contains("math helper"));
+
+    let folded = compile_source(
+        "pic16f877a",
+        "phase37-folded-sqrt.c",
+        r#"
+#include <math.h>
+
+float a = sqrtf(4.0f);
+float b = sqrtf(-1.0f);
+
+void main(void) {}
+"#,
+    );
+    let folded_map = read_artifact(&folded, "map");
+    assert!(!folded_map.contains("__rt_f32_sqrt"));
+
+    let unused = compile_source(
+        "pic16f877a",
+        "phase37-unused-sqrt.c",
+        r#"
+#include <math.h>
+
+float value;
+
+void main(void) {
+    value = 1.5f;
+}
+"#,
+    );
+    let unused_map = read_artifact(&unused, "map");
+    assert!(!unused_map.contains("__rt_f32_sqrt"));
+}
+
+#[test]
+/// Verifies Phase 37 keeps helper-backed sqrtf out of ISRs.
+fn phase37_sqrtf_isr_policy_is_explicit() {
+    let error = compile_error(
+        "pic16f877a",
+        "phase37-isr-sqrt.c",
+        r#"
+#include <math.h>
+
+float value;
+
+void __interrupt isr(void) {
+    value = sqrtf(value);
+}
+
+void main(void) {}
+"#,
+    );
+    assert!(error.contains("float math helper"));
+}
+
+#[test]
+/// Verifies checked-in Phase 37 sqrtf examples compile cleanly on PIC16F877A.
+fn phase37_sqrtf_examples_compile_via_picc() {
+    for example in [
+        "examples/pic16f877a/math_sqrt_basic.c",
+        "examples/pic16f877a/math_sqrt_rom.c",
+        "examples/pic16f877a/math_sqrt_resource_report.c",
+    ] {
+        let output = compile_example_via_picc_cli_with_extra_args(
+            "pic16f877a",
+            example,
+            &["--size", "--verify-hex"],
+        );
+        assert_hex_is_programmable(&output);
+    }
+}
