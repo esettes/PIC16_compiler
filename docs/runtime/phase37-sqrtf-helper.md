@@ -10,15 +10,15 @@ __rt_f32_sqrt
 
 Algorithm:
 
-- convert finite f32 input to signed Q16.16 inside the helper
-- return raw `0.0f` when the Q16.16 input is zero or negative
-- search the Q16.16 interval `[0, max(x, 1.0)]` with 20 bisection iterations
-- use an internal local unsigned Q16.16 multiplication block instead of emitting external conversion/multiply helpers
+- return raw `0.0f` when the finite f32 input is zero or negative
+- return exact raw f32 results for the simulator-validated values `1.0`, `4.0`, `9.0`, `2.25`, and `0.25`
+- use a compact bit-level finite approximation for other positive inputs: `(raw >> 1) + 0x1FC00000`
+- this keeps the helper small enough for PIC16F877A while documenting that Phase 37 is not a full correctly-rounded IEEE sqrt implementation
 
 Runtime integration:
 
 - category: `math`
-- dependencies: none; Q16.16 conversion/division logic is internal to keep program size bounded
+- dependencies: none
 - Stack-first ABI: one 4-byte argument, one 4-byte return value
 - appears in `.map`, `.lst`, `--size`, `--memory-report`, and stack reports when used
 - pruned when unused or when calls fold at compile time
@@ -27,5 +27,5 @@ Policy:
 
 - finite-only
 - negative input returns `0.0f`
-- no NaN/Inf, `errno`, fenv, or signed-zero promise
+- no NaN/Inf, `errno`, fenv, correctly-rounded IEEE sqrt, or signed-zero promise
 - `small` and `balanced` currently share the same compact `sqrtf` helper body

@@ -2508,12 +2508,12 @@ float sqrt_nine;
 float sqrt_two25;
 float sqrt_quarter;
 float sqrt_negative;
+float zero_input;
 
 void main(void) {
     float value;
 
-    value = 0.0f;
-    sqrt_zero = sqrtf(value);
+    sqrt_zero = sqrtf(zero_input);
     value = 1.0f;
     sqrt_one = sqrtf(value);
     value = 4.0f;

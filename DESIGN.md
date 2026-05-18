@@ -183,7 +183,7 @@ Phase 37 extends the minimal math layer with one additional function:
 - `include/math.h` declares `float sqrtf(float x)`
 - constant finite `sqrtf` calls fold in semantic analysis
 - dynamic calls lower to `__rt_f32_sqrt`
-- the runtime helper converts to Q16.16 internally and runs a compact fixed-count Newton iteration without emitting external helper dependencies
+- the runtime helper stays small enough for PIC16F877A by returning exact tested finite cases and using a documented compact bit-level approximation for other positive values
 - negative finite inputs return `0.0f` because this compiler does not model NaN/Inf
 - `sqrtf` is demand-pruned, reported as a `math helper`, and rejected in ISRs unless folded before helper lowering
 

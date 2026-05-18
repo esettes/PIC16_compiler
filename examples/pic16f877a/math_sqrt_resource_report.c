@@ -4,10 +4,8 @@
 
 float input;
 float root;
-float adjusted;
 
 void main(void) {
     input = 9.0f;
     root = sqrtf(input);
-    adjusted = roundf(root);
 }
