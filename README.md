@@ -33,17 +33,17 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 36: minimal finite `math.h` for `float` on top of Phase 35 fixed/float helper compaction, Phase 34 integer helper compaction, Phase 33 runtime helper reporting, Phase 32 page-aware code layout, Phase 31 backend page-safety, Phase 30 ROM float tables, Phase 29 dynamic float comparisons and 32-bit integer conversions, Phase 28 float hardening, Phase 27 basic finite software `float`, Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, and the earlier frontend/backend phases**.
+Current implementation is **Phase 37: finite `sqrtf` support on top of Phase 36 minimal finite `math.h` for `float`, Phase 35 fixed/float helper compaction, Phase 34 integer helper compaction, Phase 33 runtime helper reporting, Phase 32 page-aware code layout, Phase 31 backend page-safety, Phase 30 ROM float tables, Phase 29 dynamic float comparisons and 32-bit integer conversions, Phase 28 float hardening, Phase 27 basic finite software `float`, Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, and the earlier frontend/backend phases**.
 
-Phase 36 scope:
+Phase 37 scope:
 
-- `include/math.h` exposes the finite float-only subset `fabsf`, `truncf`, `floorf`, `ceilf`, and `roundf`
-- calls lower to compiler-known runtime helpers `__rt_f32_fabs`, `__rt_f32_trunc`, `__rt_f32_floor`, `__rt_f32_ceil`, and `__rt_f32_round`
+- `include/math.h` exposes the finite float-only subset `fabsf`, `truncf`, `floorf`, `ceilf`, `roundf`, and `sqrtf`
+- calls lower to compiler-known runtime helpers including `__rt_f32_sqrt`
 - constant math calls fold when their argument is a finite compile-time `float`
-- `roundf` uses half-away-from-zero behavior
+- `roundf` uses half-away-from-zero behavior; `sqrtf(x < 0)` returns `0.0f` because NaN/Inf are outside the finite model
 - math helpers are demand-pruned, categorized as `math helper`, and reported in `--size`, `--memory-report`, stack data, `.map`, and `.lst`
-- `fabsf` may be used in ISRs only when it lowers inline; other math helpers remain rejected in ISRs
-- no `double`, no full ISO C `math.h`, no `sqrtf`, no trigonometry, no errno/fenv, and no IEEE NaN/Inf promise
+- `fabsf` may be used in ISRs only when it lowers inline; other math helpers, including `sqrtf`, remain rejected in ISRs
+- no `double`, no full ISO C `math.h`, no trigonometry, no errno/fenv, and no IEEE NaN/Inf promise
 
 Phase 35 scope:
 
@@ -1123,6 +1123,9 @@ picc --list-targets
 - [docs/frontend/phase36-math-header.md](docs/frontend/phase36-math-header.md)
 - [docs/ir/phase36-math-lowering.md](docs/ir/phase36-math-lowering.md)
 - [docs/runtime/phase36-float-math-helpers.md](docs/runtime/phase36-float-math-helpers.md)
+- [docs/frontend/phase37-sqrtf.md](docs/frontend/phase37-sqrtf.md)
+- [docs/ir/phase37-sqrtf-lowering.md](docs/ir/phase37-sqrtf-lowering.md)
+- [docs/runtime/phase37-sqrtf-helper.md](docs/runtime/phase37-sqrtf-helper.md)
 - [docs/developer-guide/math-subset.md](docs/developer-guide/math-subset.md)
 - [docs/migration/phase3-to-phase4-abi.md](docs/migration/phase3-to-phase4-abi.md)
 - [docs/developer-guide/adding-device.md](docs/developer-guide/adding-device.md)
@@ -1136,4 +1139,4 @@ picc --list-targets
 
 ## Current Limits
 
-Phase 36 adds a small finite float `math.h` subset, but current hard limits remain: no `double`, no full math library (`sin`, `cos`, `sqrt`, etc.), no full IEEE NaN/Inf/subnormal compliance, no dynamic mixed float/integer arithmetic, no general ROM pointer model, no code-space pointers, no address-of ROM elements, no ROM/data pointer mixing, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no helper-backed math inside ISR except inline `fabsf`, no fixed-point modulo, no raw computed PIC16 indirect calls, and no recursion. Float/math helpers are large; resource fitting can reject helper-heavy programs on real targets. Helper-backed float expressions are most robust when ROM-read values are first copied into RAM globals/statics before arithmetic, comparison, or math calls. The emulator is intentionally core-only: no full peripheral timing model, no asynchronous interrupt scheduling, and no claim of complete PIC16 device emulation.
+Phase 37 adds finite `sqrtf`, but current hard limits remain: no `double`, no full math library (`sin`, `cos`, `pow`, `exp`, `log`, etc.), no full IEEE NaN/Inf/subnormal compliance, no dynamic mixed float/integer arithmetic, no general ROM pointer model, no code-space pointers, no address-of ROM elements, no ROM/data pointer mixing, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no helper-backed math inside ISR except inline `fabsf`, no fixed-point modulo, no raw computed PIC16 indirect calls, and no recursion. Float/math helpers are large; resource fitting can reject helper-heavy programs on real targets. Helper-backed float expressions are most robust when ROM-read values are first copied into RAM globals/statics before arithmetic, comparison, or math calls. The emulator is intentionally core-only: no full peripheral timing model, no asynchronous interrupt scheduling, and no claim of complete PIC16 device emulation.

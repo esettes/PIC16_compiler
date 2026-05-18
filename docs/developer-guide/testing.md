@@ -14,6 +14,8 @@ Phase 35 fixed/float compaction validation lives in the same tests. It checks Q1
 
 Phase 36 math validation lives in `tests/compiler_pipeline.rs` and `tests/execution_sim.rs`. It checks `math.h` helper pruning, constant folding, ISR policy, report visibility, checked-in math examples, and simulator execution for `fabsf`, `truncf`, `floorf`, `ceilf`, `roundf`, function calls, structs, and ROM float inputs.
 
+Phase 37 `sqrtf` validation lives in the same suites. It checks finite `sqrtf` constant folding, helper pruning/reporting, ISR rejection, checked-in sqrt examples, and simulator execution for zero, positive roots, negative-input-to-zero behavior, function calls, structs, and ROM float inputs.
+
 Phase 26 validation lives in `tests/compiler_pipeline.rs` and `src/hex/intel_hex.rs`. It checks raw and symbolic config words, duplicate/unknown config diagnostics, config emission in `.hex/.map/.lst`, final HEX validation reports, program overflow rejection without `--size`, programmer command printing, configurable Makefile flashing, and hardware smoke examples.
 
 Phase 25 resource-report validation lives in `tests/compiler_pipeline.rs`. It checks target descriptors, `--size`, `--memory-report`, `--memory-report-file`, map/listing resource summaries, helper contribution reporting, ROM-table contribution reporting, data-RAM overflow diagnostics, and stack-region overflow diagnostics.

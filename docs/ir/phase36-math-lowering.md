@@ -10,6 +10,7 @@ truncf -> __rt_f32_trunc
 floorf -> __rt_f32_floor
 ceilf  -> __rt_f32_ceil
 roundf -> __rt_f32_round
+sqrtf -> __rt_f32_sqrt
 ```
 
 Constant calls fold before IR lowering when the argument is a finite raw f32 constant.

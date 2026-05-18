@@ -10,6 +10,7 @@ __rt_f32_trunc
 __rt_f32_floor
 __rt_f32_ceil
 __rt_f32_round
+__rt_f32_sqrt
 ```
 
 Behavior:
@@ -19,6 +20,7 @@ Behavior:
 - `floorf` converts to Q16.16 and arithmetically shifts away the fractional bits
 - `ceilf` reuses the floor helper through the identity `ceilf(x) = -floorf(-x)`
 - `roundf` converts to absolute Q16.16, adds raw `0.5`, truncates to an integer, reapplies the sign, and converts back to f32
+- Phase 37 `sqrtf` converts to Q16.16, runs a fixed-count Newton iteration, and returns `0.0f` for negative inputs
 
 Runtime integration:
 
@@ -32,5 +34,5 @@ Limitations:
 - finite values only
 - no NaN/Inf semantics
 - no `double`
-- no `sqrtf` or trigonometric functions
+- no trigonometric functions
 - helper-backed math is rejected inside ISRs except inline `fabsf`

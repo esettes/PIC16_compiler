@@ -41,7 +41,7 @@ picc --target pic16f877a -I include --memory-report-file build/app.mem -o build/
 - runtime helper contributors with actual words, estimated words, ABI args, local bytes, stack frame cost, category, required-by text, and target constraints
 - runtime helper dependency graph
 - float helper contribution when `__rt_f32_*` helpers are emitted
-- math helper contribution when `fabsf`, `truncf`, `floorf`, `ceilf`, or `roundf` pull Phase 36 helpers
+- math helper contribution when `fabsf`, `truncf`, `floorf`, `ceilf`, `roundf`, or `sqrtf` pull finite math helpers
 - ROM float table contribution when `const __rom float[]` objects are emitted
 - largest program-memory contributors
 

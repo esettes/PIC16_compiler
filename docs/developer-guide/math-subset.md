@@ -16,6 +16,7 @@ float b = truncf(x);
 float c = floorf(x);
 float d = ceilf(x);
 float e = roundf(x);
+float f = sqrtf(x);
 ```
 
 `roundf` rounds half away from zero:
@@ -23,6 +24,13 @@ float e = roundf(x);
 ```text
 roundf(1.5f)  ->  2.0f
 roundf(-1.5f) -> -2.0f
+```
+
+`sqrtf` is finite-only. Negative inputs return `0.0f` because this compiler does not model NaN or Inf:
+
+```text
+sqrtf(2.25f) -> 1.5f
+sqrtf(-1.0f) -> 0.0f
 ```
 
 Recommended workflow:
@@ -35,6 +43,6 @@ Notes:
 
 - PIC16F877A is the safer default for math-heavy examples
 - `fabsf` can be inline-safe in ISRs
-- `truncf`, `floorf`, `ceilf`, and `roundf` pull helpers and are rejected in ISRs
+- `truncf`, `floorf`, `ceilf`, `roundf`, and `sqrtf` pull helpers and are rejected in ISRs
 - unused `#include <math.h>` does not emit math helpers
-- unsupported names such as `sqrtf`, `sin`, or `fabs` are intentionally not declared
+- unsupported names such as `sqrt`, `sin`, or `fabs` are intentionally not declared

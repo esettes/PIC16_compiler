@@ -176,6 +176,19 @@ Phase 36 adds a deliberately small float-only math layer:
 
 This phase does not add `double`, `sqrtf`, trigonometry, errno, fenv, or full ISO C `math.h`.
 
+### Phase 37 Finite `sqrtf`
+
+Phase 37 extends the minimal math layer with one additional function:
+
+- `include/math.h` declares `float sqrtf(float x)`
+- constant finite `sqrtf` calls fold in semantic analysis
+- dynamic calls lower to `__rt_f32_sqrt`
+- the runtime helper converts finite f32 to Q16.16, runs a fixed-count Newton iteration, and converts back to f32
+- negative finite inputs return `0.0f` because this compiler does not model NaN/Inf
+- `sqrtf` is demand-pruned, reported as a `math helper`, and rejected in ISRs unless folded before helper lowering
+
+This phase still does not add `double`, trigonometry, errno, fenv, or full ISO C `math.h`.
+
 ### Phase 4 Stack-first ABI
 
 Current ABI is stack-first, caller-pushed, upward-growing.
