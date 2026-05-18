@@ -1329,6 +1329,12 @@ impl<'a> CodegenContext<'a> {
         dst: Option<usize>,
         diagnostics: &mut DiagnosticBag,
     ) {
+        let callee_name = self.symbol_name(callee).to_string();
+        if let Some(helper) = runtime_helper_for_math_call(&callee_name) {
+            self.emit_float_math_call(function, helper, args, dst, diagnostics);
+            return;
+        }
+
         if function.is_interrupt {
             diagnostics.error(
                 "backend",
@@ -1336,7 +1342,7 @@ impl<'a> CodegenContext<'a> {
                 format!(
                     "interrupt handler `{}` reached normal-call lowering for `{}`",
                     self.symbol_name(function.symbol),
-                    self.symbol_name(callee)
+                    callee_name
                 ),
                 Some("phase 6 forbids normal function calls inside ISRs".to_string()),
             );
@@ -1384,6 +1390,86 @@ impl<'a> CodegenContext<'a> {
                 self.store_w_to_temp_byte(function.symbol, dst, byte);
             }
         }
+    }
+
+    /// Lowers Phase 36 finite `math.h` float calls to known runtime helpers.
+    fn emit_float_math_call(
+        &mut self,
+        function: &IrFunction,
+        helper: RuntimeHelper,
+        args: &[Operand],
+        dst: Option<usize>,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        let f32_ty = Type::new(ScalarType::F32);
+        if args.len() != 1 {
+            diagnostics.error(
+                "backend",
+                None,
+                format!("math helper `{}` expects one argument", helper.label()),
+                None,
+            );
+            if let Some(dst) = dst {
+                self.clear_temp(function.symbol, dst, f32_ty);
+            }
+            return;
+        }
+
+        if function.is_interrupt {
+            if helper == RuntimeHelper::F32Fabs {
+                if let Some(dst) = dst {
+                    self.emit_inline_fabs(function.symbol, args[0], dst);
+                }
+                return;
+            }
+            diagnostics.error(
+                "backend",
+                None,
+                format!(
+                    "interrupt handler `{}` reached float math helper lowering for `{}`",
+                    self.symbol_name(function.symbol),
+                    helper.label()
+                ),
+                Some("Phase 36 allows only inline `fabsf` inside ISRs".to_string()),
+            );
+            if let Some(dst) = dst {
+                self.clear_temp(function.symbol, dst, f32_ty);
+            }
+            return;
+        }
+
+        let Some(dst) = dst else {
+            return;
+        };
+        let info = helper.info();
+        self.used_helpers.insert(helper);
+        self.emit_stack_growth_check(
+            info.arg_bytes,
+            &format!("runtime helper {} argument", info.label),
+        );
+        self.push_operand(function.symbol, args[0], f32_ty);
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage(info.label.to_string())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Call(info.label.to_string())));
+        self.restore_code_page_after_call();
+        self.store_w_to_addr(self.layout.helpers.w_save);
+        self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(info.arg_bytes));
+        self.load_addr_to_w(self.layout.helpers.w_save);
+        self.store_w_to_temp_byte(function.symbol, dst, 0);
+        for byte in 1..f32_ty.byte_width() {
+            self.load_return_byte_to_w(byte);
+            self.store_w_to_temp_byte(function.symbol, dst, byte);
+        }
+    }
+
+    /// Emits inline `fabsf` for ISR-safe use by clearing the destination sign bit.
+    fn emit_inline_fabs(&mut self, function_symbol: SymbolId, src: Operand, dst_temp: usize) {
+        let f32_ty = Type::new(ScalarType::F32);
+        self.copy_operand_to_temp(function_symbol, src, f32_ty, dst_temp);
+        self.load_operand_byte_to_w(function_symbol, Operand::Temp(dst_temp), f32_ty, 3);
+        self.program.push(AsmLine::Instr(AsmInstr::Andlw(0x7F)));
+        self.store_w_to_temp_byte(function_symbol, dst_temp, 3);
     }
 
     /// Lowers one Phase 17 function-pointer call through a generated dispatch-ID trampoline.
@@ -2053,6 +2139,19 @@ impl<'a> CodegenContext<'a> {
     fn emit_scratch0_nonzero_branch(&mut self, then_label: &str, else_label: &str) {
         self.load_addr_to_w(self.layout.helpers.scratch0);
         self.branch_if_bit_clear(low7(STATUS_ADDR), STATUS_Z_BIT, then_label);
+        self.jump_to_label(else_label);
+    }
+
+    fn emit_current_frame_byte_equals_branch(
+        &mut self,
+        offset: u16,
+        value: u8,
+        then_label: &str,
+        else_label: &str,
+    ) {
+        self.load_current_frame_byte_to_w(offset);
+        self.program.push(AsmLine::Instr(AsmInstr::Xorlw(value)));
+        self.branch_if_bit_set(low7(STATUS_ADDR), STATUS_Z_BIT, then_label);
         self.jump_to_label(else_label);
     }
 
@@ -3256,6 +3355,14 @@ impl<'a> CodegenContext<'a> {
         }
     }
 
+    fn store_f32_const_to_current_frame(&mut self, offset: u16, bits: u32) {
+        let ty = Type::new(ScalarType::F32);
+        for byte in 0..4u16 {
+            self.emit_const_to_w(value_byte(i64::from(bits), ty, byte as usize));
+            self.store_w_to_current_frame_byte(offset + byte);
+        }
+    }
+
     /// Branches on whether one active-frame scalar value is zero or non-zero.
     fn emit_current_frame_nonzero_branch(
         &mut self,
@@ -4131,6 +4238,21 @@ impl<'a> CodegenContext<'a> {
             RuntimeHelper::F32Cmp => {
                 self.emit_float_f32_compare_helper(local_base);
             }
+            RuntimeHelper::F32Fabs => {
+                self.emit_float_f32_fabs_helper(arg0_offset);
+            }
+            RuntimeHelper::F32Trunc => {
+                self.emit_float_f32_trunc_helper(arg0_offset, work_offset);
+            }
+            RuntimeHelper::F32Floor => {
+                self.emit_float_f32_floor_helper(arg0_offset, local_base);
+            }
+            RuntimeHelper::F32Ceil => {
+                self.emit_float_f32_ceil_helper(arg0_offset, local_base);
+            }
+            RuntimeHelper::F32Round => {
+                self.emit_float_f32_round_helper(arg0_offset, local_base);
+            }
             RuntimeHelper::F32ToQ16 => {
                 self.emit_float_to_q16_frame(
                     0,
@@ -4615,6 +4737,106 @@ impl<'a> CodegenContext<'a> {
 
         self.program.push(AsmLine::Label(finish_label));
         self.load_current_frame_byte_to_w(result_offset);
+    }
+
+    /// Emits `fabsf` by clearing the finite f32 sign bit.
+    fn emit_float_f32_fabs_helper(&mut self, arg_offset: u16) {
+        self.load_current_frame_byte_to_w(arg_offset + 3);
+        self.program.push(AsmLine::Instr(AsmInstr::Andlw(0x7F)));
+        self.store_w_to_current_frame_byte(arg_offset + 3);
+        self.emit_return_current_frame_value(arg_offset, Type::new(ScalarType::F32));
+    }
+
+    /// Emits `truncf(x)` through the existing finite f32 <-> i32 conversion policy.
+    fn emit_float_f32_trunc_helper(&mut self, arg_offset: u16, result_offset: u16) {
+        self.emit_call_unary_runtime_helper_32(RuntimeHelper::F32ToI32, arg_offset, result_offset);
+        self.emit_call_unary_runtime_helper_32(
+            RuntimeHelper::I32ToF32,
+            result_offset,
+            result_offset,
+        );
+        self.emit_return_current_frame_value(result_offset, Type::new(ScalarType::F32));
+    }
+
+    /// Emits `floorf(x)` as `t = truncf(x); x < t ? t - 1.0f : t`.
+    fn emit_float_f32_floor_helper(&mut self, arg_offset: u16, local_base: u16) {
+        let trunc_offset = local_base;
+        let one_offset = trunc_offset + 4;
+        let cmp_offset = one_offset + 4;
+        let adjust_label = self.unique_label("rt_f32_floor_adjust");
+        let done_label = self.unique_label("rt_f32_floor_done");
+
+        self.emit_call_unary_runtime_helper_32(RuntimeHelper::F32Trunc, arg_offset, trunc_offset);
+        self.emit_call_float_compare_helper_32(arg_offset, trunc_offset, cmp_offset);
+        self.emit_current_frame_byte_equals_branch(cmp_offset, 0xFF, &adjust_label, &done_label);
+        self.program.push(AsmLine::Label(adjust_label));
+        self.store_f32_const_to_current_frame(one_offset, 0x3F80_0000);
+        self.emit_call_binary_runtime_helper_32(
+            RuntimeHelper::F32Sub,
+            trunc_offset,
+            one_offset,
+            trunc_offset,
+        );
+        self.program.push(AsmLine::Label(done_label));
+        self.emit_return_current_frame_value(trunc_offset, Type::new(ScalarType::F32));
+    }
+
+    /// Emits `ceilf(x)` as `t = truncf(x); x > t ? t + 1.0f : t`.
+    fn emit_float_f32_ceil_helper(&mut self, arg_offset: u16, local_base: u16) {
+        let trunc_offset = local_base;
+        let one_offset = trunc_offset + 4;
+        let cmp_offset = one_offset + 4;
+        let adjust_label = self.unique_label("rt_f32_ceil_adjust");
+        let done_label = self.unique_label("rt_f32_ceil_done");
+
+        self.emit_call_unary_runtime_helper_32(RuntimeHelper::F32Trunc, arg_offset, trunc_offset);
+        self.emit_call_float_compare_helper_32(arg_offset, trunc_offset, cmp_offset);
+        self.emit_current_frame_byte_equals_branch(cmp_offset, 1, &adjust_label, &done_label);
+        self.program.push(AsmLine::Label(adjust_label));
+        self.store_f32_const_to_current_frame(one_offset, 0x3F80_0000);
+        self.emit_call_binary_runtime_helper_32(
+            RuntimeHelper::F32Add,
+            trunc_offset,
+            one_offset,
+            trunc_offset,
+        );
+        self.program.push(AsmLine::Label(done_label));
+        self.emit_return_current_frame_value(trunc_offset, Type::new(ScalarType::F32));
+    }
+
+    /// Emits `roundf` with Phase 36 half-away-from-zero behavior.
+    fn emit_float_f32_round_helper(&mut self, arg_offset: u16, local_base: u16) {
+        let work_offset = local_base;
+        let half_offset = work_offset + 4;
+        let negative_label = self.unique_label("rt_f32_round_negative");
+        let positive_label = self.unique_label("rt_f32_round_positive");
+        let done_label = self.unique_label("rt_f32_round_done");
+
+        self.copy_current_frame_bytes(arg_offset, work_offset, 4);
+        self.store_f32_const_to_current_frame(half_offset, 0x3F00_0000);
+        self.branch_on_current_frame_bit(arg_offset + 3, 7, &negative_label, &positive_label);
+
+        self.program.push(AsmLine::Label(positive_label));
+        self.emit_call_binary_runtime_helper_32(
+            RuntimeHelper::F32Add,
+            work_offset,
+            half_offset,
+            work_offset,
+        );
+        self.emit_call_unary_runtime_helper_32(RuntimeHelper::F32Floor, work_offset, work_offset);
+        self.jump_to_label(&done_label);
+
+        self.program.push(AsmLine::Label(negative_label));
+        self.emit_call_binary_runtime_helper_32(
+            RuntimeHelper::F32Sub,
+            work_offset,
+            half_offset,
+            work_offset,
+        );
+        self.emit_call_unary_runtime_helper_32(RuntimeHelper::F32Ceil, work_offset, work_offset);
+
+        self.program.push(AsmLine::Label(done_label));
+        self.emit_return_current_frame_value(work_offset, Type::new(ScalarType::F32));
     }
 
     /// Emits compact Phase 35 f32 subtraction as `lhs + (-rhs)` through `__rt_f32_add`.
@@ -5680,6 +5902,66 @@ impl<'a> CodegenContext<'a> {
             self.load_return_byte_to_w(byte);
             self.store_w_to_current_frame_byte(result_offset + byte as u16);
         }
+    }
+
+    /// Calls one 32-bit unary runtime helper from another runtime helper.
+    fn emit_call_unary_runtime_helper_32(
+        &mut self,
+        helper: RuntimeHelper,
+        arg_offset: u16,
+        result_offset: u16,
+    ) {
+        let info = helper.info();
+        debug_assert_eq!(info.arg_bytes, 4);
+        self.emit_stack_growth_check(
+            info.arg_bytes,
+            &format!("runtime helper {} args", info.label),
+        );
+        for byte in 0..4u16 {
+            self.load_current_frame_byte_to_w(arg_offset + byte);
+            self.push_w();
+        }
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage(info.label.to_string())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Call(info.label.to_string())));
+        self.restore_code_page_after_call();
+        self.store_w_to_addr(self.layout.helpers.w_save);
+        self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(info.arg_bytes));
+        self.load_addr_to_w(self.layout.helpers.w_save);
+        self.store_w_to_current_frame_byte(result_offset);
+        for byte in 1..4usize {
+            self.load_return_byte_to_w(byte);
+            self.store_w_to_current_frame_byte(result_offset + byte as u16);
+        }
+    }
+
+    /// Calls the shared finite f32 compare helper and stores its 8-bit result.
+    fn emit_call_float_compare_helper_32(
+        &mut self,
+        lhs_offset: u16,
+        rhs_offset: u16,
+        result_offset: u16,
+    ) {
+        let info = RuntimeHelper::F32Cmp.info();
+        self.emit_stack_growth_check(info.arg_bytes, "runtime helper __rt_f32_cmp args");
+        for byte in 0..4u16 {
+            self.load_current_frame_byte_to_w(lhs_offset + byte);
+            self.push_w();
+        }
+        for byte in 0..4u16 {
+            self.load_current_frame_byte_to_w(rhs_offset + byte);
+            self.push_w();
+        }
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage(info.label.to_string())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Call(info.label.to_string())));
+        self.restore_code_page_after_call();
+        self.store_w_to_addr(self.layout.helpers.w_save);
+        self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(info.arg_bytes));
+        self.load_addr_to_w(self.layout.helpers.w_save);
+        self.store_w_to_current_frame_byte(result_offset);
     }
 
     /// Emits unsigned shift-and-add multiplication into a local result slot.
@@ -7308,6 +7590,17 @@ fn runtime_helper_for_cast(kind: CastKind) -> Option<RuntimeHelper> {
         CastKind::ZeroExtend | CastKind::SignExtend | CastKind::Truncate | CastKind::Bitcast => {
             None
         }
+    }
+}
+
+fn runtime_helper_for_math_call(name: &str) -> Option<RuntimeHelper> {
+    match name {
+        "fabsf" => Some(RuntimeHelper::F32Fabs),
+        "truncf" => Some(RuntimeHelper::F32Trunc),
+        "floorf" => Some(RuntimeHelper::F32Floor),
+        "ceilf" => Some(RuntimeHelper::F32Ceil),
+        "roundf" => Some(RuntimeHelper::F32Round),
+        _ => None,
     }
 }
 

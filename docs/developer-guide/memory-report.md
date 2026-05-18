@@ -41,6 +41,7 @@ picc --target pic16f877a -I include --memory-report-file build/app.mem -o build/
 - runtime helper contributors with actual words, estimated words, ABI args, local bytes, stack frame cost, category, required-by text, and target constraints
 - runtime helper dependency graph
 - float helper contribution when `__rt_f32_*` helpers are emitted
+- math helper contribution when `fabsf`, `truncf`, `floorf`, `ceilf`, or `roundf` pull Phase 36 helpers
 - ROM float table contribution when `const __rom float[]` objects are emitted
 - largest program-memory contributors
 
@@ -79,7 +80,7 @@ picc --target pic16f628a -I include --size --memory-report --verify-hex -o build
 
 ## Phase 27-30 Float Interaction
 
-Float helpers are reported as `float helper`. Phase 28 cast helpers use the same category:
+Float arithmetic/comparison helpers are reported as `float helper`; Phase 36 math helpers are reported as `math helper`. Phase 28 cast helpers use the float category:
 
 - `__rt_q16_16_to_f32`
 - `__rt_f32_to_q16_16`
@@ -99,7 +100,7 @@ Phase 33 adds category totals:
 
 ```text
 Runtime helpers: 3509 words
-  integer: 0  division: 0  fixed: 0  float: 3509  conversion: 0  shift: 0  dispatchers: 0
+  integer: 0  division: 0  fixed: 0  float: 3509  math: 420  conversion: 0  shift: 0  dispatchers: 0
 ```
 
 Use `--runtime-profile small` to select compact helper variants where implemented and to get earlier helper-budget warnings. `balanced` is the default. `fast` currently uses the same helper bodies as balanced.

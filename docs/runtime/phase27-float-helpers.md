@@ -11,6 +11,7 @@ Runtime helper labels:
 - `__rt_f32_cmp` (Phase 29 comparisons)
 - `__rt_i32_to_f32` / `__rt_u32_to_f32` (Phase 29 32-bit integer to float)
 - `__rt_f32_to_i32` / `__rt_f32_to_u32` (Phase 29 float to 32-bit integer)
+- `__rt_f32_fabs` / `__rt_f32_trunc` / `__rt_f32_floor` / `__rt_f32_ceil` / `__rt_f32_round` (Phase 36 math subset)
 
 The implemented finite helper strategy stores public values as IEEE-754 f32 bits, then converts operands into an internal signed Q16.16 work format for helper arithmetic. Results convert back to f32 bits.
 
@@ -24,6 +25,7 @@ Behavior:
 - Phase 28 dynamic casts support 16-bit integers and fixed-point types through the Q16.16 bridge
 - Phase 29 adds dynamic 32-bit integer casts and dynamic comparisons
 - Phase 30 adds ROM-backed float tables; those tables do not add new float arithmetic helpers
+- Phase 36 adds minimal finite math helpers and reports them under the separate `math helper` category
 
 Resource note: generic float helpers are large. Codegen includes inline fast paths for common finite `* 2.0f` and `/ 2.0f` to avoid pulling generic helpers when possible. ROM float reads are cheap, but using the read result in helper-backed arithmetic/comparison can still pull large helpers.
 ## Phase 33 Cost Reporting

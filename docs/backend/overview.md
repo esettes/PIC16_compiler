@@ -2,7 +2,7 @@
 
 # PIC16 `midrange14` Backend
 
-Phase 35 adds fixed/float compact runtime helper variants on top of the Phase 34 integer compaction and Phase 33 helper catalog. Phase 32 page-aware layout reporting and safe linker relaxation, Phase 31 `PCLATH` page-safety validation, Phase 30 ROM float data, Phase 29 finite-float runtime completion, Phase 26 config/HEX validation, Phase 25 target resource fitting, and Phase 24 dynamic Q16.16/UQ16.16 helpers remain supported.
+Phase 36 adds minimal finite float math helpers on top of the Phase 35 fixed/float compact runtime helper variants, the Phase 34 integer compaction, and the Phase 33 helper catalog. Phase 32 page-aware layout reporting and safe linker relaxation, Phase 31 `PCLATH` page-safety validation, Phase 30 ROM float data, Phase 29 finite-float runtime completion, Phase 26 config/HEX validation, Phase 25 target resource fitting, and Phase 24 dynamic Q16.16/UQ16.16 helpers remain supported.
 
 Phase 21 extends the PIC16 backend to four-byte integer values. The return convention is `W` plus `__abi.return_high`, `__abi.return_upper0`, and `__abi.return_upper1`. Multi-byte carry/borrow codegen is shared by 8-, 16-, 32-bit, and fixed raw paths.
 
@@ -18,7 +18,7 @@ Shared backend responsibilities:
 - IR -> PIC16 asm lowering
 - 14-bit word encoding
 
-Current backend phase: **Phase 35 fixed/float runtime helper compaction on top of Phase 34 integer helper compaction, Phase 33 helper catalog/reporting, Phase 32 page-aware layout and linker relaxation, Phase 31 page-safety, Phase 30 ROM float table codegen, Phase 29 float compare/conversion helpers, Phase 26 config/HEX workflow, Phase 25 resource fitting, Phase 24 dynamic Q16.16 helper codegen, Phase 23 fixed ROM table codegen, Phase 22 fixed-point codegen, Phase 21 32-bit integer codegen, Phase 20 simulator tooling, Phase 19 execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier backend phases**
+Current backend phase: **Phase 36 minimal finite math helpers on top of Phase 35 fixed/float runtime helper compaction, Phase 34 integer helper compaction, Phase 33 helper catalog/reporting, Phase 32 page-aware layout and linker relaxation, Phase 31 page-safety, Phase 30 ROM float table codegen, Phase 29 float compare/conversion helpers, Phase 26 config/HEX workflow, Phase 25 resource fitting, Phase 24 dynamic Q16.16 helper codegen, Phase 23 fixed ROM table codegen, Phase 22 fixed-point codegen, Phase 21 32-bit integer codegen, Phase 20 simulator tooling, Phase 19 execution validation, Phase 18 stack safety, Phase 17 controlled function pointers, and the earlier backend phases**
 
 Backend owns:
 
@@ -166,6 +166,7 @@ Phase 27 float backend responsibilities:
 - emit Phase 29 compare and 32-bit conversion helpers as `float helper` resource contributions
 - emit Phase 30 `const __rom float[]` tables as RETLW-backed ROM table contributions
 - lower ROM float reads through the existing 32-bit little-endian ROM byte-read path
+- emit Phase 36 finite math calls as cataloged `math helper` contributions, except ISR-safe inline `fabsf`
 - inline common `* 2.0f` and `/ 2.0f` exponent adjustments
 - let resource fitting reject helper-heavy float programs that do not fit a target
 

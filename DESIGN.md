@@ -163,6 +163,19 @@ Phase 35 extends compact helper selection beyond integer division/modulo:
 
 `balanced` keeps standalone helper bodies. `fast` still follows balanced behavior. No C language feature is added in Phase 35.
 
+### Phase 36 Minimal Finite `math.h`
+
+Phase 36 adds a deliberately small float-only math layer:
+
+- `include/math.h` declares only `fabsf`, `truncf`, `floorf`, `ceilf`, and `roundf`
+- calls are compiler-known and lower to finite f32 runtime helpers instead of external object files
+- constant calls fold in semantic analysis when the argument is a finite float constant
+- `roundf` uses half-away-from-zero behavior
+- math helpers are cataloged as `math helper` and reported separately from arithmetic/conversion float helpers
+- `fabsf` can lower inline in an ISR; `truncf`, `floorf`, `ceilf`, and `roundf` remain helper-backed and rejected in ISRs
+
+This phase does not add `double`, `sqrtf`, trigonometry, errno, fenv, or full ISO C `math.h`.
+
 ### Phase 4 Stack-first ABI
 
 Current ABI is stack-first, caller-pushed, upward-growing.

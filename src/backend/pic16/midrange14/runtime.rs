@@ -544,11 +544,9 @@ impl RuntimeHelper {
             Self::F32Add | Self::F32Sub | Self::F32Mul | Self::F32Div | Self::F32Cmp => {
                 RuntimeHelperCategory::Float
             }
-            Self::F32Fabs
-            | Self::F32Trunc
-            | Self::F32Floor
-            | Self::F32Ceil
-            | Self::F32Round => RuntimeHelperCategory::Math,
+            Self::F32Fabs | Self::F32Trunc | Self::F32Floor | Self::F32Ceil | Self::F32Round => {
+                RuntimeHelperCategory::Math
+            }
             Self::F32ToQ16
             | Self::Q16ToF32
             | Self::I32ToF32

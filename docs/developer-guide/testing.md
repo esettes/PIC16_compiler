@@ -12,6 +12,8 @@ Phase 34 runtime-compaction validation lives in `tests/compiler_pipeline.rs` and
 
 Phase 35 fixed/float compaction validation lives in the same tests. It checks Q16.16 signed wrappers through unsigned helpers, f32 subtraction through f32 addition, profile size comparisons for fixed/float/conversion/mixed programs, checked-in Phase 35 examples, and simulator execution for compact Q16.16 multiply/divide, f32 add/sub, and f32 conversion paths under `--runtime-profile small`.
 
+Phase 36 math validation lives in `tests/compiler_pipeline.rs` and `tests/execution_sim.rs`. It checks `math.h` helper pruning, constant folding, ISR policy, report visibility, checked-in math examples, and simulator execution for `fabsf`, `truncf`, `floorf`, `ceilf`, `roundf`, function calls, structs, and ROM float inputs.
+
 Phase 26 validation lives in `tests/compiler_pipeline.rs` and `src/hex/intel_hex.rs`. It checks raw and symbolic config words, duplicate/unknown config diagnostics, config emission in `.hex/.map/.lst`, final HEX validation reports, program overflow rejection without `--size`, programmer command printing, configurable Makefile flashing, and hardware smoke examples.
 
 Phase 25 resource-report validation lives in `tests/compiler_pipeline.rs`. It checks target descriptors, `--size`, `--memory-report`, `--memory-report-file`, map/listing resource summaries, helper contribution reporting, ROM-table contribution reporting, data-RAM overflow diagnostics, and stack-region overflow diagnostics.
@@ -110,7 +112,7 @@ Use execution tests when output shape is not enough to prove behavior, especiall
 
 - arithmetic helpers
 - fixed-point scaling and helper-backed Q8.8 arithmetic
-- finite float literals, float helper paths, Phase 28/29 dynamic cast paths, dynamic float comparisons, Phase 30 ROM float reads, and float ABI behavior
+- finite float literals, float helper paths, Phase 28/29 dynamic cast paths, dynamic float comparisons, Phase 30 ROM float reads, Phase 36 math helpers, and float ABI behavior
 - stack-first calls and nested calls
 - pointer dereference and `FSR/INDF`
 - function-pointer dispatch

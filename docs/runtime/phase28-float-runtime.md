@@ -17,7 +17,7 @@ Policy:
 - finite values only
 - no NaN/Inf guarantee
 - no `double`
-- no math library
+- only the Phase 36 finite `math.h` subset is available; no full math library
 - dynamic 32-bit integer float casts are provided by Phase 29 helpers, not this Q16.16 bridge
 - ROM float tables are provided by Phase 30 through RETLW-backed raw f32 bytes
 - no helper use inside ISR

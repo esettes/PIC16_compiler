@@ -40,3 +40,5 @@ The wrapper flips the RHS sign bit and calls the finite add helper. This preserv
 - generic f32 pack/unpack primitives
 
 Those remain standalone because sharing them safely needs more runtime and simulator work.
+
+Phase 36 builds on this catalog by adding a separate `math` helper category for `fabsf`, `truncf`, `floorf`, `ceilf`, and `roundf`. These helpers are pruned and reported through the same dependency graph and resource-report path.

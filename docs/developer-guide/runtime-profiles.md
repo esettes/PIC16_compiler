@@ -2,7 +2,7 @@
 
 # Runtime Profiles
 
-Phase 33 adds runtime profiles. Phase 34 makes `small` change helper selection for 32-bit div/mod. Phase 35 extends `small` to selected Q16.16 and float helpers.
+Phase 33 adds runtime profiles. Phase 34 makes `small` change helper selection for 32-bit div/mod. Phase 35 extends `small` to selected Q16.16 and float helpers. Phase 36 math helpers reuse the same catalog, dependency graph, and report machinery.
 
 ```bash
 picc --runtime-profile small ...
@@ -55,3 +55,4 @@ __rt_f32_sub: category=float variant=small ... deps=__rt_f32_add
 ```
 
 If helper cost is too high, prefer fixed-point, remove unused floating-point operations, or select a larger target.
+For math-heavy firmware, inspect `math helper` entries separately; `floorf`, `ceilf`, and `roundf` depend on conversion/comparison/arithmetic helpers.

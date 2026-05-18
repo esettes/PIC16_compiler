@@ -55,6 +55,8 @@ Current Phase 18 frontend surface:
 - accepts dynamic integer/fixed-point float casts through helper lowering
 - accepts Phase 29 dynamic float comparisons
 - accepts Phase 30 file-scope `const __rom float[]` tables with direct indexing
+- accepts Phase 36 `math.h` declarations for `fabsf`, `truncf`, `floorf`, `ceilf`, and `roundf`
+- folds supported math calls with finite constant float arguments
 - rejects implicit mixed float/integer arithmetic, float bitfields, float switch expressions, ROM/data pointer mixing, and helper-backed float work in ISRs
 - validates pointer relational comparisons for compatible data-space pointer types
 - validates pointer subtraction for compatible data-space pointer types with 1-byte or 2-byte elements

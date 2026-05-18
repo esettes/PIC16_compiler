@@ -2343,3 +2343,133 @@ void main(void) {
     assert_eq!(symbol_u32(&core, &map, "from_array"), 0x4000_0000);
     assert_eq!(symbol_u32(&core, &map, "from_static"), 0x4000_0000);
 }
+
+#[test]
+fn executes_phase36_fabsf_and_truncf() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase36-fabs-trunc.c",
+        r#"
+#include <math.h>
+
+float fabs_pos;
+float fabs_neg;
+float trunc_pos;
+float trunc_neg;
+
+void main(void) {
+    float pos = 1.5f;
+    float neg = -1.5f;
+    float frac_pos = 1.75f;
+    float frac_neg = -1.75f;
+
+    fabs_pos = fabsf(pos);
+    fabs_neg = fabsf(neg);
+    trunc_pos = truncf(frac_pos);
+    trunc_neg = truncf(frac_neg);
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "fabs_pos"), 0x3FC0_0000);
+    assert_eq!(symbol_u32(&core, &map, "fabs_neg"), 0x3FC0_0000);
+    assert_eq!(symbol_u32(&core, &map, "trunc_pos"), 0x3F80_0000);
+    assert_eq!(symbol_u32(&core, &map, "trunc_neg"), 0xBF80_0000);
+}
+
+#[test]
+fn executes_phase36_floorf_and_ceilf() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase36-floor-ceil.c",
+        r#"
+#include <math.h>
+
+float floor_pos;
+float floor_neg;
+float ceil_pos;
+float ceil_neg;
+
+void main(void) {
+    float floor_input = -1.25f;
+    float ceil_input = -1.75f;
+
+    floor_pos = floorf(1.75f);
+    floor_neg = floorf(floor_input);
+    ceil_pos = ceilf(1.25f);
+    ceil_neg = ceilf(ceil_input);
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "floor_pos"), 0x3F80_0000);
+    assert_eq!(symbol_u32(&core, &map, "floor_neg"), 0xC000_0000);
+    assert_eq!(symbol_u32(&core, &map, "ceil_pos"), 0x4000_0000);
+    assert_eq!(symbol_u32(&core, &map, "ceil_neg"), 0xBF80_0000);
+}
+
+#[test]
+fn executes_phase36_roundf_half_away_from_zero() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase36-round.c",
+        r#"
+#include <math.h>
+
+float round_pos_low;
+float round_pos_half;
+float round_neg_low;
+float round_neg_half;
+
+void main(void) {
+    float pos_low = 1.4f;
+    float pos_half = 1.5f;
+    float neg_low = -1.4f;
+    float neg_half = -1.5f;
+
+    round_pos_low = roundf(pos_low);
+    round_pos_half = roundf(pos_half);
+    round_neg_low = roundf(neg_low);
+    round_neg_half = roundf(neg_half);
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "round_pos_low"), 0x3F80_0000);
+    assert_eq!(symbol_u32(&core, &map, "round_pos_half"), 0x4000_0000);
+    assert_eq!(symbol_u32(&core, &map, "round_neg_low"), 0xBF80_0000);
+    assert_eq!(symbol_u32(&core, &map, "round_neg_half"), 0xC000_0000);
+}
+
+#[test]
+fn executes_phase36_math_function_struct_and_rom_input() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase36-math-rom-struct.c",
+        r#"
+#include <math.h>
+
+const __rom float calibration[] = { -1.75f, 1.25f };
+
+struct Result {
+    float value;
+};
+
+struct Result result;
+float from_function;
+
+float apply_ceil(float x) {
+    return ceilf(x);
+}
+
+void main(void) {
+    float rom_value = calibration[0];
+    result.value = floorf(rom_value);
+    from_function = apply_ceil(calibration[1]);
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0xC000_0000);
+    assert_eq!(symbol_u32(&core, &map, "from_function"), 0x4000_0000);
+}

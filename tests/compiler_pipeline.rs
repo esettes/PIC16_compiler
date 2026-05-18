@@ -6959,3 +6959,120 @@ fn phase30_float_rom_examples_compile_via_picc() {
         assert_hex_is_programmable(&output);
     }
 }
+
+#[test]
+/// Verifies Phase 36 math helpers are reported only when used.
+fn phase36_math_helpers_are_reported_and_pruned() {
+    let math_source = r#"
+#include <math.h>
+
+float input;
+float output;
+
+void main(void) {
+    input = -1.75f;
+    output = floorf(input);
+}
+"#;
+    let (_hex, stdout, memory_report) =
+        compile_profile_source_size_report("balanced", "phase36-math-report", math_source, &[]);
+    assert!(stdout.contains("math:"));
+    assert!(memory_report.contains("__rt_f32_floor"));
+    assert!(memory_report.contains("math helper"));
+
+    let unused_source = r#"
+#include <math.h>
+
+float value;
+
+void main(void) {
+    value = 1.5f;
+}
+"#;
+    let output = compile_source("pic16f877a", "phase36-unused-math.c", unused_source);
+    let map = read_artifact(&output, "map");
+    assert!(!map.contains("__rt_f32_floor"));
+    assert!(!map.contains("__rt_f32_trunc"));
+    assert!(!map.contains("__rt_f32_round"));
+}
+
+#[test]
+/// Verifies Phase 36 constant folding handles supported math calls.
+fn phase36_constant_folds_supported_math_calls() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase36-folded-math.c",
+        r#"
+#include <math.h>
+
+float a = fabsf(-1.5f);
+float b = truncf(-1.75f);
+float c = floorf(-1.25f);
+float d = ceilf(-1.75f);
+float e = roundf(-1.5f);
+
+void main(void) {}
+"#,
+    );
+    let map = read_artifact(&output, "map");
+    assert!(!map.contains("__rt_f32_fabs"));
+    assert!(!map.contains("__rt_f32_floor"));
+    assert_hex_is_programmable(&output);
+}
+
+#[test]
+/// Verifies Phase 36 ISR policy allows inline `fabsf` but rejects helper-backed math.
+fn phase36_math_isr_policy_is_explicit() {
+    let output = compile_source(
+        "pic16f877a",
+        "phase36-isr-fabs.c",
+        r#"
+#include <math.h>
+
+float value;
+
+void __interrupt isr(void) {
+    value = fabsf(value);
+}
+
+void main(void) {}
+"#,
+    );
+    assert_hex_is_programmable(&output);
+
+    let error = compile_error(
+        "pic16f877a",
+        "phase36-isr-floor.c",
+        r#"
+#include <math.h>
+
+float value;
+
+void __interrupt isr(void) {
+    value = floorf(value);
+}
+
+void main(void) {}
+"#,
+    );
+    assert!(error.contains("float math helper"));
+}
+
+#[test]
+/// Verifies checked-in Phase 36 math examples compile cleanly on PIC16F877A.
+fn phase36_math_examples_compile_via_picc() {
+    for example in [
+        "examples/pic16f877a/math_fabs_trunc.c",
+        "examples/pic16f877a/math_floor_ceil.c",
+        "examples/pic16f877a/math_round.c",
+        "examples/pic16f877a/math_rom_calibration.c",
+        "examples/pic16f877a/math_resource_report.c",
+    ] {
+        let output = compile_example_via_picc_cli_with_extra_args(
+            "pic16f877a",
+            example,
+            &["--size", "--verify-hex"],
+        );
+        assert_hex_is_programmable(&output);
+    }
+}
