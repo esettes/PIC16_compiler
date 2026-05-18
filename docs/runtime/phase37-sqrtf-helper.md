@@ -14,7 +14,7 @@ Algorithm:
 - return raw `0.0f` when the Q16.16 input is zero or negative
 - choose an initial Q16.16 guess of `max(x, 1.0)`
 - run four deterministic Newton iterations: `guess = (guess + x / guess) / 2`
-- use an internal local Q16.16 division block instead of emitting external conversion/division helpers
+- use an internal local unsigned Q16.16 division block instead of emitting external conversion/division helpers
 
 Runtime integration:
 

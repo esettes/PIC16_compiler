@@ -4828,7 +4828,7 @@ impl<'a> CodegenContext<'a> {
 
         self.jump_to_label(&main_label);
         self.program.push(AsmLine::Label(div_label.clone()));
-        self.emit_fixed_q16_16_div_helper(Type::new(ScalarType::Q16_16), div_local_base, true);
+        self.emit_fixed_q16_16_div_helper(Type::new(ScalarType::UQ16_16), div_local_base, false);
         self.program.push(AsmLine::Instr(AsmInstr::Return));
 
         self.program.push(AsmLine::Label(main_label));
