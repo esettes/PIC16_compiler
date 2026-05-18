@@ -4757,48 +4757,18 @@ impl<'a> CodegenContext<'a> {
         self.emit_return_current_frame_value(q_offset, Type::new(ScalarType::F32));
     }
 
-    /// Emits `ceilf(x)` by converting to Q16.16 and applying sign-aware truncation.
+    /// Emits `ceilf(x)` as `-floorf(-x)` so it reuses the validated floor helper.
     fn emit_float_f32_ceil_helper(&mut self, arg_offset: u16, local_base: u16) {
-        let q_offset = local_base;
-        let one_offset = q_offset + 4;
-        let positive_label = self.unique_label("rt_f32_ceil_positive");
-        let negative_label = self.unique_label("rt_f32_ceil_negative");
-        let positive_adjust_label = self.unique_label("rt_f32_ceil_positive_adjust");
-        let shift_label = self.unique_label("rt_f32_ceil_shift");
-        let apply_negative_label = self.unique_label("rt_f32_ceil_apply_negative");
-        let frac_label = self.unique_label("rt_f32_ceil_frac");
-        let done_label = self.unique_label("rt_f32_ceil_done");
-
-        self.emit_call_unary_runtime_helper_32(RuntimeHelper::F32ToQ16, arg_offset, q_offset);
-        self.branch_on_current_frame_bit(q_offset + 3, 7, &negative_label, &positive_label);
-
-        self.program.push(AsmLine::Label(positive_label));
-        self.emit_current_frame_nonzero_branch(
-            q_offset,
-            Type::new(ScalarType::U16),
-            &frac_label,
-            &shift_label,
-        );
-        self.program.push(AsmLine::Label(frac_label));
-        self.jump_to_label(&positive_adjust_label);
-        self.program.push(AsmLine::Label(positive_adjust_label));
-        self.store_i32_const_to_current_frame(one_offset, 0x1_0000);
-        self.add_current_frame_value_into_slot(one_offset, q_offset, Type::new(ScalarType::I32));
-        self.jump_to_label(&shift_label);
-
-        self.program.push(AsmLine::Label(negative_label));
-        self.negate_current_frame_value(q_offset, Type::new(ScalarType::I32));
-
-        self.program.push(AsmLine::Label(shift_label));
-        for _ in 0..16 {
-            self.shift_current_frame_value_right(q_offset, Type::new(ScalarType::I32), false);
-        }
-        self.branch_on_current_frame_bit(arg_offset + 3, 7, &apply_negative_label, &done_label);
-        self.program.push(AsmLine::Label(apply_negative_label));
-        self.negate_current_frame_value(q_offset, Type::new(ScalarType::I32));
-        self.program.push(AsmLine::Label(done_label));
-        self.emit_call_unary_runtime_helper_32(RuntimeHelper::I32ToF32, q_offset, q_offset);
-        self.emit_return_current_frame_value(q_offset, Type::new(ScalarType::F32));
+        let work_offset = local_base;
+        self.copy_current_frame_bytes(arg_offset, work_offset, 4);
+        self.load_current_frame_byte_to_w(work_offset + 3);
+        self.program.push(AsmLine::Instr(AsmInstr::Xorlw(0x80)));
+        self.store_w_to_current_frame_byte(work_offset + 3);
+        self.emit_call_unary_runtime_helper_32(RuntimeHelper::F32Floor, work_offset, work_offset);
+        self.load_current_frame_byte_to_w(work_offset + 3);
+        self.program.push(AsmLine::Instr(AsmInstr::Xorlw(0x80)));
+        self.store_w_to_current_frame_byte(work_offset + 3);
+        self.emit_return_current_frame_value(work_offset, Type::new(ScalarType::F32));
     }
 
     /// Emits `roundf` with Phase 36 half-away-from-zero behavior.

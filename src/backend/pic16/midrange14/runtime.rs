@@ -465,8 +465,8 @@ impl RuntimeHelper {
                 label: "__rt_f32_ceil",
                 operand_ty: Type::new(ScalarType::F32),
                 arg_bytes: 4,
-                local_bytes: 12,
-                frame_bytes: 14,
+                local_bytes: 4,
+                frame_bytes: 6,
             },
             Self::F32Round => RuntimeHelperInfo {
                 label: "__rt_f32_round",
@@ -594,7 +594,8 @@ impl RuntimeHelper {
     pub const fn dependencies(self) -> &'static [RuntimeHelper] {
         match self {
             Self::F32Trunc => &[Self::F32ToI32, Self::I32ToF32],
-            Self::F32Floor | Self::F32Ceil => &[Self::F32ToQ16, Self::I32ToF32],
+            Self::F32Floor => &[Self::F32ToQ16, Self::I32ToF32],
+            Self::F32Ceil => &[Self::F32Floor],
             Self::F32Round => &[Self::F32ToQ16, Self::I32ToF32],
             _ => &[],
         }
