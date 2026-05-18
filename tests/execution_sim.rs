@@ -1899,6 +1899,125 @@ void main(void) {
 }
 
 #[test]
+fn executes_phase35_small_profile_q16_div_wrappers() {
+    let (core, map) = run_source_with_runtime_profile(
+        "pic16f877a",
+        "phase35-small-q16-div.c",
+        r#"
+__ufixed16_16 ua;
+__ufixed16_16 ub;
+__ufixed16_16 uresult;
+__fixed16_16 sa;
+__fixed16_16 sb;
+__fixed16_16 sresult;
+
+void main(void) {
+    ua = 3.0uq16_16;
+    ub = 2.0uq16_16;
+    uresult = ua / ub;
+    sa = -3.0q16_16;
+    sb = 2.0q16_16;
+    sresult = sa / sb;
+}
+"#,
+        RuntimeProfile::Small,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "uresult"), 0x0001_8000);
+    assert_eq!(symbol_u32(&core, &map, "sresult"), 0xFFFE_8000);
+    assert!(map.contains("__rt_div_q16_16"));
+    assert!(map.contains("__rt_div_uq16_16"));
+}
+
+#[test]
+fn executes_phase35_small_profile_q16_mul_wrappers() {
+    let (core, map) = run_source_with_runtime_profile(
+        "pic16f877a",
+        "phase35-small-q16-mul.c",
+        r#"
+__ufixed16_16 ua;
+__ufixed16_16 ub;
+__ufixed16_16 uresult;
+__fixed16_16 sa;
+__fixed16_16 sb;
+__fixed16_16 sresult;
+
+void main(void) {
+    ua = 1.5uq16_16;
+    ub = 2.0uq16_16;
+    uresult = ua * ub;
+    sa = -1.5q16_16;
+    sb = 2.0q16_16;
+    sresult = sa * sb;
+}
+"#,
+        RuntimeProfile::Small,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "uresult"), 0x0003_0000);
+    assert_eq!(symbol_u32(&core, &map, "sresult"), 0xFFFD_0000);
+    assert!(map.contains("__rt_mul_q16_16"));
+    assert!(map.contains("__rt_mul_uq16_16"));
+}
+
+#[test]
+fn executes_phase35_small_profile_float_add_sub_wrapper() {
+    let (core, map) = run_source_with_runtime_profile(
+        "pic16f877a",
+        "phase35-small-f32-add-sub.c",
+        r#"
+float a;
+float b;
+float sum;
+float diff;
+
+void main(void) {
+    a = 3.5f;
+    b = 1.5f;
+    sum = a + b;
+    diff = a - b;
+}
+"#,
+        RuntimeProfile::Small,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "sum"), 0x40A0_0000);
+    assert_eq!(symbol_u32(&core, &map, "diff"), 0x4000_0000);
+    assert!(map.contains("__rt_f32_add"));
+    assert!(map.contains("__rt_f32_sub"));
+}
+
+#[test]
+fn executes_phase35_small_profile_float_conversion_paths() {
+    let (core, map) = run_source_with_runtime_profile(
+        "pic16f877a",
+        "phase35-small-f32-conversions.c",
+        r#"
+long lvalue;
+long lresult;
+__fixed16_16 qvalue;
+__fixed16_16 qresult;
+float fvalue;
+float fresult;
+
+void main(void) {
+    lvalue = -1000L;
+    fvalue = (float)lvalue;
+    lresult = (long)fvalue;
+
+    qvalue = -1.5q16_16;
+    fresult = (float)qvalue;
+    qresult = (__fixed16_16)fresult;
+}
+"#,
+        RuntimeProfile::Small,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "lresult"), 0xFFFF_FC18);
+    assert_eq!(symbol_u32(&core, &map, "qresult"), 0xFFFE_8000);
+}
+
+#[test]
 fn executes_phase28_dynamic_unsigned_int_float_round_trip() {
     let (core, map) = run_source(
         "pic16f877a",

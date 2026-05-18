@@ -317,6 +317,22 @@ fn compile_profile_size_report(
     )
 }
 
+fn compile_profile_source_size_report(
+    profile: &str,
+    name: &str,
+    source: &str,
+    extra_args: &[&str],
+) -> (PathBuf, String, String) {
+    let source_path = temp_file(&format!("{name}.c"));
+    fs::write(&source_path, source).expect("fixture");
+    compile_profile_size_report(
+        profile,
+        source_path.to_str().expect("utf8 temp source"),
+        name,
+        extra_args,
+    )
+}
+
 /// Returns a strict warning profile equivalent to `-Wall -Wextra -Werror`.
 fn strict_warnings() -> WarningProfile {
     WarningProfile {
