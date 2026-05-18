@@ -553,6 +553,9 @@ impl RuntimeHelper {
             (RuntimeProfile::Small, Self::DivU32 | Self::ModU32 | Self::DivI32 | Self::ModI32) => {
                 &[Self::U32DivModCore]
             }
+            (RuntimeProfile::Small, Self::MulQ16_16) => &[Self::MulUQ16_16],
+            (RuntimeProfile::Small, Self::DivQ16_16) => &[Self::DivUQ16_16],
+            (RuntimeProfile::Small, Self::F32Sub) => &[Self::F32Add],
             _ => self.dependencies(),
         }
     }

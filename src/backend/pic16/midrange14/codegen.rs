@@ -4180,6 +4180,9 @@ impl<'a> CodegenContext<'a> {
                 );
                 self.emit_return_current_frame_value(local_base, result_ty);
             }
+            RuntimeHelper::F32Sub if self.options.runtime_profile == RuntimeProfile::Small => {
+                self.emit_f32_sub_small_wrapper(arg0_offset, arg1_offset, work_offset);
+            }
             RuntimeHelper::F32Add
             | RuntimeHelper::F32Sub
             | RuntimeHelper::F32Mul
@@ -4191,6 +4194,16 @@ impl<'a> CodegenContext<'a> {
                     ty,
                     local_base,
                     matches!(helper, RuntimeHelper::MulQ8_8),
+                );
+            }
+            RuntimeHelper::MulQ16_16 if self.options.runtime_profile == RuntimeProfile::Small => {
+                self.emit_q16_16_small_signed_wrapper(
+                    RuntimeHelper::MulUQ16_16,
+                    arg0_offset,
+                    arg1_offset,
+                    work_offset,
+                    flag_offset,
+                    Type::new(ScalarType::Q16_16),
                 );
             }
             RuntimeHelper::MulQ16_16 | RuntimeHelper::MulUQ16_16 => {
@@ -4241,6 +4254,16 @@ impl<'a> CodegenContext<'a> {
                     ty,
                     local_base,
                     matches!(helper, RuntimeHelper::DivQ8_8),
+                );
+            }
+            RuntimeHelper::DivQ16_16 if self.options.runtime_profile == RuntimeProfile::Small => {
+                self.emit_q16_16_small_signed_wrapper(
+                    RuntimeHelper::DivUQ16_16,
+                    arg0_offset,
+                    arg1_offset,
+                    work_offset,
+                    flag_offset,
+                    Type::new(ScalarType::Q16_16),
                 );
             }
             RuntimeHelper::DivQ16_16 | RuntimeHelper::DivUQ16_16 => {
@@ -4589,6 +4612,20 @@ impl<'a> CodegenContext<'a> {
 
         self.program.push(AsmLine::Label(finish_label));
         self.load_current_frame_byte_to_w(result_offset);
+    }
+
+    /// Emits compact Phase 35 f32 subtraction as `lhs + (-rhs)` through `__rt_f32_add`.
+    fn emit_f32_sub_small_wrapper(&mut self, lhs_offset: u16, rhs_offset: u16, result_offset: u16) {
+        self.load_current_frame_byte_to_w(rhs_offset + 3);
+        self.program.push(AsmLine::Instr(AsmInstr::Xorlw(0x80)));
+        self.store_w_to_current_frame_byte(rhs_offset + 3);
+        self.emit_call_binary_runtime_helper_32(
+            RuntimeHelper::F32Add,
+            lhs_offset,
+            rhs_offset,
+            result_offset,
+        );
+        self.emit_return_current_frame_value(result_offset, Type::new(ScalarType::F32));
     }
 
     /// Converts a signed or unsigned 32-bit integer to finite IEEE f32 bits.
@@ -5401,6 +5438,35 @@ impl<'a> CodegenContext<'a> {
         self.store_w_to_current_frame_byte(offset + 3);
     }
 
+    /// Emits compact Phase 35 signed Q16.16 wrappers through unsigned Q16.16 helpers.
+    fn emit_q16_16_small_signed_wrapper(
+        &mut self,
+        unsigned_helper: RuntimeHelper,
+        arg0_offset: u16,
+        arg1_offset: u16,
+        result_offset: u16,
+        flag_offset: u16,
+        result_ty: Type,
+    ) {
+        self.clear_current_frame_slot(flag_offset, Type::new(ScalarType::U8));
+        self.emit_runtime_negate_if_signed(arg0_offset, result_ty, flag_offset, 0x01);
+        self.emit_runtime_negate_if_signed(arg1_offset, result_ty, flag_offset, 0x01);
+        self.emit_call_binary_runtime_helper_32(
+            unsigned_helper,
+            arg0_offset,
+            arg1_offset,
+            result_offset,
+        );
+
+        let negate_label = self.unique_label("rt_q16_small_wrap_neg");
+        let done_label = self.unique_label("rt_q16_small_wrap_done");
+        self.branch_on_current_frame_bit(flag_offset, 0, &negate_label, &done_label);
+        self.program.push(AsmLine::Label(negate_label));
+        self.negate_current_frame_value(result_offset, result_ty);
+        self.program.push(AsmLine::Label(done_label));
+        self.emit_return_current_frame_value(result_offset, result_ty);
+    }
+
     /// Copies contiguous bytes inside the active helper frame.
     fn copy_current_frame_bytes(&mut self, src_offset: u16, dst_offset: u16, width: usize) {
         for byte in 0..width {
@@ -5561,6 +5627,43 @@ impl<'a> CodegenContext<'a> {
         }
         self.emit_const_to_w(mode);
         self.push_w();
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage(info.label.to_string())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Call(info.label.to_string())));
+        self.restore_code_page_after_call();
+        self.store_w_to_addr(self.layout.helpers.w_save);
+        self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(info.arg_bytes));
+        self.load_addr_to_w(self.layout.helpers.w_save);
+        self.store_w_to_current_frame_byte(result_offset);
+        for byte in 1..4usize {
+            self.load_return_byte_to_w(byte);
+            self.store_w_to_current_frame_byte(result_offset + byte as u16);
+        }
+    }
+
+    /// Calls one 32-bit binary runtime helper from another runtime helper.
+    fn emit_call_binary_runtime_helper_32(
+        &mut self,
+        helper: RuntimeHelper,
+        arg0_offset: u16,
+        arg1_offset: u16,
+        result_offset: u16,
+    ) {
+        let info = helper.info();
+        debug_assert_eq!(info.arg_bytes, 8);
+        self.emit_stack_growth_check(
+            info.arg_bytes,
+            &format!("runtime helper {} args", info.label),
+        );
+        for byte in 0..4u16 {
+            self.load_current_frame_byte_to_w(arg0_offset + byte);
+            self.push_w();
+        }
+        for byte in 0..4u16 {
+            self.load_current_frame_byte_to_w(arg1_offset + byte);
+            self.push_w();
+        }
         self.program
             .push(AsmLine::Instr(AsmInstr::SetPage(info.label.to_string())));
         self.program
