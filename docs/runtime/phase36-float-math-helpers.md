@@ -16,8 +16,8 @@ Behavior:
 
 - `fabsf` clears the f32 sign bit
 - `truncf` converts f32 to signed 32-bit integer and back, truncating toward zero
-- `floorf` converts to integer and Q16.16, then decrements the integer result when the input is negative with a non-zero fractional part
-- `ceilf` converts to integer and Q16.16, then increments the integer result when the input is positive with a non-zero fractional part
+- `floorf` converts to Q16.16 and arithmetically shifts away the fractional bits
+- `ceilf` converts to Q16.16, applies sign-aware truncation, and increments positive fractional values before shifting
 - `roundf` converts to absolute Q16.16, adds raw `0.5`, truncates to an integer, reapplies the sign, and converts back to f32
 
 Runtime integration:

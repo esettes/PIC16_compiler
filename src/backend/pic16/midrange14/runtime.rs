@@ -594,7 +594,7 @@ impl RuntimeHelper {
     pub const fn dependencies(self) -> &'static [RuntimeHelper] {
         match self {
             Self::F32Trunc => &[Self::F32ToI32, Self::I32ToF32],
-            Self::F32Floor | Self::F32Ceil => &[Self::F32ToI32, Self::I32ToF32],
+            Self::F32Floor | Self::F32Ceil => &[Self::F32ToQ16, Self::I32ToF32],
             Self::F32Round => &[Self::F32ToQ16, Self::I32ToF32],
             _ => &[],
         }
