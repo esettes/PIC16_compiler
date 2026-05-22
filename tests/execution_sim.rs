@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pic16cc::backend::pic16::devices::DeviceRegistry;
-use pic16cc::backend::pic16::midrange14::runtime::RuntimeProfile;
+use pic16cc::backend::pic16::midrange14::runtime::{MathProfile, RuntimeProfile};
 use pic16cc::cli::{CliCommand, CliOptions, CompileCommand, OptimizationLevel, OutputArtifacts};
 use pic16cc::diagnostics::WarningProfile;
 use pic16cc::execute;
@@ -34,6 +34,37 @@ fn compile_source_with_runtime_profile(
     source: &str,
     runtime_profile: RuntimeProfile,
 ) -> (PathBuf, String) {
+    compile_source_with_profiles(
+        target,
+        name,
+        source,
+        runtime_profile,
+        MathProfile::Balanced,
+    )
+}
+
+fn compile_source_with_math_profile(
+    target: &str,
+    name: &str,
+    source: &str,
+    math_profile: MathProfile,
+) -> (PathBuf, String) {
+    compile_source_with_profiles(
+        target,
+        name,
+        source,
+        RuntimeProfile::Balanced,
+        math_profile,
+    )
+}
+
+fn compile_source_with_profiles(
+    target: &str,
+    name: &str,
+    source: &str,
+    runtime_profile: RuntimeProfile,
+    math_profile: MathProfile,
+) -> (PathBuf, String) {
     let input = temp_file(name);
     fs::write(&input, source).expect("fixture");
     let output = temp_file("out.hex");
@@ -48,6 +79,7 @@ fn compile_source_with_runtime_profile(
             artifacts: OutputArtifacts {
                 map: true,
                 runtime_profile,
+                math_profile,
                 ..OutputArtifacts::default()
             },
             verbose: false,
@@ -167,6 +199,16 @@ fn run_source_with_runtime_profile(
     runtime_profile: RuntimeProfile,
 ) -> (Pic16Core, String) {
     let (output, map) = compile_source_with_runtime_profile(target, name, source, runtime_profile);
+    (run_fixture_to_symbol(target, &output, &map, "__halt"), map)
+}
+
+fn run_source_with_math_profile(
+    target: &str,
+    name: &str,
+    source: &str,
+    math_profile: MathProfile,
+) -> (Pic16Core, String) {
+    let (output, map) = compile_source_with_math_profile(target, name, source, math_profile);
     (run_fixture_to_symbol(target, &output, &map, "__halt"), map)
 }
 
@@ -2594,4 +2636,68 @@ void main(void) {
 
     assert_eq!(symbol_u32(&core, &map, "result"), 0x3FC0_0000);
     assert_eq!(symbol_u32(&core, &map, "from_function"), 0x3FC0_0000);
+}
+
+#[test]
+fn executes_phase38_compact_math_profile_sqrtf_policy() {
+    let (core, map) = run_source_with_math_profile(
+        "pic16f877a",
+        "phase38-sqrt-compact.c",
+        r#"
+#include <math.h>
+
+float exact;
+float approx;
+float negative;
+
+void main(void) {
+    float value;
+    value = 2.25f;
+    exact = sqrtf(value);
+    value = 3.0f;
+    approx = sqrtf(value);
+    value = -1.0f;
+    negative = sqrtf(value);
+}
+"#,
+        MathProfile::Compact,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "exact"), 0x3FC0_0000);
+    let approx = symbol_u32(&core, &map, "approx");
+    assert_ne!(approx, 0);
+    assert_eq!(approx & 0x8000_0000, 0);
+    assert!(approx > 0x3F80_0000);
+    assert!(approx < 0x4000_0000);
+    assert_eq!(symbol_u32(&core, &map, "negative"), 0x0000_0000);
+}
+
+#[test]
+fn executes_phase38_balanced_math_profile_matches_compact_sqrtf_policy() {
+    let (core, map) = run_source_with_math_profile(
+        "pic16f877a",
+        "phase38-sqrt-balanced.c",
+        r#"
+#include <math.h>
+
+float exact;
+float approx;
+
+void main(void) {
+    float value;
+    value = 4.0f;
+    exact = sqrtf(value);
+    value = 3.0f;
+    approx = sqrtf(value);
+}
+"#,
+        MathProfile::Balanced,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "exact"), 0x4000_0000);
+    let approx = symbol_u32(&core, &map, "approx");
+    assert_ne!(approx, 0);
+    assert_eq!(approx & 0x8000_0000, 0);
+    assert!(approx > 0x3F80_0000);
+    assert!(approx < 0x4000_0000);
 }
