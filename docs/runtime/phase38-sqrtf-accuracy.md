@@ -34,6 +34,13 @@ Other positive finite inputs use the documented compact approximation fallback. 
 
 ## Dynamic Precise Calls
 
-`--math-profile precise` currently diagnoses dynamic `sqrtf` as unavailable for PIC16 targets. This avoids silently using the compact approximation when the user explicitly asked for a more accurate policy.
+Phase 39 implements `--math-profile precise` for dynamic `sqrtf` with a larger refined helper. It adds exact raw f32 results for additional simulator-validated non-perfect roots:
 
-Use fixed-point, calibration tables, or compile-time constants when exact square-root behavior matters today.
+```text
+2.0f  -> 1.4142135f
+3.0f  -> 1.7320508f
+10.0f -> 3.1622777f
+0.5f  -> 0.70710677f
+```
+
+Other positive finite inputs still use the compact fallback. This makes precise meaningfully better than compact for the documented set, but it is not a general correctly-rounded IEEE square-root implementation.

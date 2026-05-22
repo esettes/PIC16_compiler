@@ -16,7 +16,7 @@ Use `compact` on PIC16F628A or size-sensitive PIC16F877A firmware. It uses the c
 
 Use `balanced` when you want defaults. Today it is equivalent to `compact` for `sqrtf`.
 
-Use `precise` only to enforce that compact dynamic `sqrtf` is not used. Dynamic `sqrtf` currently fails with a clear diagnostic under `precise`; constant-folded `sqrtf` still compiles because no runtime helper is emitted.
+Use `precise` when the firmware needs the larger refined dynamic `sqrtf` helper. It is more accurate than compact for the documented non-perfect roots, but still finite-only and not correctly-rounded IEEE.
 
 ## Report Workflow
 
@@ -29,6 +29,7 @@ Inspect:
 - `Math profile`
 - `Runtime helper contribution`
 - `variant=compact_approx`
+- `variant=precise_table_refined`
 - `math` helper word totals
 
-If precise dynamic `sqrtf` is required, keep the expression constant-folded or defer the firmware change until the precise helper is implemented.
+If exact square-root behavior is required outside the documented refined table, keep the expression constant-folded, use fixed-point/calibration tables, or validate the specific operating range in simulator.

@@ -21,7 +21,7 @@ picc --math-profile precise ...
 
 `balanced` is the default. It currently uses the same compact `sqrtf` helper and reports `variant=compact_approx`.
 
-`precise` is accepted as an explicit request, but dynamic `sqrtf` currently emits a backend diagnostic on PIC16 targets. The precise fixed/isqrt helper is deferred until it can fit and be simulator-validated.
+`precise` is an explicit request for the larger refined helper added in Phase 39. It reports `variant=precise_table_refined` and is more accurate than compact for the simulator-validated non-perfect roots documented in the Phase 39 runtime notes.
 
 ## Runtime Profile Difference
 
@@ -39,6 +39,12 @@ picc --target pic16f877a -I include --runtime-profile small --math-profile compa
 
 ```text
 __rt_f32_sqrt: category=math variant=compact_approx ...
+```
+
+Dynamic `sqrtf` in precise reports:
+
+```text
+__rt_f32_sqrt: category=math variant=precise_table_refined ...
 ```
 
 Constant `sqrtf` calls fold before helper emission and do not emit `__rt_f32_sqrt`.

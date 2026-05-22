@@ -29,5 +29,5 @@ Policy:
 - negative input returns `0.0f`
 - no NaN/Inf, `errno`, fenv, correctly-rounded IEEE sqrt, or signed-zero promise
 - runtime profile `small` and `balanced` currently share the same compact `sqrtf` helper body
-- math profile `compact` uses this helper; math profile `balanced` currently uses the same helper; math profile `precise` diagnoses dynamic `sqrtf` as unavailable until a precise PIC16 helper fits and is validated
+- math profile `compact` uses this helper; math profile `balanced` currently uses the same helper; math profile `precise` uses the larger Phase 39 refined helper variant
 - use fixed-point or validated calibration tables when exact positive-input behavior matters outside the documented exact cases

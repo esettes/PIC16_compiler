@@ -115,7 +115,7 @@ Math profile: compact
 __rt_f32_sqrt: category=math variant=compact_approx ...
 ```
 
-`compact` and default `balanced` currently use `variant=compact_approx` for dynamic `sqrtf`. `precise` is accepted by the CLI, but dynamic `sqrtf` emits a clear backend diagnostic until the precise helper is implemented and validated for PIC16 targets.
+`compact` and default `balanced` currently use `variant=compact_approx` for dynamic `sqrtf`. Phase 39 adds `variant=precise_table_refined` for dynamic `sqrtf` under `--math-profile precise`. The precise variant is larger than compact, so compare `Program words` and `math` helper totals before selecting it on small targets.
 
 Phase 34/35 add variant/dependency detail for compact helpers:
 
