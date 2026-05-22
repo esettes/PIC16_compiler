@@ -3990,6 +3990,19 @@ impl<'a> CodegenContext<'a> {
                 }
             }
         }
+        if self.options.math_profile == MathProfile::Precise
+            && helpers.contains(&RuntimeHelper::F32Sqrt)
+        {
+            diagnostics.error(
+                "backend",
+                None,
+                "precise sqrtf math profile is not available for PIC16 targets yet",
+                Some(
+                    "compact and balanced use the Phase 37 compact approximation; the precise fixed/isqrt helper is deferred until it can fit and be validated. Use `--math-profile compact` or `--math-profile balanced` for dynamic sqrtf.".to_string(),
+                ),
+            );
+            return;
+        }
         let helpers = helpers.into_iter().collect::<Vec<_>>();
         if let Err(message) =
             validate_helper_dependency_graph(&helpers, self.options.runtime_profile)
@@ -4213,9 +4226,12 @@ impl<'a> CodegenContext<'a> {
 
         self.program.push(AsmLine::Label(info.label.to_string()));
         self.program.push(AsmLine::Comment(format!(
-            "runtime helper: {} helper={} required_by={} args={} locals={} frame_bytes={}",
+            "runtime helper: {} helper={} variant={} runtime_profile={} math_profile={} required_by={} args={} locals={} frame_bytes={}",
             catalog.category.as_str(),
             info.label,
+            runtime_helper_variant(helper, self.options.runtime_profile, self.options.math_profile),
+            self.options.runtime_profile.as_str(),
+            self.options.math_profile.as_str(),
             catalog.required_by,
             info.arg_bytes,
             info.local_bytes,
@@ -6740,6 +6756,24 @@ fn runtime_helper_stack_cost(helper: RuntimeHelper, profile: RuntimeProfile) -> 
         .saturating_add(dependency_cost)
 }
 
+fn runtime_helper_variant(
+    helper: RuntimeHelper,
+    runtime_profile: RuntimeProfile,
+    math_profile: MathProfile,
+) -> &'static str {
+    if helper == RuntimeHelper::F32Sqrt {
+        return match math_profile {
+            MathProfile::Compact | MathProfile::Balanced => "compact_approx",
+            MathProfile::Precise => "precise_unavailable",
+        };
+    }
+    if helper.dependencies_for_profile(runtime_profile).is_empty() {
+        "balanced"
+    } else {
+        runtime_profile.as_str()
+    }
+}
+
 struct ResourceReportInputs<'a> {
     target: &'a TargetDevice,
     typed_program: &'a TypedProgram,
@@ -6749,6 +6783,7 @@ struct ResourceReportInputs<'a> {
     stack: &'a StackReportSummary,
     relaxation: LinkerRelaxationStats,
     runtime_profile: RuntimeProfile,
+    math_profile: MathProfile,
 }
 
 /// Builds deterministic target resource usage data for `--size`, maps, and reports.
@@ -6762,6 +6797,7 @@ fn build_resource_report(inputs: ResourceReportInputs<'_>) -> ResourceReport {
         stack,
         relaxation,
         runtime_profile,
+        math_profile,
     } = inputs;
     let contributions =
         collect_resource_contributions(target, typed_program, layout, words, labels);
@@ -6860,6 +6896,7 @@ fn build_resource_report(inputs: ResourceReportInputs<'_>) -> ResourceReport {
             .unwrap_or(u16::MAX),
         page_relaxation_passes: u16::try_from(relaxation.passes).unwrap_or(u16::MAX),
         runtime_profile,
+        math_profile,
     };
 
     ResourceReport {
@@ -6982,6 +7019,7 @@ fn validate_resource_fit(
     }
 
     emit_runtime_budget_warning(target, report, options, diagnostics);
+    emit_sqrtf_math_profile_warning(report, options, diagnostics);
 }
 
 fn emit_runtime_budget_warning(
@@ -7028,6 +7066,43 @@ fn emit_runtime_budget_warning(
     });
 }
 
+fn emit_sqrtf_math_profile_warning(
+    report: &ResourceReport,
+    options: BackendOptions,
+    diagnostics: &mut DiagnosticBag,
+) {
+    if !options.enforce_resource_limits
+        || !matches!(
+            options.math_profile,
+            MathProfile::Compact | MathProfile::Balanced
+        )
+        || !report
+            .code_sections
+            .iter()
+            .any(|section| section.name == RuntimeHelper::F32Sqrt.label())
+    {
+        return;
+    }
+    diagnostics.diagnostics.push(Diagnostic {
+        severity: Severity::Warning,
+        stage: "backend",
+        message: format!(
+            "sqrtf uses `{}` math profile compact approximation",
+            options.math_profile.as_str()
+        ),
+        span: None,
+        note: Some(
+            "dynamic sqrtf is finite-only, exact for documented simple values, and approximate for fallback positive inputs; constant sqrtf folding uses compile-time f32 sqrt"
+                .to_string(),
+        ),
+        suggestion: Some(
+            "use `--math-profile precise` to request the precise policy; current PIC16 backend diagnoses dynamic precise sqrtf as unavailable"
+                .to_string(),
+        ),
+        code: Some("sqrtf-math-profile"),
+    });
+}
+
 fn render_size_summary(
     target: &TargetDevice,
     summary: &ResourceSummary,
@@ -7039,6 +7114,11 @@ fn render_size_summary(
         output,
         "Runtime profile: {}",
         summary.runtime_profile.as_str()
+    );
+    let _ = writeln!(
+        output,
+        "Math profile: {}",
+        summary.math_profile.as_str()
     );
     let _ = writeln!(
         output,
@@ -7122,6 +7202,7 @@ fn render_memory_report(
         "runtime profile: {}",
         summary.runtime_profile.as_str()
     );
+    let _ = writeln!(output, "math profile: {}", summary.math_profile.as_str());
     let _ = writeln!(
         output,
         "program range: 0x{:04X}..0x{:04X} ({} words)",
@@ -7258,11 +7339,7 @@ fn render_memory_report(
                     "{}: category={} variant={} actual={} estimated={} args={} locals={} frame={} required_by={} deps={} constraints={}",
                     helper.name,
                     catalog.category.as_str(),
-                    if dependencies == "(none)" {
-                        "balanced"
-                    } else {
-                        summary.runtime_profile.as_str()
-                    },
+                    runtime_helper_variant(runtime_helper, summary.runtime_profile, summary.math_profile),
                     helper.words,
                     catalog.estimated_words,
                     catalog.arg_bytes,
@@ -7330,6 +7407,7 @@ fn render_resource_map_lines(
     let mut lines = vec![
         format!("Target: {}", target.name.to_ascii_uppercase()),
         format!("Runtime profile: {}", summary.runtime_profile.as_str()),
+        format!("Math profile: {}", summary.math_profile.as_str()),
         format!(
             "Program words: {} / {}",
             summary.program_words_used, summary.program_words_available
