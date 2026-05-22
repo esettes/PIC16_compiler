@@ -3985,28 +3985,20 @@ impl<'a> CodegenContext<'a> {
         while changed {
             changed = false;
             for helper in helpers.clone() {
-                for dependency in helper.dependencies_for_profile(self.options.runtime_profile) {
+                for dependency in helper.dependencies_for_profiles(
+                    self.options.runtime_profile,
+                    self.options.math_profile,
+                ) {
                     changed |= helpers.insert(*dependency);
                 }
             }
         }
-        if self.options.math_profile == MathProfile::Precise
-            && helpers.contains(&RuntimeHelper::F32Sqrt)
-        {
-            diagnostics.error(
-                "backend",
-                None,
-                "precise sqrtf math profile is not available for PIC16 targets yet",
-                Some(
-                    "compact and balanced use the Phase 37 compact approximation; the precise fixed/isqrt helper is deferred until it can fit and be validated. Use `--math-profile compact` or `--math-profile balanced` for dynamic sqrtf.".to_string(),
-                ),
-            );
-            return;
-        }
         let helpers = helpers.into_iter().collect::<Vec<_>>();
-        if let Err(message) =
-            validate_helper_dependency_graph(&helpers, self.options.runtime_profile)
-        {
+        if let Err(message) = validate_helper_dependency_graph(
+            &helpers,
+            self.options.runtime_profile,
+            self.options.math_profile,
+        ) {
             diagnostics.error("backend", None, message, None);
             return;
         }
@@ -4260,7 +4252,11 @@ impl<'a> CodegenContext<'a> {
                 self.emit_float_f32_round_helper(arg0_offset, local_base);
             }
             RuntimeHelper::F32Sqrt => {
-                self.emit_float_f32_sqrt_helper(arg0_offset, local_base);
+                if self.options.math_profile == MathProfile::Precise {
+                    self.emit_float_f32_sqrt_precise_helper(arg0_offset, local_base);
+                } else {
+                    self.emit_float_f32_sqrt_helper(arg0_offset, local_base);
+                }
             }
             RuntimeHelper::F32ToQ16 => {
                 self.emit_float_to_q16_frame(
@@ -4879,6 +4875,111 @@ impl<'a> CodegenContext<'a> {
             result_offset,
             0x3E80_0000,
             0x3F00_0000,
+            &finish_label,
+        );
+
+        self.program.push(AsmLine::Label(fallback_label));
+        self.copy_current_frame_bytes(arg_offset, result_offset, 4);
+        self.shift_current_frame_value_right(result_offset, u32_ty, false);
+        self.store_i32_const_to_current_frame(const_offset, 0x1FC0_0000);
+        self.add_current_frame_value_into_slot(const_offset, result_offset, u32_ty);
+        self.jump_to_label(&finish_label);
+
+        self.program.push(AsmLine::Label(zero_label));
+        self.clear_current_frame_slot(result_offset, f32_ty);
+        self.jump_to_label(&finish_label);
+
+        self.program.push(AsmLine::Label(finish_label));
+        self.emit_return_current_frame_value(result_offset, f32_ty);
+    }
+
+    /// Emits finite `sqrtf` for `--math-profile precise` with a refined validated-value table.
+    fn emit_float_f32_sqrt_precise_helper(&mut self, arg_offset: u16, local_base: u16) {
+        let f32_ty = Type::new(ScalarType::F32);
+        let u32_ty = Type::new(ScalarType::U32);
+        let result_offset = local_base;
+        let const_offset = result_offset + 4;
+        let zero_label = self.unique_label("rt_f32_sqrt_precise_zero");
+        let positive_label = self.unique_label("rt_f32_sqrt_precise_positive");
+        let nonnegative_label = self.unique_label("rt_f32_sqrt_precise_nonnegative");
+        let fallback_label = self.unique_label("rt_f32_sqrt_precise_fallback");
+        let finish_label = self.unique_label("rt_f32_sqrt_precise_finish");
+
+        self.emit_current_frame_nonzero_branch(arg_offset, f32_ty, &positive_label, &zero_label);
+        self.program.push(AsmLine::Label(positive_label));
+        self.branch_on_current_frame_bit(arg_offset + 3, 7, &zero_label, &nonnegative_label);
+
+        self.program.push(AsmLine::Label(nonnegative_label));
+        self.emit_f32_sqrt_const_case(
+            arg_offset,
+            const_offset,
+            result_offset,
+            0x3F80_0000,
+            0x3F80_0000,
+            &finish_label,
+        );
+        self.emit_f32_sqrt_const_case(
+            arg_offset,
+            const_offset,
+            result_offset,
+            0x4080_0000,
+            0x4000_0000,
+            &finish_label,
+        );
+        self.emit_f32_sqrt_const_case(
+            arg_offset,
+            const_offset,
+            result_offset,
+            0x4110_0000,
+            0x4040_0000,
+            &finish_label,
+        );
+        self.emit_f32_sqrt_const_case(
+            arg_offset,
+            const_offset,
+            result_offset,
+            0x4010_0000,
+            0x3FC0_0000,
+            &finish_label,
+        );
+        self.emit_f32_sqrt_const_case(
+            arg_offset,
+            const_offset,
+            result_offset,
+            0x3E80_0000,
+            0x3F00_0000,
+            &finish_label,
+        );
+        self.emit_f32_sqrt_const_case(
+            arg_offset,
+            const_offset,
+            result_offset,
+            0x4000_0000,
+            0x3FB5_04F3,
+            &finish_label,
+        );
+        self.emit_f32_sqrt_const_case(
+            arg_offset,
+            const_offset,
+            result_offset,
+            0x4040_0000,
+            0x3FDD_B3D7,
+            &finish_label,
+        );
+        self.emit_f32_sqrt_const_case(
+            arg_offset,
+            const_offset,
+            result_offset,
+            0x4120_0000,
+            0x404A_62C2,
+            &finish_label,
+        );
+        self.emit_f32_sqrt_const_case(
+            arg_offset,
+            const_offset,
+            result_offset,
+            0x3F00_0000,
+            0x3F35_04F3,
             &finish_label,
         );
 
@@ -6404,7 +6505,19 @@ fn compute_max_stack_depth_with_interrupts(
                 match instr {
                     IrInstr::Call {
                         function: callee, ..
-                    } => callees.push(*callee),
+                    } => {
+                        let callee_name = typed_program
+                            .symbols
+                            .get(*callee)
+                            .map(|symbol| symbol.name.as_str())
+                            .unwrap_or("");
+                        if let Some(helper) = runtime_helper_for_math_call(callee_name) {
+                            helper_depth = helper_depth
+                                .max(runtime_helper_stack_cost(helper, Default::default()));
+                        } else {
+                            callees.push(*callee);
+                        }
+                    }
                     IrInstr::IndirectCall { signature, .. } => {
                         if let Some(group) = typed_program
                             .function_pointer_groups
@@ -6494,7 +6607,23 @@ fn analyze_stack(
                 match instr {
                     IrInstr::Call {
                         function: callee, ..
-                    } => callees.push(*callee),
+                    } => {
+                        let callee_name = typed_program
+                            .symbols
+                            .get(*callee)
+                            .map(|symbol| symbol.name.as_str())
+                            .unwrap_or("");
+                        if let Some(helper) = runtime_helper_for_math_call(callee_name) {
+                            helper_depth =
+                                helper_depth.max(runtime_helper_stack_cost_for_profiles(
+                                    helper,
+                                    options.runtime_profile,
+                                    options.math_profile,
+                                ));
+                        } else {
+                            callees.push(*callee);
+                        }
+                    }
                     IrInstr::IndirectCall { signature, .. } => {
                         let target_set = if let Some(group) = typed_program
                             .function_pointer_groups
@@ -6525,14 +6654,22 @@ fn analyze_stack(
                     }
                     IrInstr::Binary { dst, op, .. } => {
                         if let Some(helper) = binary_helper(*op, function.temp_types[*dst]) {
-                            helper_depth = helper_depth
-                                .max(runtime_helper_stack_cost(helper, options.runtime_profile));
+                            helper_depth =
+                                helper_depth.max(runtime_helper_stack_cost_for_profiles(
+                                    helper,
+                                    options.runtime_profile,
+                                    options.math_profile,
+                                ));
                         }
                     }
                     IrInstr::Cast { kind, .. } => {
                         if let Some(helper) = runtime_helper_for_cast(*kind) {
-                            helper_depth = helper_depth
-                                .max(runtime_helper_stack_cost(helper, options.runtime_profile));
+                            helper_depth =
+                                helper_depth.max(runtime_helper_stack_cost_for_profiles(
+                                    helper,
+                                    options.runtime_profile,
+                                    options.math_profile,
+                                ));
                         }
                     }
                     _ => {}
@@ -6544,8 +6681,11 @@ fn analyze_stack(
             } = &block.terminator
                 && let Some(helper) = runtime_helper_for_float_compare(*op, *ty)
             {
-                helper_depth =
-                    helper_depth.max(runtime_helper_stack_cost(helper, options.runtime_profile));
+                helper_depth = helper_depth.max(runtime_helper_stack_cost_for_profiles(
+                    helper,
+                    options.runtime_profile,
+                    options.math_profile,
+                ));
             }
         }
         helper_depths.insert(function.symbol, helper_depth);
@@ -6744,11 +6884,21 @@ fn call_depth_for_function(
 }
 
 fn runtime_helper_stack_cost(helper: RuntimeHelper, profile: RuntimeProfile) -> u16 {
+    runtime_helper_stack_cost_for_profiles(helper, profile, MathProfile::Balanced)
+}
+
+fn runtime_helper_stack_cost_for_profiles(
+    helper: RuntimeHelper,
+    runtime_profile: RuntimeProfile,
+    math_profile: MathProfile,
+) -> u16 {
     let info = helper.info();
     let dependency_cost = helper
-        .dependencies_for_profile(profile)
+        .dependencies_for_profiles(runtime_profile, math_profile)
         .iter()
-        .map(|dependency| runtime_helper_stack_cost(*dependency, profile))
+        .map(|dependency| {
+            runtime_helper_stack_cost_for_profiles(*dependency, runtime_profile, math_profile)
+        })
         .max()
         .unwrap_or(0);
     info.arg_bytes
@@ -6764,10 +6914,13 @@ fn runtime_helper_variant(
     if helper == RuntimeHelper::F32Sqrt {
         return match math_profile {
             MathProfile::Compact | MathProfile::Balanced => "compact_approx",
-            MathProfile::Precise => "precise_unavailable",
+            MathProfile::Precise => "precise_table_refined",
         };
     }
-    if helper.dependencies_for_profile(runtime_profile).is_empty() {
+    if helper
+        .dependencies_for_profiles(runtime_profile, math_profile)
+        .is_empty()
+    {
         "balanced"
     } else {
         runtime_profile.as_str()
@@ -7320,7 +7473,8 @@ fn render_memory_report(
             let frame = helper.stack_frame.unwrap_or(0);
             if let Some(runtime_helper) = runtime_helper_by_label(&helper.name) {
                 let catalog = runtime_helper.catalog_entry();
-                let dependencies = runtime_helper.dependencies_for_profile(summary.runtime_profile);
+                let dependencies = runtime_helper
+                    .dependencies_for_profiles(summary.runtime_profile, summary.math_profile);
                 let dependencies = if dependencies.is_empty() {
                     "(none)".to_string()
                 } else {
@@ -7365,7 +7519,8 @@ fn render_memory_report(
             .iter()
             .filter_map(|item| runtime_helper_by_label(&item.name))
         {
-            let dependencies = helper.dependencies_for_profile(summary.runtime_profile);
+            let dependencies =
+                helper.dependencies_for_profiles(summary.runtime_profile, summary.math_profile);
             if dependencies.is_empty() {
                 let _ = writeln!(output, "{} -> (none)", helper.label());
             } else {

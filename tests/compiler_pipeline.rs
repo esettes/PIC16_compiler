@@ -7276,8 +7276,8 @@ void main(void) {
 }
 
 #[test]
-/// Verifies Phase 38 precise profile is explicit: folded constants work, dynamic sqrtf diagnoses.
-fn phase38_precise_math_profile_is_explicit_for_sqrtf() {
+/// Verifies Phase 39 precise profile folds constants and emits the refined dynamic helper.
+fn phase39_precise_math_profile_emits_refined_sqrtf() {
     let folded = r#"
 #include <math.h>
 
@@ -7296,10 +7296,7 @@ void main(void) {}
     assert!(!read_artifact(&folded_hex, "map").contains("__rt_f32_sqrt"));
     assert_hex_is_programmable(&folded_hex);
 
-    let source = temp_file("phase38-precise-dynamic-sqrt.c");
-    fs::write(
-        &source,
-        r#"
+    let dynamic = r#"
 #include <math.h>
 
 float input;
@@ -7309,33 +7306,56 @@ void main(void) {
     input = 3.0f;
     output = sqrtf(input);
 }
-"#,
-    )
-    .expect("fixture");
-    let out_hex = temp_file("phase38-precise-dynamic-sqrt.hex");
-    let output = Command::new(picc_bin())
-        .current_dir(repo("."))
-        .args([
-            "--target",
-            "pic16f877a",
-            "-Wall",
-            "-Wextra",
-            "-O2",
-            "-I",
-            "include",
-            "--math-profile",
-            "precise",
-            "--size",
-            "-o",
-        ])
-        .arg(&out_hex)
-        .arg(&source)
-        .output()
-        .expect("run picc precise sqrt");
+"#;
+    let (dynamic_hex, dynamic_stdout, dynamic_report) = compile_profile_source_size_report(
+        "balanced",
+        "phase39-precise-dynamic-sqrt",
+        dynamic,
+        &["--math-profile", "precise"],
+    );
+    assert!(dynamic_stdout.contains("Math profile: precise"));
+    assert!(dynamic_report.contains("math profile: precise"));
+    assert!(dynamic_report.contains("__rt_f32_sqrt"));
+    assert!(dynamic_report.contains("variant=precise_table_refined"));
+    assert_hex_is_programmable(&dynamic_hex);
+}
 
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("precise sqrtf math profile is not available"));
+#[test]
+/// Verifies Phase 39 precise sqrtf costs more than compact and reports a different variant.
+fn phase39_precise_sqrtf_is_larger_than_compact_and_reported() {
+    let source = r#"
+#include <math.h>
+
+float input;
+float output;
+
+void main(void) {
+    input = 3.0f;
+    output = sqrtf(input);
+}
+"#;
+    let (compact_hex, compact_stdout, compact_report) = compile_profile_source_size_report(
+        "balanced",
+        "phase39-compact-size",
+        source,
+        &["--math-profile", "compact"],
+    );
+    let (precise_hex, precise_stdout, precise_report) = compile_profile_source_size_report(
+        "balanced",
+        "phase39-precise-size",
+        source,
+        &["--math-profile", "precise"],
+    );
+    let compact_words = parse_program_words(&compact_stdout);
+    let precise_words = parse_program_words(&precise_stdout);
+    assert!(
+        precise_words > compact_words,
+        "precise sqrtf should cost more than compact: precise={precise_words} compact={compact_words}"
+    );
+    assert!(compact_report.contains("variant=compact_approx"));
+    assert!(precise_report.contains("variant=precise_table_refined"));
+    assert_hex_is_programmable(&compact_hex);
+    assert_hex_is_programmable(&precise_hex);
 }
 
 #[test]
@@ -7381,27 +7401,16 @@ fn phase38_math_profile_examples_compile_via_picc() {
         assert_hex_is_programmable(&output);
     }
 
-    let precise_error = Command::new(picc_bin())
-        .current_dir(repo("."))
-        .args([
-            "--target",
-            "pic16f877a",
-            "-Wall",
-            "-Wextra",
-            "-O2",
-            "-I",
-            "include",
+    let precise_output = compile_example_via_picc_cli_with_extra_args(
+        "pic16f877a",
+        "examples/pic16f877a/math_sqrt_profile_precise.c",
+        &[
+            "--size",
+            "--memory-report",
+            "--verify-hex",
             "--math-profile",
             "precise",
-            "-o",
-            "ignored.hex",
-            "examples/pic16f877a/math_sqrt_profile_precise.c",
-        ])
-        .output()
-        .expect("run precise example");
-    assert!(!precise_error.status.success());
-    assert!(
-        String::from_utf8_lossy(&precise_error.stderr)
-            .contains("precise sqrtf math profile is not available")
+        ],
     );
+    assert_hex_is_programmable(&precise_output);
 }

@@ -2689,3 +2689,136 @@ void main(void) {
     assert!(approx > 0x3F80_0000);
     assert!(approx < 0x4000_0000);
 }
+
+#[test]
+fn executes_phase39_precise_math_profile_sqrtf_refined_values() {
+    let (core, map) = run_source_with_math_profile(
+        "pic16f877a",
+        "phase39-sqrt-precise.c",
+        r#"
+#include <math.h>
+
+float sqrt_zero;
+float sqrt_one;
+float sqrt_four;
+float sqrt_nine;
+float sqrt_two25;
+float sqrt_quarter;
+float sqrt_two;
+float sqrt_three;
+float sqrt_ten;
+float sqrt_half;
+float sqrt_negative;
+float zero_input;
+
+void main(void) {
+    float value;
+
+    sqrt_zero = sqrtf(zero_input);
+    value = 1.0f;
+    sqrt_one = sqrtf(value);
+    value = 4.0f;
+    sqrt_four = sqrtf(value);
+    value = 9.0f;
+    sqrt_nine = sqrtf(value);
+    value = 2.25f;
+    sqrt_two25 = sqrtf(value);
+    value = 0.25f;
+    sqrt_quarter = sqrtf(value);
+    value = 2.0f;
+    sqrt_two = sqrtf(value);
+    value = 3.0f;
+    sqrt_three = sqrtf(value);
+    value = 10.0f;
+    sqrt_ten = sqrtf(value);
+    value = 0.5f;
+    sqrt_half = sqrtf(value);
+    value = -1.0f;
+    sqrt_negative = sqrtf(value);
+}
+"#,
+        MathProfile::Precise,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "sqrt_zero"), 0x0000_0000);
+    assert_eq!(symbol_u32(&core, &map, "sqrt_one"), 0x3F80_0000);
+    assert_eq!(symbol_u32(&core, &map, "sqrt_four"), 0x4000_0000);
+    assert_eq!(symbol_u32(&core, &map, "sqrt_nine"), 0x4040_0000);
+    assert_eq!(symbol_u32(&core, &map, "sqrt_two25"), 0x3FC0_0000);
+    assert_eq!(symbol_u32(&core, &map, "sqrt_quarter"), 0x3F00_0000);
+    assert_eq!(symbol_u32(&core, &map, "sqrt_two"), 0x3FB5_04F3);
+    assert_eq!(symbol_u32(&core, &map, "sqrt_three"), 0x3FDD_B3D7);
+    assert_eq!(symbol_u32(&core, &map, "sqrt_ten"), 0x404A_62C2);
+    assert_eq!(symbol_u32(&core, &map, "sqrt_half"), 0x3F35_04F3);
+    assert_eq!(symbol_u32(&core, &map, "sqrt_negative"), 0x0000_0000);
+}
+
+#[test]
+fn executes_phase39_precise_sqrtf_is_closer_than_compact_for_nonperfect_root() {
+    let source = r#"
+#include <math.h>
+
+float result;
+
+void main(void) {
+    float value = 3.0f;
+    result = sqrtf(value);
+}
+"#;
+    let (compact_core, compact_map) = run_source_with_math_profile(
+        "pic16f877a",
+        "phase39-compact-compare.c",
+        source,
+        MathProfile::Compact,
+    );
+    let (precise_core, precise_map) = run_source_with_math_profile(
+        "pic16f877a",
+        "phase39-precise-compare.c",
+        source,
+        MathProfile::Precise,
+    );
+
+    let expected = 0x3FDD_B3D7u32;
+    let compact = symbol_u32(&compact_core, &compact_map, "result");
+    let precise = symbol_u32(&precise_core, &precise_map, "result");
+    let compact_error = compact.abs_diff(expected);
+    let precise_error = precise.abs_diff(expected);
+    assert!(
+        precise_error < compact_error,
+        "precise sqrtf should improve sqrtf(3.0): precise=0x{precise:08X} compact=0x{compact:08X}"
+    );
+}
+
+#[test]
+fn executes_phase39_precise_sqrtf_struct_rom_and_function_input() {
+    let (core, map) = run_source_with_math_profile(
+        "pic16f877a",
+        "phase39-sqrt-precise-rom-struct.c",
+        r#"
+#include <math.h>
+
+const __rom float roots[] = { 3.0f };
+
+struct Result {
+    float value;
+};
+
+struct Result result;
+float from_function;
+
+float apply_sqrt(float x) {
+    return sqrtf(x);
+}
+
+void main(void) {
+    float rom_value = roots[0];
+    result.value = sqrtf(rom_value);
+    from_function = apply_sqrt(rom_value);
+}
+"#,
+        MathProfile::Precise,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0x3FDD_B3D7);
+    assert_eq!(symbol_u32(&core, &map, "from_function"), 0x3FDD_B3D7);
+}

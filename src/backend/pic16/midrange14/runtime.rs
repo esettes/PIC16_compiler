@@ -636,6 +636,15 @@ impl RuntimeHelper {
         }
     }
 
+    pub const fn dependencies_for_profiles(
+        self,
+        runtime_profile: RuntimeProfile,
+        math_profile: MathProfile,
+    ) -> &'static [RuntimeHelper] {
+        let _ = math_profile;
+        self.dependencies_for_profile(runtime_profile)
+    }
+
     pub const fn estimated_words(self) -> u16 {
         let info = self.info();
         info.arg_bytes + info.local_bytes + info.frame_bytes + 24
@@ -683,10 +692,11 @@ pub fn runtime_helper_by_label(label: &str) -> Option<RuntimeHelper> {
 
 pub fn validate_helper_dependency_graph(
     helpers: &[RuntimeHelper],
-    profile: RuntimeProfile,
+    runtime_profile: RuntimeProfile,
+    math_profile: MathProfile,
 ) -> Result<(), String> {
     for helper in helpers {
-        for dependency in helper.dependencies_for_profile(profile) {
+        for dependency in helper.dependencies_for_profiles(runtime_profile, math_profile) {
             if !RuntimeHelper::ALL.contains(dependency) {
                 return Err(format!(
                     "unknown runtime helper dependency `{}` required by `{}`",
@@ -791,7 +801,8 @@ pub fn binary_helper(op: BinaryOp, ty: Type) -> Option<RuntimeHelper> {
 #[cfg(test)]
 mod tests {
     use super::{
-        RuntimeHelper, RuntimeHelperCategory, binary_helper, validate_helper_dependency_graph,
+        MathProfile, RuntimeHelper, RuntimeHelperCategory, RuntimeProfile, binary_helper,
+        validate_helper_dependency_graph,
     };
     use crate::frontend::ast::BinaryOp;
     use crate::frontend::types::{ScalarType, Type};
@@ -824,7 +835,19 @@ mod tests {
         let fixed = RuntimeHelper::DivQ16_16.catalog_entry();
         assert_eq!(fixed.category, RuntimeHelperCategory::Fixed);
 
-        assert!(validate_helper_dependency_graph(RuntimeHelper::ALL, Default::default()).is_ok());
+        assert!(
+            validate_helper_dependency_graph(
+                RuntimeHelper::ALL,
+                RuntimeProfile::Balanced,
+                MathProfile::Balanced
+            )
+            .is_ok()
+        );
+        assert!(
+            RuntimeHelper::F32Sqrt
+                .dependencies_for_profiles(RuntimeProfile::Balanced, MathProfile::Precise)
+                .is_empty()
+        );
     }
 }
 // SPDX-License-Identifier: GPL-3.0-or-later
