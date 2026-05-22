@@ -6505,19 +6505,7 @@ fn compute_max_stack_depth_with_interrupts(
                 match instr {
                     IrInstr::Call {
                         function: callee, ..
-                    } => {
-                        let callee_name = typed_program
-                            .symbols
-                            .get(*callee)
-                            .map(|symbol| symbol.name.as_str())
-                            .unwrap_or("");
-                        if let Some(helper) = runtime_helper_for_math_call(callee_name) {
-                            helper_depth = helper_depth
-                                .max(runtime_helper_stack_cost(helper, Default::default()));
-                        } else {
-                            callees.push(*callee);
-                        }
-                    }
+                    } => callees.push(*callee),
                     IrInstr::IndirectCall { signature, .. } => {
                         if let Some(group) = typed_program
                             .function_pointer_groups
