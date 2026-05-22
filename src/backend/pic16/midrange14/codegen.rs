@@ -21,8 +21,8 @@ use crate::linker::map::MapFile;
 use super::asm::{AsmInstr, AsmLine, AsmProgram, Dest, PeepholeStats};
 use super::encoder::{LinkerRelaxationStats, encode_program, relax_page_setup};
 use super::runtime::{
-    MathProfile, RuntimeHelper, RuntimeHelperCategory, RuntimeHelperInfo, RuntimeProfile, binary_helper,
-    runtime_helper_by_label, validate_helper_dependency_graph,
+    MathProfile, RuntimeHelper, RuntimeHelperCategory, RuntimeHelperInfo, RuntimeProfile,
+    binary_helper, runtime_helper_by_label, validate_helper_dependency_graph,
 };
 
 const STATUS_ADDR: u16 = 0x03;
@@ -7115,11 +7115,7 @@ fn render_size_summary(
         "Runtime profile: {}",
         summary.runtime_profile.as_str()
     );
-    let _ = writeln!(
-        output,
-        "Math profile: {}",
-        summary.math_profile.as_str()
-    );
+    let _ = writeln!(output, "Math profile: {}", summary.math_profile.as_str());
     let _ = writeln!(
         output,
         "Program words: {} / {}",
@@ -7339,7 +7335,11 @@ fn render_memory_report(
                     "{}: category={} variant={} actual={} estimated={} args={} locals={} frame={} required_by={} deps={} constraints={}",
                     helper.name,
                     catalog.category.as_str(),
-                    runtime_helper_variant(runtime_helper, summary.runtime_profile, summary.math_profile),
+                    runtime_helper_variant(
+                        runtime_helper,
+                        summary.runtime_profile,
+                        summary.math_profile
+                    ),
                     helper.words,
                     catalog.estimated_words,
                     catalog.arg_bytes,

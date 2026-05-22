@@ -7246,15 +7246,17 @@ void main(void) {
     assert!(compact_report.contains("__rt_f32_sqrt"));
     assert!(compact_report.contains("variant=compact_approx"));
     assert!(compact_report.contains("category=math"));
-    assert!(String::from_utf8_lossy(
-        &Command::new(picc_bin())
-            .current_dir(repo("."))
-            .args(["--help"])
-            .output()
-            .expect("picc help")
-            .stdout
-    )
-    .contains("--math-profile"));
+    assert!(
+        String::from_utf8_lossy(
+            &Command::new(picc_bin())
+                .current_dir(repo("."))
+                .args(["--help"])
+                .output()
+                .expect("picc help")
+                .stdout
+        )
+        .contains("--math-profile")
+    );
     let compact_map = read_artifact(&compact_hex, "map");
     let compact_listing = read_artifact(&compact_hex, "lst");
     assert!(compact_map.contains("Math profile: compact"));
@@ -7399,6 +7401,8 @@ fn phase38_math_profile_examples_compile_via_picc() {
         .output()
         .expect("run precise example");
     assert!(!precise_error.status.success());
-    assert!(String::from_utf8_lossy(&precise_error.stderr)
-        .contains("precise sqrtf math profile is not available"));
+    assert!(
+        String::from_utf8_lossy(&precise_error.stderr)
+            .contains("precise sqrtf math profile is not available")
+    );
 }

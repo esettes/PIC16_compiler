@@ -34,13 +34,7 @@ fn compile_source_with_runtime_profile(
     source: &str,
     runtime_profile: RuntimeProfile,
 ) -> (PathBuf, String) {
-    compile_source_with_profiles(
-        target,
-        name,
-        source,
-        runtime_profile,
-        MathProfile::Balanced,
-    )
+    compile_source_with_profiles(target, name, source, runtime_profile, MathProfile::Balanced)
 }
 
 fn compile_source_with_math_profile(
@@ -49,13 +43,7 @@ fn compile_source_with_math_profile(
     source: &str,
     math_profile: MathProfile,
 ) -> (PathBuf, String) {
-    compile_source_with_profiles(
-        target,
-        name,
-        source,
-        RuntimeProfile::Balanced,
-        math_profile,
-    )
+    compile_source_with_profiles(target, name, source, RuntimeProfile::Balanced, math_profile)
 }
 
 fn compile_source_with_profiles(
