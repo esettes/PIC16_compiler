@@ -7249,7 +7249,7 @@ fn emit_sqrtf_math_profile_warning(
                 .to_string(),
         ),
         suggestion: Some(
-            "use `--math-profile precise` to request the precise policy; current PIC16 backend diagnoses dynamic precise sqrtf as unavailable"
+            "use `--math-profile precise` for the larger refined helper, then inspect --size/--memory-report for target fit"
                 .to_string(),
         ),
         code: Some("sqrtf-math-profile"),
