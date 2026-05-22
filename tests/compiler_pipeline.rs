@@ -7165,7 +7165,7 @@ void main(void) {
 }
 "#,
     );
-    assert!(wrong_type.contains("cannot pass"));
+    assert!(wrong_type.contains("expects a float argument"));
 
     let unsupported_sqrt = compile_error(
         "pic16f877a",
@@ -7180,7 +7180,7 @@ void main(void) {
 }
 "#,
     );
-    assert!(unsupported_sqrt.contains("undeclared identifier"));
+    assert!(unsupported_sqrt.contains("sqrt"));
 }
 
 #[test]

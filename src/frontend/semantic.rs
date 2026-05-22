@@ -2911,6 +2911,16 @@ impl<'a> SemanticAnalyzer<'a> {
     ) -> Option<TypedExpr> {
         self.symbols[function].is_referenced = true;
 
+        if Self::is_float_math_builtin(callee_name) {
+            return self.analyze_float_math_call_expr(
+                function,
+                callee_name,
+                args,
+                span,
+                diagnostics,
+            );
+        }
+
         let parameter_types = self.symbols[function].parameter_types.clone();
         if args.len() != parameter_types.len() {
             diagnostics.error(
@@ -2937,6 +2947,61 @@ impl<'a> SemanticAnalyzer<'a> {
                 value_category: ValueCategory::RValue,
             });
         }
+        Some(TypedExpr {
+            kind: TypedExprKind::Call {
+                function,
+                args: typed_args,
+            },
+            ty: self.symbols[function].ty,
+            span,
+            value_category: ValueCategory::RValue,
+        })
+    }
+
+    fn analyze_float_math_call_expr(
+        &mut self,
+        function: SymbolId,
+        callee_name: &str,
+        args: &[Expr],
+        span: Span,
+        diagnostics: &mut DiagnosticBag,
+    ) -> Option<TypedExpr> {
+        if args.len() != 1 {
+            diagnostics.error(
+                "semantic",
+                Some(span),
+                format!(
+                    "function `{callee_name}` expects 1 argument(s), got {}",
+                    args.len()
+                ),
+                None,
+            );
+            return None;
+        }
+
+        let arg = self.analyze_expr(&args[0], diagnostics)?;
+        if !arg.ty.is_float() {
+            diagnostics.error(
+                "semantic",
+                Some(arg.span),
+                format!("float math function `{callee_name}` expects a float argument"),
+                Some("use an explicit `(float)` cast when converting an integer or fixed-point value".to_string()),
+            );
+            return None;
+        }
+
+        let typed_args = vec![arg];
+        if let Some(folded) =
+            Self::eval_float_math_call_constant(callee_name, &typed_args, span, diagnostics)
+        {
+            return Some(TypedExpr {
+                kind: TypedExprKind::IntLiteral(folded),
+                ty: self.symbols[function].ty,
+                span,
+                value_category: ValueCategory::RValue,
+            });
+        }
+
         Some(TypedExpr {
             kind: TypedExprKind::Call {
                 function,
