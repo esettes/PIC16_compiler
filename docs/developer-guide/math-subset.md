@@ -33,6 +33,8 @@ sqrtf(2.25f) -> 1.5f
 sqrtf(-1.0f) -> 0.0f
 ```
 
+Dynamic `sqrtf` is deliberately compact. It returns exact documented results for the validated values above and uses an approximation fallback for other positive finite values. It is not a correctly-rounded IEEE-754 square root. Use fixed-point or validated calibration tables if exact behavior matters.
+
 Recommended workflow:
 
 ```bash

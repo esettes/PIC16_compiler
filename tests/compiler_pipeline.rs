@@ -7091,11 +7091,15 @@ void main(void) {
     output = sqrtf(input);
 }
 "#;
-    let (_hex, stdout, memory_report) =
+    let (hex, stdout, memory_report) =
         compile_profile_source_size_report("balanced", "phase37-sqrt-report", sqrt_source, &[]);
     assert!(stdout.contains("math:"));
     assert!(memory_report.contains("__rt_f32_sqrt"));
     assert!(memory_report.contains("math helper"));
+    let map = read_artifact(&hex, "map");
+    let listing = read_artifact(&hex, "lst");
+    assert!(map.contains("__rt_f32_sqrt"));
+    assert!(listing.contains("__rt_f32_sqrt"));
 
     let folded = compile_source(
         "pic16f877a",
@@ -7127,6 +7131,56 @@ void main(void) {
     );
     let unused_map = read_artifact(&unused, "map");
     assert!(!unused_map.contains("__rt_f32_sqrt"));
+}
+
+#[test]
+/// Verifies unsupported sqrt spellings and invalid sqrtf calls are diagnostics, not implicit remaps.
+fn phase37_sqrtf_diagnostics_are_explicit() {
+    let wrong_count = compile_error(
+        "pic16f877a",
+        "phase37-sqrtf-wrong-count.c",
+        r#"
+#include <math.h>
+
+float value;
+
+void main(void) {
+    value = sqrtf();
+}
+"#,
+    );
+    assert!(wrong_count.contains("expects 1 argument"));
+
+    let wrong_type = compile_error(
+        "pic16f877a",
+        "phase37-sqrtf-wrong-type.c",
+        r#"
+#include <math.h>
+
+float value;
+
+void main(void) {
+    int input = 4;
+    value = sqrtf(input);
+}
+"#,
+    );
+    assert!(wrong_type.contains("cannot pass"));
+
+    let unsupported_sqrt = compile_error(
+        "pic16f877a",
+        "phase37-sqrt-unsupported.c",
+        r#"
+#include <math.h>
+
+float value;
+
+void main(void) {
+    value = sqrt(4.0f);
+}
+"#,
+    );
+    assert!(unsupported_sqrt.contains("undeclared identifier"));
 }
 
 #[test]

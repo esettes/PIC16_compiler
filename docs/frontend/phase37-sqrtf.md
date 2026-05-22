@@ -17,9 +17,12 @@ Supported behavior:
 - finite values only
 - `sqrtf(0.0f)`, `sqrtf(1.0f)`, `sqrtf(4.0f)`, `sqrtf(9.0f)`, `sqrtf(2.25f)`, and `sqrtf(0.25f)` are simulator-tested
 - negative finite input returns `0.0f`
+- other positive finite inputs use a compact approximation fallback
+- `sqrtf` is not correctly-rounded IEEE-754 `sqrt`
 
 Unsupported behavior:
 
 - no `sqrt`, `sqrtl`, `powf`, or trigonometric functions
 - no NaN/Inf, `errno`, or fenv behavior
 - helper-backed `sqrtf` is rejected inside ISRs
+- use fixed-point or validated calibration tables if exact behavior matters

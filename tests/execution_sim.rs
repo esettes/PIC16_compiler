@@ -2494,7 +2494,7 @@ void main(void) {
 }
 
 #[test]
-fn executes_phase37_sqrtf_core_values() {
+fn executes_phase37_sqrtf_validated_exact_values_and_negative_policy() {
     let (core, map) = run_source(
         "pic16f877a",
         "phase37-sqrt-core.c",
@@ -2537,6 +2537,30 @@ void main(void) {
     assert_eq!(symbol_u32(&core, &map, "sqrt_two25"), 0x3FC0_0000);
     assert_eq!(symbol_u32(&core, &map, "sqrt_quarter"), 0x3F00_0000);
     assert_eq!(symbol_u32(&core, &map, "sqrt_negative"), 0x0000_0000);
+}
+
+#[test]
+fn executes_phase37_sqrtf_approximate_fallback_is_positive_finite() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase37-sqrt-approx-fallback.c",
+        r#"
+#include <math.h>
+
+float approx;
+
+void main(void) {
+    float value = 3.0f;
+    approx = sqrtf(value);
+}
+"#,
+    );
+
+    let bits = symbol_u32(&core, &map, "approx");
+    assert_ne!(bits, 0);
+    assert_eq!(bits & 0x8000_0000, 0);
+    assert!(bits > 0x3F80_0000);
+    assert!(bits < 0x4000_0000);
 }
 
 #[test]

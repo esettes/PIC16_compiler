@@ -29,3 +29,4 @@ Policy:
 - negative input returns `0.0f`
 - no NaN/Inf, `errno`, fenv, correctly-rounded IEEE sqrt, or signed-zero promise
 - `small` and `balanced` currently share the same compact `sqrtf` helper body
+- use fixed-point or validated calibration tables when exact positive-input behavior matters outside the documented exact cases
