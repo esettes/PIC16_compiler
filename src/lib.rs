@@ -198,6 +198,7 @@ fn compile_command(command: cli::CompileCommand) -> StageResult<CompilationOutpu
                 || command.artifacts.memory_report
                 || command.artifacts.memory_report_file.is_some(),
             runtime_profile: command.artifacts.runtime_profile,
+            math_profile: command.artifacts.math_profile,
         },
         &mut diagnostics,
     );

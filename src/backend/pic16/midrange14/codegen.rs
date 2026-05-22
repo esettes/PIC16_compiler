@@ -21,7 +21,7 @@ use crate::linker::map::MapFile;
 use super::asm::{AsmInstr, AsmLine, AsmProgram, Dest, PeepholeStats};
 use super::encoder::{LinkerRelaxationStats, encode_program, relax_page_setup};
 use super::runtime::{
-    RuntimeHelper, RuntimeHelperCategory, RuntimeHelperInfo, RuntimeProfile, binary_helper,
+    MathProfile, RuntimeHelper, RuntimeHelperCategory, RuntimeHelperInfo, RuntimeProfile, binary_helper,
     runtime_helper_by_label, validate_helper_dependency_graph,
 };
 
@@ -56,6 +56,7 @@ pub struct BackendOptions {
     pub stack_check: bool,
     pub enforce_resource_limits: bool,
     pub runtime_profile: RuntimeProfile,
+    pub math_profile: MathProfile,
 }
 
 #[derive(Clone, Debug)]
@@ -103,6 +104,7 @@ pub struct ResourceSummary {
     pub page_setup_removed: u16,
     pub page_relaxation_passes: u16,
     pub runtime_profile: RuntimeProfile,
+    pub math_profile: MathProfile,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -388,6 +390,7 @@ pub fn compile_program(
         stack: &stack_report.summary,
         relaxation: optimization.relaxation,
         runtime_profile: options.runtime_profile,
+        math_profile: options.math_profile,
     });
     validate_resource_fit(
         target,
