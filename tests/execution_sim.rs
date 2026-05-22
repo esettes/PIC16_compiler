@@ -2692,65 +2692,40 @@ void main(void) {
 
 #[test]
 fn executes_phase39_precise_math_profile_sqrtf_refined_values() {
-    let (core, map) = run_source_with_math_profile(
-        "pic16f877a",
-        "phase39-sqrt-precise.c",
-        r#"
+    for (name, literal, expected) in [
+        ("zero", "0.0f", 0x0000_0000),
+        ("one", "1.0f", 0x3F80_0000),
+        ("four", "4.0f", 0x4000_0000),
+        ("nine", "9.0f", 0x4040_0000),
+        ("two25", "2.25f", 0x3FC0_0000),
+        ("quarter", "0.25f", 0x3F00_0000),
+        ("two", "2.0f", 0x3FB5_04F3),
+        ("three", "3.0f", 0x3FDD_B3D7),
+        ("ten", "10.0f", 0x404A_62C2),
+        ("half", "0.5f", 0x3F35_04F3),
+        ("negative", "-1.0f", 0x0000_0000),
+    ] {
+        let source = format!(
+            r#"
 #include <math.h>
 
-float sqrt_zero;
-float sqrt_one;
-float sqrt_four;
-float sqrt_nine;
-float sqrt_two25;
-float sqrt_quarter;
-float sqrt_two;
-float sqrt_three;
-float sqrt_ten;
-float sqrt_half;
-float sqrt_negative;
-float zero_input;
+float result;
 
-void main(void) {
+void main(void) {{
     float value;
-
-    sqrt_zero = sqrtf(zero_input);
-    value = 1.0f;
-    sqrt_one = sqrtf(value);
-    value = 4.0f;
-    sqrt_four = sqrtf(value);
-    value = 9.0f;
-    sqrt_nine = sqrtf(value);
-    value = 2.25f;
-    sqrt_two25 = sqrtf(value);
-    value = 0.25f;
-    sqrt_quarter = sqrtf(value);
-    value = 2.0f;
-    sqrt_two = sqrtf(value);
-    value = 3.0f;
-    sqrt_three = sqrtf(value);
-    value = 10.0f;
-    sqrt_ten = sqrtf(value);
-    value = 0.5f;
-    sqrt_half = sqrtf(value);
-    value = -1.0f;
-    sqrt_negative = sqrtf(value);
-}
-"#,
-        MathProfile::Precise,
-    );
-
-    assert_eq!(symbol_u32(&core, &map, "sqrt_zero"), 0x0000_0000);
-    assert_eq!(symbol_u32(&core, &map, "sqrt_one"), 0x3F80_0000);
-    assert_eq!(symbol_u32(&core, &map, "sqrt_four"), 0x4000_0000);
-    assert_eq!(symbol_u32(&core, &map, "sqrt_nine"), 0x4040_0000);
-    assert_eq!(symbol_u32(&core, &map, "sqrt_two25"), 0x3FC0_0000);
-    assert_eq!(symbol_u32(&core, &map, "sqrt_quarter"), 0x3F00_0000);
-    assert_eq!(symbol_u32(&core, &map, "sqrt_two"), 0x3FB5_04F3);
-    assert_eq!(symbol_u32(&core, &map, "sqrt_three"), 0x3FDD_B3D7);
-    assert_eq!(symbol_u32(&core, &map, "sqrt_ten"), 0x404A_62C2);
-    assert_eq!(symbol_u32(&core, &map, "sqrt_half"), 0x3F35_04F3);
-    assert_eq!(symbol_u32(&core, &map, "sqrt_negative"), 0x0000_0000);
+    value = {literal};
+    result = sqrtf(value);
+}}
+"#
+        );
+        let (core, map) = run_source_with_math_profile(
+            "pic16f877a",
+            &format!("phase39-sqrt-precise-{name}.c"),
+            &source,
+            MathProfile::Precise,
+        );
+        assert_eq!(symbol_u32(&core, &map, "result"), expected, "{name}");
+    }
 }
 
 #[test]

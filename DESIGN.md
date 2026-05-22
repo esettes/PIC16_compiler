@@ -196,9 +196,22 @@ Phase 38 separates math accuracy policy from runtime helper sharing:
 - `--math-profile compact|balanced|precise` is parsed by the CLI and propagated to backend reports
 - `compact` selects the Phase 37 compact finite `sqrtf` approximation
 - `balanced` is the default and currently uses the same compact `sqrtf` helper body
-- `precise` is an explicit policy request; dynamic `sqrtf` diagnoses as unavailable on PIC16 until a precise fixed/isqrt helper can fit and be validated
+- `precise` selects a larger dynamic helper variant when available
 - constant `sqrtf` folding remains deterministic and uses the compile-time finite result, with negative constants folding to `0.0f`
 - `--size`, `--memory-report`, `.map`, and `.lst` show the selected math profile and `__rt_f32_sqrt` variant
+
+This phase still does not add `double`, trigonometry, exp/log/pow, errno, fenv, or full ISO C `math.h`.
+
+### Phase 39 Precise-Profile `sqrtf`
+
+Phase 39 implements the dynamic `sqrtf` path for `--math-profile precise`:
+
+- compact and balanced still use `variant=compact_approx`
+- precise uses `variant=precise_table_refined`
+- the precise helper keeps the finite-only policy and returns `0.0f` for negative inputs
+- the precise helper adds refined raw f32 results for validated non-perfect roots such as `2.0f`, `3.0f`, `10.0f`, and `0.5f`
+- fallback positive finite inputs still use the compact approximation, so this is more accurate than compact for the validated set but not a correctly-rounded IEEE implementation
+- resource reports show the larger helper cost and simulator tests verify compact-vs-precise behavior
 
 This phase still does not add `double`, trigonometry, exp/log/pow, errno, fenv, or full ISO C `math.h`.
 
