@@ -189,6 +189,19 @@ Phase 37 extends the minimal math layer with one additional function:
 
 This phase still does not add `double`, trigonometry, errno, fenv, or full ISO C `math.h`.
 
+### Phase 38 Math Profiles
+
+Phase 38 separates math accuracy policy from runtime helper sharing:
+
+- `--math-profile compact|balanced|precise` is parsed by the CLI and propagated to backend reports
+- `compact` selects the Phase 37 compact finite `sqrtf` approximation
+- `balanced` is the default and currently uses the same compact `sqrtf` helper body
+- `precise` is an explicit policy request; dynamic `sqrtf` diagnoses as unavailable on PIC16 until a precise fixed/isqrt helper can fit and be validated
+- constant `sqrtf` folding remains deterministic and uses the compile-time finite result, with negative constants folding to `0.0f`
+- `--size`, `--memory-report`, `.map`, and `.lst` show the selected math profile and `__rt_f32_sqrt` variant
+
+This phase still does not add `double`, trigonometry, exp/log/pow, errno, fenv, or full ISO C `math.h`.
+
 ### Phase 4 Stack-first ABI
 
 Current ABI is stack-first, caller-pushed, upward-growing.

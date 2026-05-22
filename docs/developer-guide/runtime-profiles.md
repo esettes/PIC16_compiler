@@ -12,6 +12,16 @@ picc --runtime-profile fast ...
 
 `balanced` is the default.
 
+Runtime profiles are not math accuracy profiles. Phase 38 adds:
+
+```bash
+picc --math-profile compact ...
+picc --math-profile balanced ...
+picc --math-profile precise ...
+```
+
+`--runtime-profile` chooses helper implementation size/call-sharing strategy. `--math-profile` chooses finite math accuracy policy. For `sqrtf`, `compact` and default `balanced` use the same compact approximation; `precise` is a recognized request but dynamic `sqrtf` currently diagnoses as unavailable on PIC16.
+
 ## small
 
 Uses compact runtime helper variants where implemented and warns earlier when helpers dominate program memory.

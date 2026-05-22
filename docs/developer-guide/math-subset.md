@@ -35,10 +35,20 @@ sqrtf(-1.0f) -> 0.0f
 
 Dynamic `sqrtf` is deliberately compact. It returns exact documented results for the validated values above and uses an approximation fallback for other positive finite values. It is not a correctly-rounded IEEE-754 square root. Use fixed-point or validated calibration tables if exact behavior matters.
 
+Phase 38 adds math profiles:
+
+```bash
+picc --math-profile compact ...
+picc --math-profile balanced ...
+picc --math-profile precise ...
+```
+
+`compact` uses the Phase 37 compact approximation. `balanced` is the default and currently behaves the same as `compact`. `precise` is accepted as an explicit policy request, but dynamic `sqrtf` currently diagnoses as unavailable on PIC16 because the precise fixed/isqrt helper is deferred until it can fit and be validated. Constant `sqrtf` folding still uses the compile-time finite result and does not emit `__rt_f32_sqrt`.
+
 Recommended workflow:
 
 ```bash
-picc --target pic16f877a -I include --size --memory-report -o build/math.hex examples/pic16f877a/math_round.c
+picc --target pic16f877a -I include --math-profile compact --size --memory-report -o build/math.hex examples/pic16f877a/math_round.c
 ```
 
 Notes:
