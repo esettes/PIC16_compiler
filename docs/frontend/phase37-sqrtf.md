@@ -26,3 +26,5 @@ Unsupported behavior:
 - no NaN/Inf, `errno`, or fenv behavior
 - helper-backed `sqrtf` is rejected inside ISRs
 - use fixed-point or validated calibration tables if exact behavior matters
+
+Phase 38 adds `--math-profile compact|balanced|precise` without changing this source syntax. `compact` uses the behavior above, `balanced` currently aliases it, and `precise` currently diagnoses dynamic `sqrtf` on PIC16 instead of silently using the compact helper.

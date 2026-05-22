@@ -15,3 +15,5 @@ Dynamic calls use the existing Stack-first ABI:
 - argument: one 4-byte raw f32 value
 - return: existing 32-bit return convention (`W`, `return_high`, `return_upper0`, `return_upper1`)
 - helper label is emitted only when a dynamic call survives folding and pruning
+
+Phase 38 makes helper selection math-profile-aware. `compact` and default `balanced` lower dynamic calls to the compact `__rt_f32_sqrt` variant. `precise` is parsed and reported, but dynamic `sqrtf` currently emits a backend diagnostic because the precise PIC16 helper is deferred.

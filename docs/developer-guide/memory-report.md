@@ -15,6 +15,8 @@ picc --target pic16f877a -I include --memory-report-file build/app.mem -o build/
 `--size` prints:
 
 - target
+- selected runtime profile
+- selected math profile
 - used/available program words
 - modeled data RAM usage and total device RAM
 - static data bytes
@@ -40,6 +42,7 @@ picc --target pic16f877a -I include --memory-report-file build/app.mem -o build/
 - program sections
 - runtime helper contributors with actual words, estimated words, ABI args, local bytes, stack frame cost, category, required-by text, and target constraints
 - runtime helper dependency graph
+- selected math profile and math helper variant names
 - float helper contribution when `__rt_f32_*` helpers are emitted
 - math helper contribution when `fabsf`, `truncf`, `floorf`, `ceilf`, `roundf`, or `sqrtf` pull finite math helpers
 - ROM float table contribution when `const __rom float[]` objects are emitted
@@ -104,6 +107,15 @@ Runtime helpers: 3509 words
 ```
 
 Use `--runtime-profile small` to select compact helper variants where implemented and to get earlier helper-budget warnings. `balanced` is the default. `fast` currently uses the same helper bodies as balanced.
+
+Phase 38 adds math profile reporting:
+
+```text
+Math profile: compact
+__rt_f32_sqrt: category=math variant=compact_approx ...
+```
+
+`compact` and default `balanced` currently use `variant=compact_approx` for dynamic `sqrtf`. `precise` is accepted by the CLI, but dynamic `sqrtf` emits a clear backend diagnostic until the precise helper is implemented and validated for PIC16 targets.
 
 Phase 34/35 add variant/dependency detail for compact helpers:
 
