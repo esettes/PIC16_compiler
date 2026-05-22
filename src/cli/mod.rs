@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 
-use crate::backend::pic16::midrange14::runtime::RuntimeProfile;
+use crate::backend::pic16::midrange14::runtime::{MathProfile, RuntimeProfile};
 use crate::diagnostics::WarningProfile;
 
 pub const CLI_NAME: &str = "picc";
@@ -53,6 +53,7 @@ pub struct OutputArtifacts {
     pub program: bool,
     pub program_cmd: Option<String>,
     pub runtime_profile: RuntimeProfile,
+    pub math_profile: MathProfile,
 }
 
 #[derive(Clone, Debug)]
@@ -126,6 +127,12 @@ impl CliOptions {
                         .next()
                         .ok_or_else(|| "--runtime-profile requires a value".to_string())?;
                     artifacts.runtime_profile = parse_runtime_profile(&value)?;
+                }
+                "--math-profile" => {
+                    let value = iter
+                        .next()
+                        .ok_or_else(|| "--math-profile requires a value".to_string())?;
+                    artifacts.math_profile = parse_math_profile(&value)?;
                 }
                 "--verbose" => verbose = true,
                 "--opt-report" => opt_report = true,
@@ -298,6 +305,8 @@ pub fn help_text() -> &'static str {
         "                    External programmer command for --program/--print-program-command\n",
         "  --runtime-profile <small|balanced|fast>\n",
         "                    Select runtime helper cost policy (default: balanced)\n",
+        "  --math-profile <compact|balanced|precise>\n",
+        "                    Select finite math accuracy/cost policy (default: balanced)\n",
         "  --opt-report      Print optimization summary after a successful compile\n",
         "  --stack-check     Emit runtime software-stack overflow checks\n",
         "  --stack-report    Print stack usage summary after a successful compile\n",
@@ -314,6 +323,17 @@ fn parse_runtime_profile(raw: &str) -> Result<RuntimeProfile, String> {
         "fast" => Ok(RuntimeProfile::Fast),
         _ => Err(format!(
             "unsupported runtime profile `{raw}`; expected `small`, `balanced`, or `fast`"
+        )),
+    }
+}
+
+fn parse_math_profile(raw: &str) -> Result<MathProfile, String> {
+    match raw {
+        "compact" => Ok(MathProfile::Compact),
+        "balanced" => Ok(MathProfile::Balanced),
+        "precise" => Ok(MathProfile::Precise),
+        _ => Err(format!(
+            "unsupported math profile `{raw}`; expected `compact`, `balanced`, or `precise`"
         )),
     }
 }

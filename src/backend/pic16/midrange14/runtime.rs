@@ -11,6 +11,14 @@ pub enum RuntimeProfile {
     Fast,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MathProfile {
+    Compact,
+    #[default]
+    Balanced,
+    Precise,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum RuntimeHelperCategory {
     Integer,
@@ -717,6 +725,16 @@ impl RuntimeProfile {
             Self::Small => "small",
             Self::Balanced => "balanced",
             Self::Fast => "fast",
+        }
+    }
+}
+
+impl MathProfile {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Compact => "compact",
+            Self::Balanced => "balanced",
+            Self::Precise => "precise",
         }
     }
 }
