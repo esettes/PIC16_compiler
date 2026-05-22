@@ -7414,3 +7414,26 @@ fn phase38_math_profile_examples_compile_via_picc() {
     );
     assert_hex_is_programmable(&precise_output);
 }
+
+#[test]
+/// Verifies checked-in Phase 39 precise sqrtf examples compile and report resources.
+fn phase39_precise_sqrtf_examples_compile_via_picc() {
+    for example in [
+        "examples/pic16f877a/math_sqrt_precise.c",
+        "examples/pic16f877a/math_sqrt_profile_compare.c",
+        "examples/pic16f877a/math_sqrt_precise_resource_report.c",
+    ] {
+        let output = compile_example_via_picc_cli_with_extra_args(
+            "pic16f877a",
+            example,
+            &[
+                "--size",
+                "--memory-report",
+                "--verify-hex",
+                "--math-profile",
+                "precise",
+            ],
+        );
+        assert_hex_is_programmable(&output);
+    }
+}
