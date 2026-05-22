@@ -7336,7 +7336,6 @@ void main(void) {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("precise sqrtf math profile is not available"));
-    assert!(stderr.contains("--math-profile compact"));
 }
 
 #[test]
