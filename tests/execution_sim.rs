@@ -215,6 +215,36 @@ fn symbol_u32(core: &Pic16Core, map: &str, needle: &str) -> u32 {
     core.read_data_u32(addr)
 }
 
+const PHASE40_SQRTF_PRECISE_ABS_TOLERANCE: f32 = 0.03125;
+
+fn symbol_f32_bits(core: &Pic16Core, map: &str, needle: &str) -> u32 {
+    symbol_u32(core, map, needle)
+}
+
+fn symbol_f32(core: &Pic16Core, map: &str, needle: &str) -> f32 {
+    f32::from_bits(symbol_f32_bits(core, map, needle))
+}
+
+fn sqrt_abs_error(actual_bits: u32, expected: f32) -> f32 {
+    (f32::from_bits(actual_bits) - expected).abs()
+}
+
+fn assert_symbol_sqrt_close_to_host(
+    core: &Pic16Core,
+    map: &str,
+    symbol: &str,
+    input: f32,
+    tolerance: f32,
+) {
+    let actual = symbol_f32(core, map, symbol);
+    let expected = input.sqrt();
+    let error = (actual - expected).abs();
+    assert!(
+        error <= tolerance,
+        "{symbol}: actual={actual} expected={expected} error={error} tolerance={tolerance}"
+    );
+}
+
 #[test]
 fn executes_simple_arithmetic_result() {
     let (core, map) = run_source(
@@ -2796,4 +2826,161 @@ void main(void) {
 
     assert_eq!(symbol_u32(&core, &map, "result"), 0x3FDD_B3D7);
     assert_eq!(symbol_u32(&core, &map, "from_function"), 0x3FDD_B3D7);
+}
+
+#[test]
+fn executes_phase40_precise_sqrtf_accuracy_harness_validated_range() {
+    let (core, map) = run_source_with_math_profile(
+        "pic16f877a",
+        "phase40-sqrt-precise-accuracy-range.c",
+        r#"
+#include <math.h>
+
+float root_quarter;
+float root_half;
+float root_one;
+float root_two;
+float root_three;
+float root_four;
+float root_five;
+float root_eight;
+float root_nine;
+float root_ten;
+float root_sixteen;
+float root_twenty_five;
+float root_thirty_six;
+float root_forty_nine;
+float root_sixty_four;
+float root_zero;
+float root_negative;
+
+void main(void) {
+    float value;
+    value = 0.25f;
+    root_quarter = sqrtf(value);
+    value = 0.5f;
+    root_half = sqrtf(value);
+    value = 1.0f;
+    root_one = sqrtf(value);
+    value = 2.0f;
+    root_two = sqrtf(value);
+    value = 3.0f;
+    root_three = sqrtf(value);
+    value = 4.0f;
+    root_four = sqrtf(value);
+    value = 5.0f;
+    root_five = sqrtf(value);
+    value = 8.0f;
+    root_eight = sqrtf(value);
+    value = 9.0f;
+    root_nine = sqrtf(value);
+    value = 10.0f;
+    root_ten = sqrtf(value);
+    value = 16.0f;
+    root_sixteen = sqrtf(value);
+    value = 25.0f;
+    root_twenty_five = sqrtf(value);
+    value = 36.0f;
+    root_thirty_six = sqrtf(value);
+    value = 49.0f;
+    root_forty_nine = sqrtf(value);
+    value = 64.0f;
+    root_sixty_four = sqrtf(value);
+    value = 0.0f;
+    root_zero = sqrtf(value);
+    value = -1.0f;
+    root_negative = sqrtf(value);
+}
+"#,
+        MathProfile::Precise,
+    );
+
+    for (symbol, input) in [
+        ("root_quarter", 0.25_f32),
+        ("root_half", 0.5_f32),
+        ("root_one", 1.0_f32),
+        ("root_two", 2.0_f32),
+        ("root_three", 3.0_f32),
+        ("root_four", 4.0_f32),
+        ("root_five", 5.0_f32),
+        ("root_eight", 8.0_f32),
+        ("root_nine", 9.0_f32),
+        ("root_ten", 10.0_f32),
+        ("root_sixteen", 16.0_f32),
+        ("root_twenty_five", 25.0_f32),
+        ("root_thirty_six", 36.0_f32),
+        ("root_forty_nine", 49.0_f32),
+        ("root_sixty_four", 64.0_f32),
+    ] {
+        assert_symbol_sqrt_close_to_host(
+            &core,
+            &map,
+            symbol,
+            input,
+            PHASE40_SQRTF_PRECISE_ABS_TOLERANCE,
+        );
+    }
+    assert_eq!(symbol_f32_bits(&core, &map, "root_zero"), 0x0000_0000);
+    assert_eq!(symbol_f32_bits(&core, &map, "root_negative"), 0x0000_0000);
+}
+
+#[test]
+fn executes_phase40_precise_sqrtf_is_at_least_compact_for_tested_roots() {
+    let source = r#"
+#include <math.h>
+
+float root_two;
+float root_three;
+float root_five;
+float root_ten;
+
+void main(void) {
+    float value;
+    value = 2.0f;
+    root_two = sqrtf(value);
+    value = 3.0f;
+    root_three = sqrtf(value);
+    value = 5.0f;
+    root_five = sqrtf(value);
+    value = 10.0f;
+    root_ten = sqrtf(value);
+}
+"#;
+    let (compact_core, compact_map) = run_source_with_math_profile(
+        "pic16f877a",
+        "phase40-sqrt-compact-compare.c",
+        source,
+        MathProfile::Compact,
+    );
+    let (precise_core, precise_map) = run_source_with_math_profile(
+        "pic16f877a",
+        "phase40-sqrt-precise-compare.c",
+        source,
+        MathProfile::Precise,
+    );
+
+    let mut strictly_better = 0;
+    for (symbol, input) in [
+        ("root_two", 2.0_f32),
+        ("root_three", 3.0_f32),
+        ("root_five", 5.0_f32),
+        ("root_ten", 10.0_f32),
+    ] {
+        let expected = input.sqrt();
+        let compact_error =
+            sqrt_abs_error(symbol_f32_bits(&compact_core, &compact_map, symbol), expected);
+        let precise_error =
+            sqrt_abs_error(symbol_f32_bits(&precise_core, &precise_map, symbol), expected);
+        assert!(
+            precise_error <= compact_error,
+            "{symbol}: precise error {precise_error} exceeded compact error {compact_error}"
+        );
+        if precise_error < compact_error {
+            strictly_better += 1;
+        }
+    }
+    assert!(
+        strictly_better >= 2,
+        "precise sqrtf should improve at least two tested non-perfect roots"
+    );
 }
