@@ -2933,3 +2933,93 @@ void main(void) {
         "precise sqrtf should improve at least two tested non-perfect roots"
     );
 }
+
+#[test]
+fn executes_phase41_fminf_fmaxf_dynamic_values() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase41-minmax-dynamic.c",
+        r#"
+#include <math.h>
+
+float min_ascending;
+float min_descending;
+float min_mixed_sign;
+float min_negative_pair;
+float max_ascending;
+float max_descending;
+float max_mixed_sign;
+float max_negative_pair;
+
+void main(void) {
+    float a;
+    float b;
+
+    a = 1.0f;
+    b = 2.0f;
+    min_ascending = fminf(a, b);
+    max_ascending = fmaxf(a, b);
+
+    a = 2.0f;
+    b = 1.0f;
+    min_descending = fminf(a, b);
+    max_descending = fmaxf(a, b);
+
+    a = -1.0f;
+    b = 2.0f;
+    min_mixed_sign = fminf(a, b);
+    max_mixed_sign = fmaxf(a, b);
+
+    a = -3.0f;
+    b = -2.0f;
+    min_negative_pair = fminf(a, b);
+    max_negative_pair = fmaxf(a, b);
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "min_ascending"), 0x3F80_0000);
+    assert_eq!(symbol_u32(&core, &map, "min_descending"), 0x3F80_0000);
+    assert_eq!(symbol_u32(&core, &map, "min_mixed_sign"), 0xBF80_0000);
+    assert_eq!(symbol_u32(&core, &map, "min_negative_pair"), 0xC040_0000);
+    assert_eq!(symbol_u32(&core, &map, "max_ascending"), 0x4000_0000);
+    assert_eq!(symbol_u32(&core, &map, "max_descending"), 0x4000_0000);
+    assert_eq!(symbol_u32(&core, &map, "max_mixed_sign"), 0x4000_0000);
+    assert_eq!(symbol_u32(&core, &map, "max_negative_pair"), 0xC000_0000);
+}
+
+#[test]
+fn executes_phase41_minmax_struct_rom_and_function_input() {
+    let (core, map) = run_source(
+        "pic16f877a",
+        "phase41-minmax-rom-struct-function.c",
+        r#"
+#include <math.h>
+
+const __rom float limits[] = { 1.5f, 2.0f };
+
+struct Result {
+    float low;
+    float high;
+};
+
+struct Result result;
+float from_function;
+
+float clamp_low(float x, float limit) {
+    return fmaxf(x, limit);
+}
+
+void main(void) {
+    float low_limit = limits[0];
+    float high_limit = limits[1];
+    result.low = fminf(high_limit, low_limit);
+    result.high = fmaxf(low_limit, high_limit);
+    from_function = clamp_low(1.0f, low_limit);
+}
+"#,
+    );
+
+    assert_eq!(symbol_u32(&core, &map, "result"), 0x3FC0_0000);
+    assert_eq!(symbol_u32(&core, &map, "from_function"), 0x3FC0_0000);
+}
