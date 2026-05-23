@@ -7507,3 +7507,159 @@ fn phase40_sqrtf_accuracy_examples_compile_via_picc() {
         assert_hex_is_programmable(&output);
     }
 }
+
+#[test]
+/// Verifies Phase 41 folds constant min/max calls and prunes unused helpers.
+fn phase41_minmax_folds_and_prunes_helpers() {
+    let folded = r#"
+#include <math.h>
+
+float low = fminf(1.0f, 2.0f);
+float high = fmaxf(-1.0f, -2.0f);
+
+void main(void) {}
+"#;
+    let (folded_hex, _stdout, folded_report) =
+        compile_profile_source_size_report("balanced", "phase41-minmax-folded", folded, &[]);
+    let map = read_artifact(&folded_hex, "map");
+    assert!(!map.contains("__rt_f32_min"));
+    assert!(!map.contains("__rt_f32_max"));
+    assert!(!map.contains("__rt_f32_cmp"));
+    assert!(folded_report.contains("math profile: balanced"));
+    assert_hex_is_programmable(&folded_hex);
+
+    let unused = r#"
+#include <math.h>
+
+float result;
+
+void main(void) {
+    result = 1.0f;
+}
+"#;
+    let (unused_hex, _stdout, _report) =
+        compile_profile_source_size_report("balanced", "phase41-minmax-unused", unused, &[]);
+    let map = read_artifact(&unused_hex, "map");
+    assert!(!map.contains("__rt_f32_min"));
+    assert!(!map.contains("__rt_f32_max"));
+    assert_hex_is_programmable(&unused_hex);
+}
+
+#[test]
+/// Verifies Phase 41 dynamic min/max helpers are reported with their compare dependency.
+fn phase41_minmax_helpers_are_reported() {
+    let dynamic = r#"
+#include <math.h>
+
+float a;
+float b;
+float low;
+float high;
+
+void main(void) {
+    a = 1.5f;
+    b = 2.0f;
+    low = fminf(a, b);
+    high = fmaxf(a, b);
+}
+"#;
+    let (dynamic_hex, stdout, report) =
+        compile_profile_source_size_report("balanced", "phase41-minmax-report", dynamic, &[]);
+    assert!(stdout.contains("Math profile: balanced"));
+    assert!(report.contains("__rt_f32_min"));
+    assert!(report.contains("__rt_f32_max"));
+    assert!(report.contains("__rt_f32_cmp"));
+    assert!(report.contains("category=math"));
+    assert!(report.contains("deps=__rt_f32_cmp"));
+    assert_hex_is_programmable(&dynamic_hex);
+}
+
+#[test]
+/// Verifies Phase 41 min/max diagnostics are explicit and no double forms are remapped.
+fn phase41_minmax_diagnostics_are_explicit() {
+    let wrong_count = compile_error(
+        "pic16f877a",
+        "phase41-fminf-wrong-count.c",
+        r#"
+#include <math.h>
+
+float value;
+
+void main(void) {
+    value = fminf(1.0f);
+}
+"#,
+    );
+    assert!(wrong_count.contains("expects 2 argument"));
+
+    let wrong_type = compile_error(
+        "pic16f877a",
+        "phase41-fmaxf-wrong-type.c",
+        r#"
+#include <math.h>
+
+float value;
+
+void main(void) {
+    int input = 4;
+    value = fmaxf(input, 2.0f);
+}
+"#,
+    );
+    assert!(wrong_type.contains("expects float arguments"));
+
+    let unsupported_fmin = compile_error(
+        "pic16f877a",
+        "phase41-fmin-unsupported.c",
+        r#"
+#include <math.h>
+
+float value;
+
+void main(void) {
+    value = fmin(1.0f, 2.0f);
+}
+"#,
+    );
+    assert!(unsupported_fmin.contains("fmin"));
+}
+
+#[test]
+/// Verifies Phase 41 keeps helper-backed min/max out of ISRs.
+fn phase41_minmax_isr_policy_is_explicit() {
+    let stderr = compile_error(
+        "pic16f877a",
+        "phase41-fminf-isr.c",
+        r#"
+#include <math.h>
+
+float value;
+
+void __interrupt isr(void) {
+    value = fminf(value, 1.0f);
+}
+
+void main(void) {}
+"#,
+    );
+    assert!(stderr.contains("cannot call `fminf`"));
+    assert!(stderr.contains("float math helper"));
+}
+
+#[test]
+/// Verifies checked-in Phase 41 min/max examples compile and report resources.
+fn phase41_minmax_examples_compile_via_picc() {
+    for example in [
+        "examples/pic16f877a/math_minmax_basic.c",
+        "examples/pic16f877a/math_minmax_rom.c",
+        "examples/pic16f877a/math_minmax_threshold.c",
+        "examples/pic16f877a/math_minmax_resource_report.c",
+    ] {
+        let output = compile_example_via_picc_cli_with_extra_args(
+            "pic16f877a",
+            example,
+            &["--size", "--memory-report", "--verify-hex"],
+        );
+        assert_hex_is_programmable(&output);
+    }
+}

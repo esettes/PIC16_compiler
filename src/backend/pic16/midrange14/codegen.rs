@@ -4923,7 +4923,8 @@ impl<'a> CodegenContext<'a> {
 
         self.emit_call_f32_cmp_runtime(lhs_offset, rhs_offset, cmp_offset);
         self.load_current_frame_byte_to_w(cmp_offset);
-        self.program.push(AsmLine::Instr(AsmInstr::Xorlw(rhs_cmp_value)));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Xorlw(rhs_cmp_value)));
         self.branch_if_bit_set(low7(STATUS_ADDR), STATUS_Z_BIT, &use_rhs_label);
         self.jump_to_label(&use_lhs_label);
 
