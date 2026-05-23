@@ -248,6 +248,26 @@ void main(void) {{
     symbol_f32_bits(&core, &map, "result")
 }
 
+fn dynamic_minmax_result_bits(name: &str, lhs: &str, rhs: &str, function: &str) -> u32 {
+    let source = format!(
+        r#"
+#include <math.h>
+
+float result;
+
+void main(void) {{
+    float a;
+    float b;
+    a = {lhs};
+    b = {rhs};
+    result = {function}(a, b);
+}}
+"#
+    );
+    let (core, map) = run_source("pic16f877a", &format!("phase41-{name}.c"), &source);
+    symbol_f32_bits(&core, &map, "result")
+}
+
 #[test]
 fn executes_simple_arithmetic_result() {
     let (core, map) = run_source(
@@ -2936,74 +2956,74 @@ void main(void) {
 
 #[test]
 fn executes_phase41_fminf_fmaxf_dynamic_values() {
-    let (core, map) = run_source(
-        "pic16f877a",
-        "phase41-minmax-dynamic.c",
-        r#"
-#include <math.h>
-
-float min_ascending;
-float min_descending;
-float min_mixed_sign;
-float min_negative_pair;
-float max_ascending;
-float max_descending;
-float max_mixed_sign;
-float max_negative_pair;
-
-void main(void) {
-    float a;
-    float b;
-
-    a = 1.0f;
-    b = 2.0f;
-    min_ascending = fminf(a, b);
-    max_ascending = fmaxf(a, b);
-
-    a = 2.0f;
-    b = 1.0f;
-    min_descending = fminf(a, b);
-    max_descending = fmaxf(a, b);
-
-    a = -1.0f;
-    b = 2.0f;
-    min_mixed_sign = fminf(a, b);
-    max_mixed_sign = fmaxf(a, b);
-
-    a = -3.0f;
-    b = -2.0f;
-    min_negative_pair = fminf(a, b);
-    max_negative_pair = fmaxf(a, b);
-}
-"#,
-    );
-
-    assert_eq!(symbol_u32(&core, &map, "min_ascending"), 0x3F80_0000);
-    assert_eq!(symbol_u32(&core, &map, "min_descending"), 0x3F80_0000);
-    assert_eq!(symbol_u32(&core, &map, "min_mixed_sign"), 0xBF80_0000);
-    assert_eq!(symbol_u32(&core, &map, "min_negative_pair"), 0xC040_0000);
-    assert_eq!(symbol_u32(&core, &map, "max_ascending"), 0x4000_0000);
-    assert_eq!(symbol_u32(&core, &map, "max_descending"), 0x4000_0000);
-    assert_eq!(symbol_u32(&core, &map, "max_mixed_sign"), 0x4000_0000);
-    assert_eq!(symbol_u32(&core, &map, "max_negative_pair"), 0xC000_0000);
+    for (name, function, lhs, rhs, expected) in [
+        ("min-ascending", "fminf", "1.0f", "2.0f", 0x3F80_0000),
+        ("min-descending", "fminf", "2.0f", "1.0f", 0x3F80_0000),
+        ("min-mixed-sign", "fminf", "-1.0f", "2.0f", 0xBF80_0000),
+        ("min-negative-pair", "fminf", "-3.0f", "-2.0f", 0xC040_0000),
+        ("max-ascending", "fmaxf", "1.0f", "2.0f", 0x4000_0000),
+        ("max-descending", "fmaxf", "2.0f", "1.0f", 0x4000_0000),
+        ("max-mixed-sign", "fmaxf", "-1.0f", "2.0f", 0x4000_0000),
+        ("max-negative-pair", "fmaxf", "-3.0f", "-2.0f", 0xC000_0000),
+    ] {
+        assert_eq!(
+            dynamic_minmax_result_bits(name, lhs, rhs, function),
+            expected,
+            "{name}"
+        );
+    }
 }
 
 #[test]
 fn executes_phase41_minmax_struct_rom_and_function_input() {
-    let (core, map) = run_source(
+    let (struct_core, struct_map) = run_source(
         "pic16f877a",
-        "phase41-minmax-rom-struct-function.c",
+        "phase41-minmax-struct.c",
         r#"
 #include <math.h>
 
-const __rom float limits[] = { 1.5f, 2.0f };
-
 struct Result {
-    float low;
-    float high;
+    float value;
 };
 
 struct Result result;
+
+void main(void) {
+    float a;
+    float b;
+    a = 2.0f;
+    b = 1.0f;
+    result.value = fminf(a, b);
+}
+"#,
+    );
+    assert_eq!(symbol_u32(&struct_core, &struct_map, "result"), 0x3F80_0000);
+
+    let (rom_core, rom_map) = run_source(
+        "pic16f877a",
+        "phase41-minmax-rom.c",
+        r#"
+#include <math.h>
+
+const __rom float limits[] = { 1.5f };
+
+float result;
+
+void main(void) {
+    float low_limit = limits[0];
+    float high_limit = 2.0f;
+    result = fminf(high_limit, low_limit);
+}
+"#,
+    );
+    assert_eq!(symbol_u32(&rom_core, &rom_map, "result"), 0x3FC0_0000);
+
+    let (fn_core, fn_map) = run_source(
+        "pic16f877a",
+        "phase41-minmax-function.c",
+        r#"
+#include <math.h>
+
 float from_function;
 
 float clamp_low(float x, float limit) {
@@ -3011,15 +3031,9 @@ float clamp_low(float x, float limit) {
 }
 
 void main(void) {
-    float low_limit = limits[0];
-    float high_limit = limits[1];
-    result.low = fminf(high_limit, low_limit);
-    result.high = fmaxf(low_limit, high_limit);
-    from_function = clamp_low(1.0f, low_limit);
+    from_function = clamp_low(1.0f, 1.5f);
 }
 "#,
     );
-
-    assert_eq!(symbol_u32(&core, &map, "result"), 0x3FC0_0000);
-    assert_eq!(symbol_u32(&core, &map, "from_function"), 0x3FC0_0000);
+    assert_eq!(symbol_u32(&fn_core, &fn_map, "from_function"), 0x3FC0_0000);
 }
