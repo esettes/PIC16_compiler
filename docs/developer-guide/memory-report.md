@@ -46,7 +46,7 @@ picc --target pic16f877a -I include --memory-report-file build/app.mem -o build/
 - selected math profile and math helper variant names
 - selected math accuracy policy, including the Phase 40 precise `sqrtf` validated tolerance
 - float helper contribution when `__rt_f32_*` helpers are emitted
-- math helper contribution when `fabsf`, `truncf`, `floorf`, `ceilf`, `roundf`, or `sqrtf` pull finite math helpers
+- math helper contribution when `fabsf`, `truncf`, `floorf`, `ceilf`, `roundf`, `sqrtf`, `fminf`, or `fmaxf` pull finite math helpers
 - ROM float table contribution when `const __rom float[]` objects are emitted
 - largest program-memory contributors
 

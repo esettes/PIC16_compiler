@@ -2984,10 +2984,15 @@ impl<'a> SemanticAnalyzer<'a> {
         for arg in args {
             let typed_arg = self.analyze_expr(arg, diagnostics)?;
             if !typed_arg.ty.is_float() {
+                let message = if expected_args == 1 {
+                    format!("float math function `{callee_name}` expects a float argument")
+                } else {
+                    format!("float math function `{callee_name}` expects float arguments")
+                };
                 diagnostics.error(
                     "semantic",
                     Some(typed_arg.span),
-                    format!("float math function `{callee_name}` expects float arguments"),
+                    message,
                     Some("use an explicit `(float)` cast when converting an integer or fixed-point value".to_string()),
                 );
                 return None;

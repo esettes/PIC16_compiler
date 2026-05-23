@@ -17,6 +17,8 @@ float c = floorf(x);
 float d = ceilf(x);
 float e = roundf(x);
 float f = sqrtf(x);
+float g = fminf(a, b);
+float h = fmaxf(a, b);
 ```
 
 `roundf` rounds half away from zero:
@@ -53,6 +55,17 @@ Phase 40 validates precise `sqrtf` against host `f32::sqrt` for positive inputs 
 
 Outside the refined table, dynamic precise `sqrtf` still falls back to the compact approximation. Constant `sqrtf` folding uses the compile-time finite result and does not emit `__rt_f32_sqrt`.
 
+`fminf` and `fmaxf` are finite-only:
+
+```text
+fminf(1.0f, 2.0f)   -> 1.0f
+fminf(-3.0f, -2.0f) -> -3.0f
+fmaxf(1.0f, 2.0f)   -> 2.0f
+fmaxf(-3.0f, -2.0f) -> -2.0f
+```
+
+They do not implement NaN/Inf behavior. For `+0.0f` and `-0.0f`, the selected result is implementation-defined within the finite-only model.
+
 Recommended workflow:
 
 ```bash
@@ -63,6 +76,6 @@ Notes:
 
 - PIC16F877A is the safer default for math-heavy examples
 - `fabsf` can be inline-safe in ISRs
-- `truncf`, `floorf`, `ceilf`, `roundf`, and `sqrtf` pull helpers and are rejected in ISRs
+- `truncf`, `floorf`, `ceilf`, `roundf`, `sqrtf`, `fminf`, and `fmaxf` pull helpers and are rejected in ISRs
 - unused `#include <math.h>` does not emit math helpers
 - unsupported names such as `sqrt`, `sin`, or `fabs` are intentionally not declared

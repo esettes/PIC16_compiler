@@ -227,6 +227,20 @@ Phase 40 makes the finite `sqrtf` accuracy policy measurable:
 
 This phase still does not add `double`, trigonometry, exp/log/pow, errno, fenv, or full ISO C `math.h`.
 
+### Phase 41 Finite `fminf` / `fmaxf`
+
+Phase 41 adds two finite-only selection functions to the minimal math subset:
+
+- `include/math.h` declares `float fminf(float a, float b)` and `float fmaxf(float a, float b)`
+- constant calls fold when both arguments are finite compile-time `float` values
+- dynamic calls lower to `__rt_f32_min` / `__rt_f32_max`
+- those helpers depend on the existing finite `__rt_f32_cmp` helper and follow the Stack-first ABI with two 4-byte arguments and one 4-byte return
+- `--size`, `--memory-report`, `.map`, `.lst`, and stack reports show the helpers and their compare dependency
+- helper-backed dynamic `fminf` / `fmaxf` remain rejected inside ISRs
+- NaN/Inf and ISO/IEEE signed-zero min/max semantics are not modeled
+
+This phase still does not add `double`, trigonometry, exp/log/pow, errno, fenv, or full ISO C `math.h`.
+
 ### Phase 4 Stack-first ABI
 
 Current ABI is stack-first, caller-pushed, upward-growing.

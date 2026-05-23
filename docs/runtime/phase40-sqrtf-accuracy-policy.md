@@ -37,3 +37,5 @@ Math accuracy: precise sqrtf: table-refined finite approximation; validated posi
 ```
 
 Use `--math-profile precise` on PIC16F877A when the validated range matters. Use `compact` for smaller targets or when a calibration table/fixed-point implementation gives better control.
+
+Phase 41 `fminf` / `fmaxf` do not use the math accuracy profile. They are finite selection helpers built on the existing f32 comparison policy.
