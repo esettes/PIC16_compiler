@@ -4970,8 +4970,64 @@ impl<'a> CodegenContext<'a> {
             arg_offset,
             const_offset,
             result_offset,
+            0x40A0_0000,
+            0x400F_1BBD,
+            &finish_label,
+        );
+        self.emit_f32_sqrt_const_case(
+            arg_offset,
+            const_offset,
+            result_offset,
+            0x4100_0000,
+            0x4035_04F3,
+            &finish_label,
+        );
+        self.emit_f32_sqrt_const_case(
+            arg_offset,
+            const_offset,
+            result_offset,
             0x4120_0000,
             0x404A_62C2,
+            &finish_label,
+        );
+        self.emit_f32_sqrt_const_case(
+            arg_offset,
+            const_offset,
+            result_offset,
+            0x4180_0000,
+            0x4080_0000,
+            &finish_label,
+        );
+        self.emit_f32_sqrt_const_case(
+            arg_offset,
+            const_offset,
+            result_offset,
+            0x41C8_0000,
+            0x40A0_0000,
+            &finish_label,
+        );
+        self.emit_f32_sqrt_const_case(
+            arg_offset,
+            const_offset,
+            result_offset,
+            0x4210_0000,
+            0x40C0_0000,
+            &finish_label,
+        );
+        self.emit_f32_sqrt_const_case(
+            arg_offset,
+            const_offset,
+            result_offset,
+            0x4244_0000,
+            0x40E0_0000,
+            &finish_label,
+        );
+        self.emit_f32_sqrt_const_case(
+            arg_offset,
+            const_offset,
+            result_offset,
+            0x4280_0000,
+            0x4100_0000,
             &finish_label,
         );
         self.emit_f32_sqrt_const_case(
@@ -6915,6 +6971,20 @@ fn runtime_helper_variant(
     }
 }
 
+fn math_accuracy_policy(math_profile: MathProfile) -> &'static str {
+    match math_profile {
+        MathProfile::Compact => {
+            "compact sqrtf: finite-only compact approximation; no general accuracy guarantee"
+        }
+        MathProfile::Balanced => {
+            "balanced sqrtf: currently aliases compact finite approximation; no general accuracy guarantee"
+        }
+        MathProfile::Precise => {
+            "precise sqrtf: table-refined finite approximation; validated positives in [0.25, 64.0] within +/-0.03125; not IEEE correctly-rounded"
+        }
+    }
+}
+
 struct ResourceReportInputs<'a> {
     target: &'a TargetDevice,
     typed_program: &'a TypedProgram,
@@ -7259,6 +7329,11 @@ fn render_size_summary(
     let _ = writeln!(output, "Math profile: {}", summary.math_profile.as_str());
     let _ = writeln!(
         output,
+        "Math accuracy: {}",
+        math_accuracy_policy(summary.math_profile)
+    );
+    let _ = writeln!(
+        output,
         "Program words: {} / {}",
         summary.program_words_used, summary.program_words_available
     );
@@ -7340,6 +7415,11 @@ fn render_memory_report(
         summary.runtime_profile.as_str()
     );
     let _ = writeln!(output, "math profile: {}", summary.math_profile.as_str());
+    let _ = writeln!(
+        output,
+        "math accuracy: {}",
+        math_accuracy_policy(summary.math_profile)
+    );
     let _ = writeln!(
         output,
         "program range: 0x{:04X}..0x{:04X} ({} words)",
@@ -7551,6 +7631,10 @@ fn render_resource_map_lines(
         format!("Target: {}", target.name.to_ascii_uppercase()),
         format!("Runtime profile: {}", summary.runtime_profile.as_str()),
         format!("Math profile: {}", summary.math_profile.as_str()),
+        format!(
+            "Math accuracy: {}",
+            math_accuracy_policy(summary.math_profile)
+        ),
         format!(
             "Program words: {} / {}",
             summary.program_words_used, summary.program_words_available
