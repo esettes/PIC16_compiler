@@ -221,28 +221,31 @@ fn symbol_f32_bits(core: &Pic16Core, map: &str, needle: &str) -> u32 {
     symbol_u32(core, map, needle)
 }
 
-fn symbol_f32(core: &Pic16Core, map: &str, needle: &str) -> f32 {
-    f32::from_bits(symbol_f32_bits(core, map, needle))
-}
-
 fn sqrt_abs_error(actual_bits: u32, expected: f32) -> f32 {
     (f32::from_bits(actual_bits) - expected).abs()
 }
 
-fn assert_symbol_sqrt_close_to_host(
-    core: &Pic16Core,
-    map: &str,
-    symbol: &str,
-    input: f32,
-    tolerance: f32,
-) {
-    let actual = symbol_f32(core, map, symbol);
-    let expected = input.sqrt();
-    let error = (actual - expected).abs();
-    assert!(
-        error <= tolerance,
-        "{symbol}: actual={actual} expected={expected} error={error} tolerance={tolerance}"
+fn dynamic_sqrt_result_bits(math_profile: MathProfile, name: &str, literal: &str) -> u32 {
+    let source = format!(
+        r#"
+#include <math.h>
+
+float result;
+
+void main(void) {{
+    float value;
+    value = {literal};
+    result = sqrtf(value);
+}}
+"#
     );
+    let (core, map) = run_source_with_math_profile(
+        "pic16f877a",
+        &format!("phase40-sqrt-{name}.c"),
+        &source,
+        math_profile,
+    );
+    symbol_f32_bits(&core, &map, "result")
 }
 
 #[test]
@@ -2830,98 +2833,40 @@ void main(void) {
 
 #[test]
 fn executes_phase40_precise_sqrtf_accuracy_harness_validated_range() {
-    let (core, map) = run_source_with_math_profile(
-        "pic16f877a",
-        "phase40-sqrt-precise-accuracy-range.c",
-        r#"
-#include <math.h>
-
-float root_quarter;
-float root_half;
-float root_one;
-float root_two;
-float root_three;
-float root_four;
-float root_five;
-float root_eight;
-float root_nine;
-float root_ten;
-float root_sixteen;
-float root_twenty_five;
-float root_thirty_six;
-float root_forty_nine;
-float root_sixty_four;
-float root_zero;
-float root_negative;
-
-void main(void) {
-    float value;
-    value = 0.25f;
-    root_quarter = sqrtf(value);
-    value = 0.5f;
-    root_half = sqrtf(value);
-    value = 1.0f;
-    root_one = sqrtf(value);
-    value = 2.0f;
-    root_two = sqrtf(value);
-    value = 3.0f;
-    root_three = sqrtf(value);
-    value = 4.0f;
-    root_four = sqrtf(value);
-    value = 5.0f;
-    root_five = sqrtf(value);
-    value = 8.0f;
-    root_eight = sqrtf(value);
-    value = 9.0f;
-    root_nine = sqrtf(value);
-    value = 10.0f;
-    root_ten = sqrtf(value);
-    value = 16.0f;
-    root_sixteen = sqrtf(value);
-    value = 25.0f;
-    root_twenty_five = sqrtf(value);
-    value = 36.0f;
-    root_thirty_six = sqrtf(value);
-    value = 49.0f;
-    root_forty_nine = sqrtf(value);
-    value = 64.0f;
-    root_sixty_four = sqrtf(value);
-    value = 0.0f;
-    root_zero = sqrtf(value);
-    value = -1.0f;
-    root_negative = sqrtf(value);
-}
-"#,
-        MathProfile::Precise,
-    );
-
-    for (symbol, input) in [
-        ("root_quarter", 0.25_f32),
-        ("root_half", 0.5_f32),
-        ("root_one", 1.0_f32),
-        ("root_two", 2.0_f32),
-        ("root_three", 3.0_f32),
-        ("root_four", 4.0_f32),
-        ("root_five", 5.0_f32),
-        ("root_eight", 8.0_f32),
-        ("root_nine", 9.0_f32),
-        ("root_ten", 10.0_f32),
-        ("root_sixteen", 16.0_f32),
-        ("root_twenty_five", 25.0_f32),
-        ("root_thirty_six", 36.0_f32),
-        ("root_forty_nine", 49.0_f32),
-        ("root_sixty_four", 64.0_f32),
+    for (name, literal, input) in [
+        ("quarter", "0.25f", 0.25_f32),
+        ("half", "0.5f", 0.5_f32),
+        ("one", "1.0f", 1.0_f32),
+        ("two", "2.0f", 2.0_f32),
+        ("three", "3.0f", 3.0_f32),
+        ("four", "4.0f", 4.0_f32),
+        ("five", "5.0f", 5.0_f32),
+        ("eight", "8.0f", 8.0_f32),
+        ("nine", "9.0f", 9.0_f32),
+        ("ten", "10.0f", 10.0_f32),
+        ("sixteen", "16.0f", 16.0_f32),
+        ("twenty_five", "25.0f", 25.0_f32),
+        ("thirty_six", "36.0f", 36.0_f32),
+        ("forty_nine", "49.0f", 49.0_f32),
+        ("sixty_four", "64.0f", 64.0_f32),
     ] {
-        assert_symbol_sqrt_close_to_host(
-            &core,
-            &map,
-            symbol,
-            input,
-            PHASE40_SQRTF_PRECISE_ABS_TOLERANCE,
+        let bits = dynamic_sqrt_result_bits(MathProfile::Precise, name, literal);
+        let actual = f32::from_bits(bits);
+        let expected = input.sqrt();
+        let error = (actual - expected).abs();
+        assert!(
+            error <= PHASE40_SQRTF_PRECISE_ABS_TOLERANCE,
+            "{name}: actual={actual} expected={expected} error={error}"
         );
     }
-    assert_eq!(symbol_f32_bits(&core, &map, "root_zero"), 0x0000_0000);
-    assert_eq!(symbol_f32_bits(&core, &map, "root_negative"), 0x0000_0000);
+    assert_eq!(
+        dynamic_sqrt_result_bits(MathProfile::Precise, "zero", "0.0f"),
+        0x0000_0000
+    );
+    assert_eq!(
+        dynamic_sqrt_result_bits(MathProfile::Precise, "negative", "-1.0f"),
+        0x0000_0000
+    );
 }
 
 #[test]
