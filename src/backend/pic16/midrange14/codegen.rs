@@ -1405,11 +1405,16 @@ impl<'a> CodegenContext<'a> {
         diagnostics: &mut DiagnosticBag,
     ) {
         let f32_ty = Type::new(ScalarType::F32);
-        if args.len() != 1 {
+        let info = helper.info();
+        let expected_args = usize::from(info.arg_bytes / 4);
+        if args.len() != expected_args {
             diagnostics.error(
                 "backend",
                 None,
-                format!("math helper `{}` expects one argument", helper.label()),
+                format!(
+                    "math helper `{}` expects {expected_args} argument(s)",
+                    helper.label()
+                ),
                 None,
             );
             if let Some(dst) = dst {
@@ -1444,13 +1449,14 @@ impl<'a> CodegenContext<'a> {
         let Some(dst) = dst else {
             return;
         };
-        let info = helper.info();
         self.used_helpers.insert(helper);
         self.emit_stack_growth_check(
             info.arg_bytes,
-            &format!("runtime helper {} argument", info.label),
+            &format!("runtime helper {} argument(s)", info.label),
         );
-        self.push_operand(function.symbol, args[0], f32_ty);
+        for arg in args {
+            self.push_operand(function.symbol, *arg, f32_ty);
+        }
         self.program
             .push(AsmLine::Instr(AsmInstr::SetPage(info.label.to_string())));
         self.program
@@ -4258,6 +4264,12 @@ impl<'a> CodegenContext<'a> {
                     self.emit_float_f32_sqrt_helper(arg0_offset, local_base);
                 }
             }
+            RuntimeHelper::F32Min => {
+                self.emit_float_f32_minmax_helper(arg0_offset, arg1_offset, local_base, true);
+            }
+            RuntimeHelper::F32Max => {
+                self.emit_float_f32_minmax_helper(arg0_offset, arg1_offset, local_base, false);
+            }
             RuntimeHelper::F32ToQ16 => {
                 self.emit_float_to_q16_frame(
                     0,
@@ -4891,6 +4903,66 @@ impl<'a> CodegenContext<'a> {
 
         self.program.push(AsmLine::Label(finish_label));
         self.emit_return_current_frame_value(result_offset, f32_ty);
+    }
+
+    /// Emits finite `fminf` / `fmaxf` using the shared f32 compare helper.
+    fn emit_float_f32_minmax_helper(
+        &mut self,
+        lhs_offset: u16,
+        rhs_offset: u16,
+        local_base: u16,
+        is_min: bool,
+    ) {
+        let f32_ty = Type::new(ScalarType::F32);
+        let result_offset = local_base;
+        let cmp_offset = result_offset + 4;
+        let use_lhs_label = self.unique_label("rt_f32_minmax_lhs");
+        let use_rhs_label = self.unique_label("rt_f32_minmax_rhs");
+        let finish_label = self.unique_label("rt_f32_minmax_finish");
+        let rhs_cmp_value = if is_min { 1 } else { 0xFF };
+
+        self.emit_call_f32_cmp_runtime(lhs_offset, rhs_offset, cmp_offset);
+        self.load_current_frame_byte_to_w(cmp_offset);
+        self.program.push(AsmLine::Instr(AsmInstr::Xorlw(rhs_cmp_value)));
+        self.branch_if_bit_set(low7(STATUS_ADDR), STATUS_Z_BIT, &use_rhs_label);
+        self.jump_to_label(&use_lhs_label);
+
+        self.program.push(AsmLine::Label(use_rhs_label));
+        self.copy_current_frame_bytes(rhs_offset, result_offset, 4);
+        self.jump_to_label(&finish_label);
+
+        self.program.push(AsmLine::Label(use_lhs_label));
+        self.copy_current_frame_bytes(lhs_offset, result_offset, 4);
+
+        self.program.push(AsmLine::Label(finish_label));
+        self.emit_return_current_frame_value(result_offset, f32_ty);
+    }
+
+    /// Calls the f32 compare helper from another runtime helper and stores its W result byte.
+    fn emit_call_f32_cmp_runtime(&mut self, lhs_offset: u16, rhs_offset: u16, result_offset: u16) {
+        let info = RuntimeHelper::F32Cmp.info();
+        debug_assert_eq!(info.arg_bytes, 8);
+        self.emit_stack_growth_check(
+            info.arg_bytes,
+            &format!("runtime helper {} args", info.label),
+        );
+        for byte in 0..4u16 {
+            self.load_current_frame_byte_to_w(lhs_offset + byte);
+            self.push_w();
+        }
+        for byte in 0..4u16 {
+            self.load_current_frame_byte_to_w(rhs_offset + byte);
+            self.push_w();
+        }
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage(info.label.to_string())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Call(info.label.to_string())));
+        self.restore_code_page_after_call();
+        self.store_w_to_addr(self.layout.helpers.w_save);
+        self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(info.arg_bytes));
+        self.load_addr_to_w(self.layout.helpers.w_save);
+        self.store_w_to_current_frame_byte(result_offset);
     }
 
     /// Emits finite `sqrtf` for `--math-profile precise` with a refined validated-value table.
@@ -7913,6 +7985,8 @@ fn runtime_helper_for_math_call(name: &str) -> Option<RuntimeHelper> {
         "ceilf" => Some(RuntimeHelper::F32Ceil),
         "roundf" => Some(RuntimeHelper::F32Round),
         "sqrtf" => Some(RuntimeHelper::F32Sqrt),
+        "fminf" => Some(RuntimeHelper::F32Min),
+        "fmaxf" => Some(RuntimeHelper::F32Max),
         _ => None,
     }
 }

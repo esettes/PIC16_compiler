@@ -78,6 +78,8 @@ pub enum RuntimeHelper {
     F32Ceil,
     F32Round,
     F32Sqrt,
+    F32Min,
+    F32Max,
     F32ToQ16,
     Q16ToF32,
     I32ToF32,
@@ -159,6 +161,8 @@ impl RuntimeHelper {
         RuntimeHelper::F32Ceil,
         RuntimeHelper::F32Round,
         RuntimeHelper::F32Sqrt,
+        RuntimeHelper::F32Min,
+        RuntimeHelper::F32Max,
         RuntimeHelper::F32ToQ16,
         RuntimeHelper::Q16ToF32,
         RuntimeHelper::I32ToF32,
@@ -492,6 +496,20 @@ impl RuntimeHelper {
                 local_bytes: 8,
                 frame_bytes: 10,
             },
+            Self::F32Min => RuntimeHelperInfo {
+                label: "__rt_f32_min",
+                operand_ty: Type::new(ScalarType::F32),
+                arg_bytes: 8,
+                local_bytes: 5,
+                frame_bytes: 7,
+            },
+            Self::F32Max => RuntimeHelperInfo {
+                label: "__rt_f32_max",
+                operand_ty: Type::new(ScalarType::F32),
+                arg_bytes: 8,
+                local_bytes: 5,
+                frame_bytes: 7,
+            },
             Self::F32ToQ16 => RuntimeHelperInfo {
                 label: "__rt_f32_to_q16_16",
                 operand_ty: Type::new(ScalarType::F32),
@@ -566,7 +584,9 @@ impl RuntimeHelper {
             | Self::F32Floor
             | Self::F32Ceil
             | Self::F32Round
-            | Self::F32Sqrt => RuntimeHelperCategory::Math,
+            | Self::F32Sqrt
+            | Self::F32Min
+            | Self::F32Max => RuntimeHelperCategory::Math,
             Self::F32ToQ16
             | Self::Q16ToF32
             | Self::I32ToF32
@@ -617,6 +637,7 @@ impl RuntimeHelper {
             Self::F32Floor => &[Self::F32ToQ16, Self::I32ToF32],
             Self::F32Ceil => &[Self::F32Floor],
             Self::F32Round => &[Self::F32ToQ16, Self::I32ToF32],
+            Self::F32Min | Self::F32Max => &[Self::F32Cmp],
             _ => &[],
         }
     }

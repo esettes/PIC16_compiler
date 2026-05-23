@@ -2966,12 +2966,13 @@ impl<'a> SemanticAnalyzer<'a> {
         span: Span,
         diagnostics: &mut DiagnosticBag,
     ) -> Option<TypedExpr> {
-        if args.len() != 1 {
+        let expected_args = Self::float_math_arg_count(callee_name)?;
+        if args.len() != expected_args {
             diagnostics.error(
                 "semantic",
                 Some(span),
                 format!(
-                    "function `{callee_name}` expects 1 argument(s), got {}",
+                    "function `{callee_name}` expects {expected_args} argument(s), got {}",
                     args.len()
                 ),
                 None,
@@ -2979,18 +2980,21 @@ impl<'a> SemanticAnalyzer<'a> {
             return None;
         }
 
-        let arg = self.analyze_expr(&args[0], diagnostics)?;
-        if !arg.ty.is_float() {
-            diagnostics.error(
-                "semantic",
-                Some(arg.span),
-                format!("float math function `{callee_name}` expects a float argument"),
-                Some("use an explicit `(float)` cast when converting an integer or fixed-point value".to_string()),
-            );
-            return None;
+        let mut typed_args = Vec::new();
+        for arg in args {
+            let typed_arg = self.analyze_expr(arg, diagnostics)?;
+            if !typed_arg.ty.is_float() {
+                diagnostics.error(
+                    "semantic",
+                    Some(typed_arg.span),
+                    format!("float math function `{callee_name}` expects float arguments"),
+                    Some("use an explicit `(float)` cast when converting an integer or fixed-point value".to_string()),
+                );
+                return None;
+            }
+            typed_args.push(typed_arg);
         }
 
-        let typed_args = vec![arg];
         if let Some(folded) =
             Self::eval_float_math_call_constant(callee_name, &typed_args, span, diagnostics)
         {
@@ -3017,42 +3021,71 @@ impl<'a> SemanticAnalyzer<'a> {
     fn is_float_math_builtin(name: &str) -> bool {
         matches!(
             name,
-            "fabsf" | "truncf" | "floorf" | "ceilf" | "roundf" | "sqrtf"
+            "fabsf" | "truncf" | "floorf" | "ceilf" | "roundf" | "sqrtf" | "fminf" | "fmaxf"
         )
     }
 
-    /// Constant-folds one finite float math call when the single argument is a constant f32.
+    fn float_math_arg_count(name: &str) -> Option<usize> {
+        match name {
+            "fabsf" | "truncf" | "floorf" | "ceilf" | "roundf" | "sqrtf" => Some(1),
+            "fminf" | "fmaxf" => Some(2),
+            _ => None,
+        }
+    }
+
+    /// Constant-folds one finite float math call when arguments are constant f32 values.
     fn eval_float_math_call_constant(
         name: &str,
         args: &[TypedExpr],
         span: Span,
         diagnostics: &mut DiagnosticBag,
     ) -> Option<i64> {
-        if args.len() != 1 || !args[0].ty.is_float() {
+        if args.iter().any(|arg| !arg.ty.is_float()) {
             return None;
         }
-        let bits = eval_integer_constant_expr(&args[0])?;
-        let value = f32::from_bits(normalize_value(bits, Type::new(ScalarType::F32)) as u32);
-        if !value.is_finite() {
-            diagnostics.error(
-                "semantic",
-                Some(span),
-                "unsupported special float value in finite math call",
-                Some("Phase 36/37 math.h supports finite float values only".to_string()),
-            );
-            return None;
+        let mut values = Vec::new();
+        for arg in args {
+            let bits = eval_integer_constant_expr(arg)?;
+            let value = f32::from_bits(normalize_value(bits, Type::new(ScalarType::F32)) as u32);
+            if !value.is_finite() {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    "unsupported special float value in finite math call",
+                    Some("Phase 36/41 math.h supports finite float values only".to_string()),
+                );
+                return None;
+            }
+            values.push(value);
         }
         let result = match name {
-            "fabsf" => value.abs(),
-            "truncf" => value.trunc(),
-            "floorf" => value.floor(),
-            "ceilf" => value.ceil(),
-            "roundf" => value.round(),
+            "fabsf" if values.len() == 1 => values[0].abs(),
+            "truncf" if values.len() == 1 => values[0].trunc(),
+            "floorf" if values.len() == 1 => values[0].floor(),
+            "ceilf" if values.len() == 1 => values[0].ceil(),
+            "roundf" if values.len() == 1 => values[0].round(),
             "sqrtf" => {
-                if value < 0.0 {
+                if values.len() != 1 {
+                    return None;
+                }
+                if values[0] < 0.0 {
                     0.0
                 } else {
-                    value.sqrt()
+                    values[0].sqrt()
+                }
+            }
+            "fminf" if values.len() == 2 => {
+                if values[0] <= values[1] {
+                    values[0]
+                } else {
+                    values[1]
+                }
+            }
+            "fmaxf" if values.len() == 2 => {
+                if values[0] >= values[1] {
+                    values[0]
+                } else {
+                    values[1]
                 }
             }
             _ => return None,
