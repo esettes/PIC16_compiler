@@ -233,9 +233,9 @@ Phase 41 adds two finite-only selection functions to the minimal math subset:
 
 - `include/math.h` declares `float fminf(float a, float b)` and `float fmaxf(float a, float b)`
 - constant calls fold when both arguments are finite compile-time `float` values
-- dynamic calls lower to `__rt_f32_min` / `__rt_f32_max`
-- those helpers depend on the existing finite `__rt_f32_cmp` helper and follow the Stack-first ABI with two 4-byte arguments and one 4-byte return
-- `--size`, `--memory-report`, `.map`, `.lst`, and stack reports show the helpers and their compare dependency
+- Phase 42 compacts dynamic calls to direct `__rt_f32_cmp` plus local select code, so no separate `__rt_f32_min` / `__rt_f32_max` helper body is emitted
+- `__rt_f32_cmp` now uses compact finite raw f32 ordering instead of converting operands through Q16.16
+- `--size`, `--memory-report`, `.map`, `.lst`, and stack reports show the compare helper cost and omit pruned min/max wrappers
 - helper-backed dynamic `fminf` / `fmaxf` remain rejected inside ISRs
 - NaN/Inf and ISO/IEEE signed-zero min/max semantics are not modeled
 

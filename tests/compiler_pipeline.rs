@@ -266,6 +266,20 @@ fn parse_program_words(output: &str) -> usize {
         .expect("program words in size output")
 }
 
+fn parse_runtime_helper_actual_words(report: &str, helper: &str) -> usize {
+    report
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix(&format!("{helper}: "))
+                .and_then(|rest| {
+                    rest.split_whitespace()
+                        .find_map(|part| part.strip_prefix("actual="))
+                })
+                .and_then(|actual| actual.parse::<usize>().ok())
+        })
+        .unwrap_or_else(|| panic!("runtime helper {helper} actual word count in memory report"))
+}
+
 fn compile_profile_size_report(
     profile: &str,
     input: &str,
@@ -7546,8 +7560,8 @@ void main(void) {
 }
 
 #[test]
-/// Verifies Phase 41 dynamic min/max helpers are reported with their compare dependency.
-fn phase41_minmax_helpers_are_reported() {
+/// Verifies Phase 42 dynamic min/max lowers to compact compare/select without min/max helpers.
+fn phase42_minmax_lowers_to_compact_compare_select() {
     let dynamic = r#"
 #include <math.h>
 
@@ -7565,13 +7579,78 @@ void main(void) {
 "#;
     let (dynamic_hex, stdout, report) =
         compile_profile_source_size_report("balanced", "phase41-minmax-report", dynamic, &[]);
+    let map = read_artifact(&dynamic_hex, "map");
     assert!(stdout.contains("Math profile: balanced"));
-    assert!(report.contains("__rt_f32_min"));
-    assert!(report.contains("__rt_f32_max"));
+    assert!(!map.contains("__rt_f32_min"));
+    assert!(!map.contains("__rt_f32_max"));
+    assert!(!report.contains("__rt_f32_min"));
+    assert!(!report.contains("__rt_f32_max"));
     assert!(report.contains("__rt_f32_cmp"));
-    assert!(report.contains("category=math"));
-    assert!(report.contains("deps=__rt_f32_cmp"));
+    assert!(report.contains("category=float"));
+    assert!(parse_runtime_helper_actual_words(&report, "__rt_f32_cmp") < 1200);
     assert_hex_is_programmable(&dynamic_hex);
+}
+
+#[test]
+/// Verifies Phase 42 compact finite f32 compare is reported below the old Q16 conversion cost.
+fn phase42_float_compare_helper_cost_is_compact() {
+    let source = r#"
+float a;
+float b;
+unsigned char result;
+
+void main(void) {
+    a = -3.0f;
+    b = -2.0f;
+    if (a < b) {
+        result = 1;
+    } else {
+        result = 0;
+    }
+}
+"#;
+    let (hex, stdout, report) =
+        compile_profile_source_size_report("balanced", "phase42-float-compare-cost", source, &[]);
+    assert!(stdout.contains("Runtime helpers:"));
+    assert!(report.contains("__rt_f32_cmp"));
+    assert!(parse_runtime_helper_actual_words(&report, "__rt_f32_cmp") < 1200);
+    assert_hex_is_programmable(&hex);
+}
+
+#[test]
+/// Verifies Phase 42 keeps min/max size profile sane under balanced and small runtime profiles.
+fn phase42_minmax_runtime_profiles_do_not_emit_wrappers() {
+    let source = r#"
+#include <math.h>
+
+float a;
+float b;
+float low;
+float high;
+unsigned char alarm;
+
+void main(void) {
+    a = 3.0f;
+    b = 2.0f;
+    low = fminf(a, b);
+    high = fmaxf(a, b);
+    if (high > low) {
+        alarm = 1;
+    }
+}
+"#;
+    let (_balanced_hex, balanced_stdout, balanced_report) =
+        compile_profile_source_size_report("balanced", "phase42-minmax-balanced", source, &[]);
+    let (small_hex, small_stdout, small_report) =
+        compile_profile_source_size_report("small", "phase42-minmax-small", source, &[]);
+    assert!(parse_program_words(&small_stdout) <= parse_program_words(&balanced_stdout));
+    for report in [&balanced_report, &small_report] {
+        assert!(report.contains("__rt_f32_cmp"));
+        assert!(!report.contains("__rt_f32_min"));
+        assert!(!report.contains("__rt_f32_max"));
+        assert!(parse_runtime_helper_actual_words(report, "__rt_f32_cmp") < 1200);
+    }
+    assert_hex_is_programmable(&small_hex);
 }
 
 #[test]
@@ -7654,6 +7733,23 @@ fn phase41_minmax_examples_compile_via_picc() {
         "examples/pic16f877a/math_minmax_rom.c",
         "examples/pic16f877a/math_minmax_threshold.c",
         "examples/pic16f877a/math_minmax_resource_report.c",
+    ] {
+        let output = compile_example_via_picc_cli_with_extra_args(
+            "pic16f877a",
+            example,
+            &["--size", "--memory-report", "--verify-hex"],
+        );
+        assert_hex_is_programmable(&output);
+    }
+}
+
+#[test]
+/// Verifies checked-in Phase 42 compare/minmax compaction examples compile and report resources.
+fn phase42_compare_minmax_examples_compile_via_picc() {
+    for example in [
+        "examples/pic16f877a/float_compare_runtime.c",
+        "examples/pic16f877a/math_minmax_compact.c",
+        "examples/pic16f877a/math_minmax_resource_compare.c",
     ] {
         let output = compile_example_via_picc_cli_with_extra_args(
             "pic16f877a",

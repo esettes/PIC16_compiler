@@ -268,6 +268,37 @@ void main(void) {{
     symbol_f32_bits(&core, &map, "result")
 }
 
+fn dynamic_minmax_result_bits_with_profile(
+    name: &str,
+    lhs: &str,
+    rhs: &str,
+    function: &str,
+    runtime_profile: RuntimeProfile,
+) -> u32 {
+    let source = format!(
+        r#"
+#include <math.h>
+
+float result;
+
+void main(void) {{
+    float a;
+    float b;
+    a = {lhs};
+    b = {rhs};
+    result = {function}(a, b);
+}}
+"#
+    );
+    let (core, map) = run_source_with_runtime_profile(
+        "pic16f877a",
+        &format!("phase42-{runtime_profile:?}-{name}.c"),
+        &source,
+        runtime_profile,
+    );
+    symbol_f32_bits(&core, &map, "result")
+}
+
 #[test]
 fn executes_simple_arithmetic_result() {
     let (core, map) = run_source(
@@ -1842,6 +1873,9 @@ fn executes_phase32_float_comparison_across_pages() {
         r#"
 float lhs;
 float rhs;
+__fixed16_16 qlhs;
+__fixed16_16 qrhs;
+__fixed16_16 qresult;
 unsigned char ok;
 
 void main(void) {
@@ -1852,6 +1886,9 @@ void main(void) {
     } else {
         ok = 0;
     }
+    qlhs = 3.0q16_16;
+    qrhs = 2.0q16_16;
+    qresult = qlhs / qrhs;
 }
 "#,
     );
@@ -3036,4 +3073,98 @@ void main(void) {
 "#,
     );
     assert_eq!(symbol_u32(&fn_core, &fn_map, "from_function"), 0x3FC0_0000);
+}
+
+#[test]
+fn executes_phase42_compact_float_compare_profiles() {
+    let source = r#"
+float a;
+float b;
+unsigned char eq_result;
+unsigned char ne_result;
+unsigned char lt_result;
+unsigned char le_result;
+unsigned char gt_result;
+unsigned char ge_result;
+unsigned char neg_lt_result;
+unsigned char neg_gt_result;
+unsigned char zero_eq_result;
+
+void main(void) {
+    a = 1.0f;
+    b = 1.0f;
+    if (a == b) { eq_result = 1; } else { eq_result = 0; }
+
+    a = 1.0f;
+    b = 2.0f;
+    if (a != b) { ne_result = 1; } else { ne_result = 0; }
+
+    a = 1.5f;
+    b = 2.0f;
+    if (a < b) { lt_result = 1; } else { lt_result = 0; }
+
+    a = 2.0f;
+    b = 2.0f;
+    if (a <= b) { le_result = 1; } else { le_result = 0; }
+
+    a = 3.0f;
+    b = 2.0f;
+    if (a > b) { gt_result = 1; } else { gt_result = 0; }
+
+    a = 3.0f;
+    b = 3.0f;
+    if (a >= b) { ge_result = 1; } else { ge_result = 0; }
+
+    a = -3.0f;
+    b = -2.0f;
+    if (a < b) { neg_lt_result = 1; } else { neg_lt_result = 0; }
+
+    a = -2.0f;
+    b = -3.0f;
+    if (a > b) { neg_gt_result = 1; } else { neg_gt_result = 0; }
+
+    a = 0.0f;
+    b = 0.0f;
+    if (a == b) { zero_eq_result = 1; } else { zero_eq_result = 0; }
+}
+"#;
+    for runtime_profile in [RuntimeProfile::Balanced, RuntimeProfile::Small] {
+        let (core, map) = run_source_with_runtime_profile(
+            "pic16f877a",
+            &format!("phase42-compare-{runtime_profile:?}.c"),
+            source,
+            runtime_profile,
+        );
+        for symbol in [
+            "eq_result",
+            "ne_result",
+            "lt_result",
+            "le_result",
+            "gt_result",
+            "ge_result",
+            "neg_lt_result",
+            "neg_gt_result",
+            "zero_eq_result",
+        ] {
+            assert_eq!(symbol_u8(&core, &map, symbol), 1, "{symbol}");
+        }
+    }
+}
+
+#[test]
+fn executes_phase42_minmax_balanced_and_small_profiles() {
+    for runtime_profile in [RuntimeProfile::Balanced, RuntimeProfile::Small] {
+        for (name, function, lhs, rhs, expected) in [
+            ("min-ascending", "fminf", "1.0f", "2.0f", 0x3F80_0000),
+            ("min-negative-pair", "fminf", "-3.0f", "-2.0f", 0xC040_0000),
+            ("max-ascending", "fmaxf", "1.0f", "2.0f", 0x4000_0000),
+            ("max-negative-pair", "fmaxf", "-3.0f", "-2.0f", 0xC000_0000),
+        ] {
+            assert_eq!(
+                dynamic_minmax_result_bits_with_profile(name, lhs, rhs, function, runtime_profile),
+                expected,
+                "{runtime_profile:?} {name}"
+            );
+        }
+    }
 }

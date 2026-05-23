@@ -22,6 +22,8 @@ Phase 40 numeric accuracy validation adds harness helpers in `tests/execution_si
 
 Phase 41 min/max validation lives in the same suites. It checks `fminf` / `fmaxf` constant folding and pruning, explicit diagnostics for wrong counts/types and unsupported `fmin` / `fmax`, ISR rejection, helper report dependencies on `__rt_f32_cmp`, checked-in min/max examples, and simulator execution for positive, negative, ROM, struct, and function-return cases.
 
+Phase 42 compare/minmax compaction validation checks compact `__rt_f32_cmp` helper size, absence of `__rt_f32_min` / `__rt_f32_max` wrappers, report visibility under balanced and small runtime profiles, checked-in compaction examples, and simulator execution for positive, negative, zero, equality, and min/max cases.
+
 Phase 26 validation lives in `tests/compiler_pipeline.rs` and `src/hex/intel_hex.rs`. It checks raw and symbolic config words, duplicate/unknown config diagnostics, config emission in `.hex/.map/.lst`, final HEX validation reports, program overflow rejection without `--size`, programmer command printing, configurable Makefile flashing, and hardware smoke examples.
 
 Phase 25 resource-report validation lives in `tests/compiler_pipeline.rs`. It checks target descriptors, `--size`, `--memory-report`, `--memory-report-file`, map/listing resource summaries, helper contribution reporting, ROM-table contribution reporting, data-RAM overflow diagnostics, and stack-region overflow diagnostics.

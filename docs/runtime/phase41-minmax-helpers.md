@@ -2,11 +2,10 @@
 
 # Phase 41 Min/Max Helpers
 
-Runtime helpers:
+Phase 41 introduced finite min/max. Phase 42 compacts the runtime path and no longer emits separate min/max helper bodies:
 
 ```text
-__rt_f32_min
-__rt_f32_max
+fminf/fmaxf -> __rt_f32_cmp + local select
 ```
 
 Algorithm:
@@ -21,7 +20,7 @@ fmaxf(a, b):
   return b
 ```
 
-The implementation calls `__rt_f32_cmp`, stores the comparison result, and copies one original operand to the 32-bit return slot.
+The implementation calls `__rt_f32_cmp` from the user call site, stores the comparison result in compiler scratch RAM, and copies one original operand to the destination. This removes the former `__rt_f32_min` and `__rt_f32_max` wrappers.
 
 Policy:
 
@@ -34,8 +33,8 @@ Policy:
 
 Resource behavior:
 
-- category: `math`
-- dependency: `__rt_f32_cmp`
+- emitted helper category: `float` (`__rt_f32_cmp`)
+- no emitted `__rt_f32_min` / `__rt_f32_max`
 - visible in `.map`, `.lst`, `--size`, `--memory-report`, and stack reports
 - pruned when unused or when calls fold at compile time
 - rejected inside ISRs because dynamic calls require helper execution

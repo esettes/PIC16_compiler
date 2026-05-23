@@ -20,7 +20,7 @@ Use `precise` when the firmware needs the larger refined dynamic `sqrtf` helper.
 
 Phase 40 documents the tested precise range as positive inputs in `[0.25, 64.0]` with absolute tolerance `±0.03125` against host `f32::sqrt`. Inputs outside the refined table can still use the compact fallback.
 
-Phase 41 `fminf` / `fmaxf` are not accuracy-profile-dependent. They use finite comparisons and return one of the original operands.
+Phase 41 `fminf` / `fmaxf` are not accuracy-profile-dependent. Phase 42 lowers them to compact `__rt_f32_cmp` plus local select and returns one of the original operands.
 
 ## Report Workflow
 

@@ -1216,6 +1216,24 @@ impl<'a> CodegenContext<'a> {
                     | BinaryOp::LessEqual
                     | BinaryOp::Greater
                     | BinaryOp::GreaterEqual
+                        if self.operand_type(function, *lhs).is_float()
+                            && self.operand_type(function, *rhs).is_float() =>
+                    {
+                        self.emit_float_compare_to_temp(
+                            function,
+                            *op,
+                            *lhs,
+                            *rhs,
+                            *dst,
+                            diagnostics,
+                        );
+                    }
+                    BinaryOp::Equal
+                    | BinaryOp::NotEqual
+                    | BinaryOp::Less
+                    | BinaryOp::LessEqual
+                    | BinaryOp::Greater
+                    | BinaryOp::GreaterEqual
                     | BinaryOp::LogicalAnd
                     | BinaryOp::LogicalOr => {
                         diagnostics.error(
@@ -1333,6 +1351,17 @@ impl<'a> CodegenContext<'a> {
         diagnostics: &mut DiagnosticBag,
     ) {
         let callee_name = self.symbol_name(callee).to_string();
+        if matches!(callee_name.as_str(), "fminf" | "fmaxf") {
+            self.emit_float_minmax_call(
+                function,
+                args,
+                dst,
+                callee_name.as_str() == "fminf",
+                diagnostics,
+            );
+            return;
+        }
+
         if let Some(helper) = runtime_helper_for_math_call(&callee_name) {
             self.emit_float_math_call(function, helper, args, dst, diagnostics);
             return;
@@ -1470,6 +1499,87 @@ impl<'a> CodegenContext<'a> {
             self.load_return_byte_to_w(byte);
             self.store_w_to_temp_byte(function.symbol, dst, byte);
         }
+    }
+
+    /// Lowers finite `fminf` / `fmaxf` to the compact compare helper plus local select.
+    fn emit_float_minmax_call(
+        &mut self,
+        function: &IrFunction,
+        args: &[Operand],
+        dst: Option<usize>,
+        is_min: bool,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        let f32_ty = Type::new(ScalarType::F32);
+        if args.len() != 2 {
+            diagnostics.error(
+                "backend",
+                None,
+                if is_min {
+                    "math builtin `fminf` expects 2 arguments".to_string()
+                } else {
+                    "math builtin `fmaxf` expects 2 arguments".to_string()
+                },
+                None,
+            );
+            if let Some(dst) = dst {
+                self.clear_temp(function.symbol, dst, f32_ty);
+            }
+            return;
+        }
+
+        if function.is_interrupt {
+            diagnostics.error(
+                "backend",
+                None,
+                format!(
+                    "interrupt handler `{}` reached float min/max helper lowering",
+                    self.symbol_name(function.symbol)
+                ),
+                Some("Phase 42 keeps helper-backed `fminf`/`fmaxf` out of ISRs".to_string()),
+            );
+            if let Some(dst) = dst {
+                self.clear_temp(function.symbol, dst, f32_ty);
+            }
+            return;
+        }
+
+        let Some(dst) = dst else {
+            return;
+        };
+
+        let helper = RuntimeHelper::F32Cmp;
+        let info = helper.info();
+        self.used_helpers.insert(helper);
+        self.emit_stack_growth_check(
+            info.arg_bytes,
+            &format!("runtime helper {} arguments", info.label),
+        );
+        self.push_operand(function.symbol, args[0], f32_ty);
+        self.push_operand(function.symbol, args[1], f32_ty);
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage(info.label.to_string())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Call(info.label.to_string())));
+        self.restore_code_page_after_call();
+        self.store_w_to_addr(self.layout.helpers.scratch0);
+        self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(info.arg_bytes));
+
+        let use_lhs_label = self.unique_label("f32_minmax_lhs");
+        let use_rhs_label = self.unique_label("f32_minmax_rhs");
+        let finish_label = self.unique_label("f32_minmax_done");
+        let rhs_cmp_value = if is_min { 1 } else { 0xFF };
+
+        self.emit_scratch0_equals_branch(rhs_cmp_value, &use_rhs_label, &use_lhs_label);
+
+        self.program.push(AsmLine::Label(use_lhs_label));
+        self.copy_operand_to_temp(function.symbol, args[0], f32_ty, dst);
+        self.jump_to_label(&finish_label);
+
+        self.program.push(AsmLine::Label(use_rhs_label));
+        self.copy_operand_to_temp(function.symbol, args[1], f32_ty, dst);
+
+        self.program.push(AsmLine::Label(finish_label));
     }
 
     /// Emits inline `fabsf` for ISR-safe use by clearing the destination sign bit.
@@ -2136,6 +2246,43 @@ impl<'a> CodegenContext<'a> {
                 self.jump_to_label(targets.else_label);
             }
         }
+    }
+
+    fn emit_float_compare_to_temp(
+        &mut self,
+        function: &IrFunction,
+        op: BinaryOp,
+        lhs: Operand,
+        rhs: Operand,
+        dst: usize,
+        diagnostics: &mut DiagnosticBag,
+    ) {
+        let true_label = self.unique_label("f32_cmp_true");
+        let false_label = self.unique_label("f32_cmp_false");
+        let done_label = self.unique_label("f32_cmp_done");
+
+        self.emit_float_compare_branch(
+            function,
+            op,
+            lhs,
+            rhs,
+            BranchTargets {
+                then_label: &true_label,
+                else_label: &false_label,
+            },
+            diagnostics,
+        );
+
+        self.program.push(AsmLine::Label(true_label));
+        self.emit_const_to_w(1);
+        self.store_w_to_temp_byte(function.symbol, dst, 0);
+        self.jump_to_label(&done_label);
+
+        self.program.push(AsmLine::Label(false_label));
+        self.emit_const_to_w(0);
+        self.store_w_to_temp_byte(function.symbol, dst, 0);
+
+        self.program.push(AsmLine::Label(done_label));
     }
 
     fn emit_scratch0_equals_branch(&mut self, value: u8, then_label: &str, else_label: &str) {
@@ -4264,12 +4411,6 @@ impl<'a> CodegenContext<'a> {
                     self.emit_float_f32_sqrt_helper(arg0_offset, local_base);
                 }
             }
-            RuntimeHelper::F32Min => {
-                self.emit_float_f32_minmax_helper(arg0_offset, arg1_offset, local_base, true);
-            }
-            RuntimeHelper::F32Max => {
-                self.emit_float_f32_minmax_helper(arg0_offset, arg1_offset, local_base, false);
-            }
             RuntimeHelper::F32ToQ16 => {
                 self.emit_float_to_q16_frame(
                     0,
@@ -4656,53 +4797,24 @@ impl<'a> CodegenContext<'a> {
         self.emit_return_current_frame_value(0, f32_ty);
     }
 
-    /// Compares two finite f32 values by converting them to signed Q16.16 work values.
+    /// Compares two finite f32 values using raw IEEE sign/exponent/mantissa ordering.
+    ///
+    /// Result convention is 0 for equal, 1 for lhs > rhs, and 0xff for lhs < rhs.
+    /// NaN/Inf and full IEEE signed-zero ordering remain outside the finite-only model.
     fn emit_float_f32_compare_helper(&mut self, local_base: u16) {
-        let q_ty = Type::new(ScalarType::I32);
-        let q0_offset = local_base;
-        let q1_offset = q0_offset + 4;
-        let exp_offset = q1_offset + 4;
-        let count_offset = exp_offset + 1;
-        let const_offset = count_offset + 1;
-        let flag_offset = const_offset + 1;
-        let result_offset = flag_offset + 1;
+        let f32_ty = Type::new(ScalarType::F32);
+        let result_offset = local_base;
         let equal_label = self.unique_label("rt_f32_cmp_equal");
         let not_equal_label = self.unique_label("rt_f32_cmp_not_equal");
         let lhs_neg_label = self.unique_label("rt_f32_cmp_lhs_neg");
         let lhs_nonneg_label = self.unique_label("rt_f32_cmp_lhs_nonneg");
-        let rhs_neg_from_lhs_neg_label = self.unique_label("rt_f32_cmp_rhs_neg_lhs_neg");
-        let rhs_neg_from_lhs_nonneg_label = self.unique_label("rt_f32_cmp_rhs_neg_lhs_nonneg");
-        let same_sign_label = self.unique_label("rt_f32_cmp_same_sign");
+        let same_neg_label = self.unique_label("rt_f32_cmp_same_neg");
+        let same_pos_label = self.unique_label("rt_f32_cmp_same_pos");
         let less_label = self.unique_label("rt_f32_cmp_less");
         let greater_label = self.unique_label("rt_f32_cmp_greater");
         let finish_label = self.unique_label("rt_f32_cmp_finish");
 
-        self.emit_float_to_q16_frame(
-            0,
-            q0_offset,
-            q1_offset,
-            exp_offset,
-            count_offset,
-            const_offset,
-            flag_offset,
-        );
-        self.emit_float_to_q16_frame(
-            4,
-            q1_offset,
-            q0_offset,
-            exp_offset,
-            count_offset,
-            const_offset,
-            flag_offset,
-        );
-
-        self.emit_current_frame_equal_branch(
-            q0_offset,
-            q1_offset,
-            q_ty,
-            &equal_label,
-            &not_equal_label,
-        );
+        self.emit_current_frame_equal_branch(0, 4, f32_ty, &equal_label, &not_equal_label);
 
         self.program.push(AsmLine::Label(equal_label));
         self.emit_const_to_w(0);
@@ -4710,38 +4822,19 @@ impl<'a> CodegenContext<'a> {
         self.jump_to_label(&finish_label);
 
         self.program.push(AsmLine::Label(not_equal_label));
-        self.branch_on_current_frame_bit(q0_offset + 3, 7, &lhs_neg_label, &lhs_nonneg_label);
+        self.branch_on_current_frame_bit(3, 7, &lhs_neg_label, &lhs_nonneg_label);
 
         self.program.push(AsmLine::Label(lhs_neg_label));
-        self.branch_on_current_frame_bit(
-            q1_offset + 3,
-            7,
-            &rhs_neg_from_lhs_neg_label,
-            &less_label,
-        );
-        self.program
-            .push(AsmLine::Label(rhs_neg_from_lhs_neg_label));
-        self.jump_to_label(&same_sign_label);
+        self.branch_on_current_frame_bit(7, 7, &same_neg_label, &less_label);
 
         self.program.push(AsmLine::Label(lhs_nonneg_label));
-        self.branch_on_current_frame_bit(
-            q1_offset + 3,
-            7,
-            &rhs_neg_from_lhs_nonneg_label,
-            &same_sign_label,
-        );
-        self.program
-            .push(AsmLine::Label(rhs_neg_from_lhs_nonneg_label));
-        self.jump_to_label(&greater_label);
+        self.branch_on_current_frame_bit(7, 7, &greater_label, &same_pos_label);
 
-        self.program.push(AsmLine::Label(same_sign_label));
-        self.emit_current_frame_unsigned_ge_branch(
-            q0_offset,
-            q1_offset,
-            q_ty,
-            &greater_label,
-            &less_label,
-        );
+        self.program.push(AsmLine::Label(same_pos_label));
+        self.emit_current_frame_unsigned_ge_branch(0, 4, f32_ty, &greater_label, &less_label);
+
+        self.program.push(AsmLine::Label(same_neg_label));
+        self.emit_current_frame_unsigned_ge_branch(0, 4, f32_ty, &less_label, &greater_label);
 
         self.program.push(AsmLine::Label(less_label));
         self.emit_const_to_w(0xFF);
@@ -4903,67 +4996,6 @@ impl<'a> CodegenContext<'a> {
 
         self.program.push(AsmLine::Label(finish_label));
         self.emit_return_current_frame_value(result_offset, f32_ty);
-    }
-
-    /// Emits finite `fminf` / `fmaxf` using the shared f32 compare helper.
-    fn emit_float_f32_minmax_helper(
-        &mut self,
-        lhs_offset: u16,
-        rhs_offset: u16,
-        local_base: u16,
-        is_min: bool,
-    ) {
-        let f32_ty = Type::new(ScalarType::F32);
-        let result_offset = local_base;
-        let cmp_offset = result_offset + 4;
-        let use_lhs_label = self.unique_label("rt_f32_minmax_lhs");
-        let use_rhs_label = self.unique_label("rt_f32_minmax_rhs");
-        let finish_label = self.unique_label("rt_f32_minmax_finish");
-        let rhs_cmp_value = if is_min { 1 } else { 0xFF };
-
-        self.emit_call_f32_cmp_runtime(lhs_offset, rhs_offset, cmp_offset);
-        self.load_current_frame_byte_to_w(cmp_offset);
-        self.program
-            .push(AsmLine::Instr(AsmInstr::Xorlw(rhs_cmp_value)));
-        self.branch_if_bit_set(low7(STATUS_ADDR), STATUS_Z_BIT, &use_rhs_label);
-        self.jump_to_label(&use_lhs_label);
-
-        self.program.push(AsmLine::Label(use_rhs_label));
-        self.copy_current_frame_bytes(rhs_offset, result_offset, 4);
-        self.jump_to_label(&finish_label);
-
-        self.program.push(AsmLine::Label(use_lhs_label));
-        self.copy_current_frame_bytes(lhs_offset, result_offset, 4);
-
-        self.program.push(AsmLine::Label(finish_label));
-        self.emit_return_current_frame_value(result_offset, f32_ty);
-    }
-
-    /// Calls the f32 compare helper from another runtime helper and stores its W result byte.
-    fn emit_call_f32_cmp_runtime(&mut self, lhs_offset: u16, rhs_offset: u16, result_offset: u16) {
-        let info = RuntimeHelper::F32Cmp.info();
-        debug_assert_eq!(info.arg_bytes, 8);
-        self.emit_stack_growth_check(
-            info.arg_bytes,
-            &format!("runtime helper {} args", info.label),
-        );
-        for byte in 0..4u16 {
-            self.load_current_frame_byte_to_w(lhs_offset + byte);
-            self.push_w();
-        }
-        for byte in 0..4u16 {
-            self.load_current_frame_byte_to_w(rhs_offset + byte);
-            self.push_w();
-        }
-        self.program
-            .push(AsmLine::Instr(AsmInstr::SetPage(info.label.to_string())));
-        self.program
-            .push(AsmLine::Instr(AsmInstr::Call(info.label.to_string())));
-        self.restore_code_page_after_call();
-        self.store_w_to_addr(self.layout.helpers.w_save);
-        self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(info.arg_bytes));
-        self.load_addr_to_w(self.layout.helpers.w_save);
-        self.store_w_to_current_frame_byte(result_offset);
     }
 
     /// Emits finite `sqrtf` for `--math-profile precise` with a refined validated-value table.
@@ -6698,7 +6730,14 @@ fn analyze_stack(
                             .get(*callee)
                             .map(|symbol| symbol.name.as_str())
                             .unwrap_or("");
-                        if let Some(helper) = runtime_helper_for_math_call(callee_name) {
+                        if matches!(callee_name, "fminf" | "fmaxf") {
+                            helper_depth =
+                                helper_depth.max(runtime_helper_stack_cost_for_profiles(
+                                    RuntimeHelper::F32Cmp,
+                                    options.runtime_profile,
+                                    options.math_profile,
+                                ));
+                        } else if let Some(helper) = runtime_helper_for_math_call(callee_name) {
                             helper_depth =
                                 helper_depth.max(runtime_helper_stack_cost_for_profiles(
                                     helper,
@@ -7986,8 +8025,6 @@ fn runtime_helper_for_math_call(name: &str) -> Option<RuntimeHelper> {
         "ceilf" => Some(RuntimeHelper::F32Ceil),
         "roundf" => Some(RuntimeHelper::F32Round),
         "sqrtf" => Some(RuntimeHelper::F32Sqrt),
-        "fminf" => Some(RuntimeHelper::F32Min),
-        "fmaxf" => Some(RuntimeHelper::F32Max),
         _ => None,
     }
 }
