@@ -25,16 +25,27 @@ The precise profile uses a table-refined finite helper variant:
 __rt_f32_sqrt variant=precise_table_refined
 ```
 
-It keeps the Phase 37 exact cases and adds refined raw f32 results for simulator-validated non-perfect roots:
+It keeps the Phase 37 exact cases and adds refined raw f32 results for simulator-validated roots. Phase 40 expands the table:
 
 ```text
+sqrtf(0.25f) -> 0x3F000000
+sqrtf(0.5f)  -> 0x3F3504F3
+sqrtf(1.0f)  -> 0x3F800000
 sqrtf(2.0f)  -> 0x3FB504F3
 sqrtf(3.0f)  -> 0x3FDDB3D7
+sqrtf(4.0f)  -> 0x40000000
+sqrtf(5.0f)  -> 0x400F1BBD
+sqrtf(8.0f)  -> 0x403504F3
+sqrtf(9.0f)  -> 0x40400000
 sqrtf(10.0f) -> 0x404A62C2
-sqrtf(0.5f)  -> 0x3F3504F3
+sqrtf(16.0f) -> 0x40800000
+sqrtf(25.0f) -> 0x40A00000
+sqrtf(36.0f) -> 0x40C00000
+sqrtf(49.0f) -> 0x40E00000
+sqrtf(64.0f) -> 0x41000000
 ```
 
-Other positive finite inputs still use the compact fallback. This makes `precise` meaningfully more accurate than `compact` for the documented validated set while keeping the helper within PIC16F877A program memory.
+The Phase 40 validation policy for the documented positive range is absolute error `±0.03125` versus host `f32::sqrt`. Other positive finite inputs still use the compact fallback. This makes `precise` meaningfully more accurate than `compact` for the documented validated set while keeping the helper within PIC16F877A program memory.
 
 ## Cost
 

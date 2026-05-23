@@ -34,13 +34,11 @@ Other positive finite inputs use the documented compact approximation fallback. 
 
 ## Dynamic Precise Calls
 
-Phase 39 implements `--math-profile precise` for dynamic `sqrtf` with a larger refined helper. It adds exact raw f32 results for additional simulator-validated non-perfect roots:
+Phase 39 implements `--math-profile precise` for dynamic `sqrtf` with a larger refined helper. Phase 40 expands the validated set. The precise table now covers:
 
 ```text
-2.0f  -> 1.4142135f
-3.0f  -> 1.7320508f
-10.0f -> 3.1622777f
-0.5f  -> 0.70710677f
+0.25f, 0.5f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 8.0f,
+9.0f, 10.0f, 16.0f, 25.0f, 36.0f, 49.0f, 64.0f
 ```
 
-Other positive finite inputs still use the compact fallback. This makes precise meaningfully better than compact for the documented set, but it is not a general correctly-rounded IEEE square-root implementation.
+The Phase 40 simulator harness validates positive inputs in `[0.25, 64.0]` against host `f32::sqrt` with absolute tolerance `±0.03125`. Other positive finite inputs still use the compact fallback. This makes precise meaningfully better than compact for the documented set, but it is not a general correctly-rounded IEEE square-root implementation.

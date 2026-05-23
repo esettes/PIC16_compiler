@@ -4841,22 +4841,6 @@ impl<'a> CodegenContext<'a> {
             arg_offset,
             const_offset,
             result_offset,
-            0x3F80_0000,
-            0x3F80_0000,
-            &finish_label,
-        );
-        self.emit_f32_sqrt_const_case(
-            arg_offset,
-            const_offset,
-            result_offset,
-            0x4080_0000,
-            0x4000_0000,
-            &finish_label,
-        );
-        self.emit_f32_sqrt_const_case(
-            arg_offset,
-            const_offset,
-            result_offset,
             0x4110_0000,
             0x4040_0000,
             &finish_label,
@@ -4922,14 +4906,6 @@ impl<'a> CodegenContext<'a> {
             arg_offset,
             const_offset,
             result_offset,
-            0x4080_0000,
-            0x4000_0000,
-            &finish_label,
-        );
-        self.emit_f32_sqrt_const_case(
-            arg_offset,
-            const_offset,
-            result_offset,
             0x4110_0000,
             0x4040_0000,
             &finish_label,
@@ -4940,14 +4916,6 @@ impl<'a> CodegenContext<'a> {
             result_offset,
             0x4010_0000,
             0x3FC0_0000,
-            &finish_label,
-        );
-        self.emit_f32_sqrt_const_case(
-            arg_offset,
-            const_offset,
-            result_offset,
-            0x3E80_0000,
-            0x3F00_0000,
             &finish_label,
         );
         self.emit_f32_sqrt_const_case(
@@ -4994,14 +4962,6 @@ impl<'a> CodegenContext<'a> {
             arg_offset,
             const_offset,
             result_offset,
-            0x4180_0000,
-            0x4080_0000,
-            &finish_label,
-        );
-        self.emit_f32_sqrt_const_case(
-            arg_offset,
-            const_offset,
-            result_offset,
             0x41C8_0000,
             0x40A0_0000,
             &finish_label,
@@ -5020,14 +4980,6 @@ impl<'a> CodegenContext<'a> {
             result_offset,
             0x4244_0000,
             0x40E0_0000,
-            &finish_label,
-        );
-        self.emit_f32_sqrt_const_case(
-            arg_offset,
-            const_offset,
-            result_offset,
-            0x4280_0000,
-            0x4100_0000,
             &finish_label,
         );
         self.emit_f32_sqrt_const_case(

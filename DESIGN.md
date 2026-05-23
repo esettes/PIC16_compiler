@@ -215,6 +215,18 @@ Phase 39 implements the dynamic `sqrtf` path for `--math-profile precise`:
 
 This phase still does not add `double`, trigonometry, exp/log/pow, errno, fenv, or full ISO C `math.h`.
 
+### Phase 40 Numeric Accuracy Harness
+
+Phase 40 makes the finite `sqrtf` accuracy policy measurable:
+
+- simulator tests compile C, run it with `pic16-sim`, read raw f32 result bits from RAM, and compare against host `f32::sqrt`
+- precise `sqrtf` keeps `variant=precise_table_refined` and expands the validated table to cover `0.25f`, `0.5f`, `1.0f`, `2.0f`, `3.0f`, `4.0f`, `5.0f`, `8.0f`, `9.0f`, `10.0f`, `16.0f`, `25.0f`, `36.0f`, `49.0f`, and `64.0f`
+- the documented Phase 40 tolerance for validated positive inputs in `[0.25, 64.0]` is `±0.03125`
+- compact/balanced remain small approximation profiles; precise remains more accurate than compact for the tested non-perfect roots but still not correctly-rounded IEEE-754
+- `--size`, `--memory-report`, `.map`, and `.lst` report the selected math profile and the finite accuracy policy
+
+This phase still does not add `double`, trigonometry, exp/log/pow, errno, fenv, or full ISO C `math.h`.
+
 ### Phase 4 Stack-first ABI
 
 Current ABI is stack-first, caller-pushed, upward-growing.

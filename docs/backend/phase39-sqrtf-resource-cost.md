@@ -8,6 +8,7 @@ Reports show:
 
 ```text
 Math profile: precise
+Math accuracy: precise sqrtf: table-refined finite approximation; validated positives in [0.25, 64.0] within +/-0.03125; not IEEE correctly-rounded
 __rt_f32_sqrt: category=math variant=precise_table_refined ...
 ```
 
@@ -22,6 +23,7 @@ Expected behavior:
 
 - precise uses more program words than compact
 - both variants remain demand-pruned when unused
+- Phase 40 reports the selected math accuracy policy alongside the helper variant
 - resource fitting rejects targets that cannot fit the selected helper
 - stack reports include the selected helper frame cost
 

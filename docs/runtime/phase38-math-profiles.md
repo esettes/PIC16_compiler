@@ -21,7 +21,7 @@ picc --math-profile precise ...
 
 `balanced` is the default. It currently uses the same compact `sqrtf` helper and reports `variant=compact_approx`.
 
-`precise` is an explicit request for the larger refined helper added in Phase 39. It reports `variant=precise_table_refined` and is more accurate than compact for the simulator-validated non-perfect roots documented in the Phase 39 runtime notes.
+`precise` is an explicit request for the larger refined helper added in Phase 39 and expanded in Phase 40. It reports `variant=precise_table_refined` and is more accurate than compact for the simulator-validated roots documented in the Phase 40 accuracy policy.
 
 ## Runtime Profile Difference
 
@@ -44,6 +44,7 @@ __rt_f32_sqrt: category=math variant=compact_approx ...
 Dynamic `sqrtf` in precise reports:
 
 ```text
+Math accuracy: precise sqrtf: table-refined finite approximation; validated positives in [0.25, 64.0] within +/-0.03125; not IEEE correctly-rounded
 __rt_f32_sqrt: category=math variant=precise_table_refined ...
 ```
 

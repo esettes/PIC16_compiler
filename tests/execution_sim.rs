@@ -2967,10 +2967,14 @@ void main(void) {
         ("root_ten", 10.0_f32),
     ] {
         let expected = input.sqrt();
-        let compact_error =
-            sqrt_abs_error(symbol_f32_bits(&compact_core, &compact_map, symbol), expected);
-        let precise_error =
-            sqrt_abs_error(symbol_f32_bits(&precise_core, &precise_map, symbol), expected);
+        let compact_error = sqrt_abs_error(
+            symbol_f32_bits(&compact_core, &compact_map, symbol),
+            expected,
+        );
+        let precise_error = sqrt_abs_error(
+            symbol_f32_bits(&precise_core, &precise_map, symbol),
+            expected,
+        );
         assert!(
             precise_error <= compact_error,
             "{symbol}: precise error {precise_error} exceeded compact error {compact_error}"

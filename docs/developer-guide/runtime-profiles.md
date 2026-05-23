@@ -20,7 +20,7 @@ picc --math-profile balanced ...
 picc --math-profile precise ...
 ```
 
-`--runtime-profile` chooses helper implementation size/call-sharing strategy. `--math-profile` chooses finite math accuracy policy. For `sqrtf`, `compact` and default `balanced` use the same compact approximation; `precise` uses the larger Phase 39 `precise_table_refined` helper.
+`--runtime-profile` chooses helper implementation size/call-sharing strategy. `--math-profile` chooses finite math accuracy policy. For `sqrtf`, `compact` and default `balanced` use the same compact approximation; `precise` uses the larger table-refined helper. Phase 40 validates precise positive inputs in `[0.25, 64.0]` within `±0.03125`, but this is still not correctly-rounded IEEE sqrt.
 
 ## small
 

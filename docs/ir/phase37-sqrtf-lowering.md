@@ -16,4 +16,4 @@ Dynamic calls use the existing Stack-first ABI:
 - return: existing 32-bit return convention (`W`, `return_high`, `return_upper0`, `return_upper1`)
 - helper label is emitted only when a dynamic call survives folding and pruning
 
-Phase 38 makes helper selection math-profile-aware. `compact` and default `balanced` lower dynamic calls to the compact `__rt_f32_sqrt` variant. Phase 39 makes `precise` lower to the larger refined `__rt_f32_sqrt` variant instead of diagnosing it as deferred.
+Phase 38 makes helper selection math-profile-aware. `compact` and default `balanced` lower dynamic calls to the compact `__rt_f32_sqrt` variant. Phase 39 makes `precise` lower to the larger refined `__rt_f32_sqrt` variant instead of diagnosing it as deferred. Phase 40 does not change IR shape; it expands the backend precise table and validates numeric tolerance in simulator tests.

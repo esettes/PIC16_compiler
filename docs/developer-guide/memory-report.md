@@ -17,6 +17,7 @@ picc --target pic16f877a -I include --memory-report-file build/app.mem -o build/
 - target
 - selected runtime profile
 - selected math profile
+- selected math accuracy policy
 - used/available program words
 - modeled data RAM usage and total device RAM
 - static data bytes
@@ -43,6 +44,7 @@ picc --target pic16f877a -I include --memory-report-file build/app.mem -o build/
 - runtime helper contributors with actual words, estimated words, ABI args, local bytes, stack frame cost, category, required-by text, and target constraints
 - runtime helper dependency graph
 - selected math profile and math helper variant names
+- selected math accuracy policy, including the Phase 40 precise `sqrtf` validated tolerance
 - float helper contribution when `__rt_f32_*` helpers are emitted
 - math helper contribution when `fabsf`, `truncf`, `floorf`, `ceilf`, `roundf`, or `sqrtf` pull finite math helpers
 - ROM float table contribution when `const __rom float[]` objects are emitted
@@ -115,7 +117,7 @@ Math profile: compact
 __rt_f32_sqrt: category=math variant=compact_approx ...
 ```
 
-`compact` and default `balanced` currently use `variant=compact_approx` for dynamic `sqrtf`. Phase 39 adds `variant=precise_table_refined` for dynamic `sqrtf` under `--math-profile precise`. The precise variant is larger than compact, so compare `Program words` and `math` helper totals before selecting it on small targets.
+`compact` and default `balanced` currently use `variant=compact_approx` for dynamic `sqrtf`. `precise` uses `variant=precise_table_refined` and reports the Phase 40 validated tolerance for positive inputs in `[0.25, 64.0]`. The precise variant is larger than compact, so compare `Program words` and `math` helper totals before selecting it on small targets.
 
 Phase 34/35 add variant/dependency detail for compact helpers:
 

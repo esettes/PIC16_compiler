@@ -43,7 +43,15 @@ picc --math-profile balanced ...
 picc --math-profile precise ...
 ```
 
-`compact` uses the Phase 37 compact approximation. `balanced` is the default and currently behaves the same as `compact`. `precise` uses the larger Phase 39 `precise_table_refined` helper for dynamic `sqrtf`, adding refined results for validated non-perfect roots such as `2.0f`, `3.0f`, `10.0f`, and `0.5f`. Constant `sqrtf` folding still uses the compile-time finite result and does not emit `__rt_f32_sqrt`.
+`compact` uses the Phase 37 compact approximation. `balanced` is the default and currently behaves the same as `compact`. `precise` uses the larger `precise_table_refined` helper for dynamic `sqrtf`.
+
+Phase 40 validates precise `sqrtf` against host `f32::sqrt` for positive inputs in `[0.25, 64.0]` with absolute tolerance `±0.03125`. The validated inputs are:
+
+```text
+0.25, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 8.0, 9.0, 10.0, 16.0, 25.0, 36.0, 49.0, 64.0
+```
+
+Outside the refined table, dynamic precise `sqrtf` still falls back to the compact approximation. Constant `sqrtf` folding uses the compile-time finite result and does not emit `__rt_f32_sqrt`.
 
 Recommended workflow:
 

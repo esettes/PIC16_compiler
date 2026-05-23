@@ -27,4 +27,4 @@ Unsupported behavior:
 - helper-backed `sqrtf` is rejected inside ISRs
 - use fixed-point or validated calibration tables if exact behavior matters
 
-Phase 38 adds `--math-profile compact|balanced|precise` without changing this source syntax. `compact` uses the behavior above, `balanced` currently aliases it, and Phase 39 makes `precise` select a larger refined dynamic helper.
+Phase 38 adds `--math-profile compact|balanced|precise` without changing this source syntax. `compact` uses the behavior above, `balanced` currently aliases it, Phase 39 makes `precise` select a larger refined dynamic helper, and Phase 40 expands the validated precise table with a documented `±0.03125` tolerance for positive inputs in `[0.25, 64.0]`.
