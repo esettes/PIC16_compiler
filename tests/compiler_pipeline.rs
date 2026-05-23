@@ -7437,3 +7437,73 @@ fn phase39_precise_sqrtf_examples_compile_via_picc() {
         assert_hex_is_programmable(&output);
     }
 }
+
+#[test]
+/// Verifies Phase 40 reports the finite sqrtf accuracy policy and keeps folded sqrtf helper-free.
+fn phase40_precise_sqrtf_accuracy_policy_is_reported() {
+    let dynamic = r#"
+#include <math.h>
+
+float input;
+float output;
+
+void main(void) {
+    input = 5.0f;
+    output = sqrtf(input);
+}
+"#;
+    let (dynamic_hex, dynamic_stdout, dynamic_report) = compile_profile_source_size_report(
+        "balanced",
+        "phase40-precise-accuracy-report",
+        dynamic,
+        &["--math-profile", "precise"],
+    );
+    assert!(dynamic_stdout.contains("Math profile: precise"));
+    assert!(dynamic_stdout.contains("Math accuracy: precise sqrtf"));
+    assert!(dynamic_report.contains("math profile: precise"));
+    assert!(dynamic_report.contains("math accuracy: precise sqrtf"));
+    assert!(dynamic_report.contains("[0.25, 64.0]"));
+    assert!(dynamic_report.contains("+/-0.03125"));
+    assert!(dynamic_report.contains("variant=precise_table_refined"));
+    assert_hex_is_programmable(&dynamic_hex);
+
+    let folded = r#"
+#include <math.h>
+
+float output = sqrtf(5.0f);
+
+void main(void) {}
+"#;
+    let (folded_hex, _folded_stdout, folded_report) = compile_profile_source_size_report(
+        "balanced",
+        "phase40-precise-folded-report",
+        folded,
+        &["--math-profile", "precise"],
+    );
+    assert!(!read_artifact(&folded_hex, "map").contains("__rt_f32_sqrt"));
+    assert!(folded_report.contains("math accuracy: precise sqrtf"));
+    assert_hex_is_programmable(&folded_hex);
+}
+
+#[test]
+/// Verifies checked-in Phase 40 sqrt accuracy examples compile and report resources.
+fn phase40_sqrtf_accuracy_examples_compile_via_picc() {
+    for example in [
+        "examples/pic16f877a/math_sqrt_accuracy.c",
+        "examples/pic16f877a/math_sqrt_precise_table.c",
+        "examples/pic16f877a/math_sqrt_compact_vs_precise.c",
+    ] {
+        let output = compile_example_via_picc_cli_with_extra_args(
+            "pic16f877a",
+            example,
+            &[
+                "--size",
+                "--memory-report",
+                "--verify-hex",
+                "--math-profile",
+                "precise",
+            ],
+        );
+        assert_hex_is_programmable(&output);
+    }
+}
