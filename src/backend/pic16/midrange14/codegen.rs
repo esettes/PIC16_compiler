@@ -4841,6 +4841,22 @@ impl<'a> CodegenContext<'a> {
             arg_offset,
             const_offset,
             result_offset,
+            0x3F80_0000,
+            0x3F80_0000,
+            &finish_label,
+        );
+        self.emit_f32_sqrt_const_case(
+            arg_offset,
+            const_offset,
+            result_offset,
+            0x4080_0000,
+            0x4000_0000,
+            &finish_label,
+        );
+        self.emit_f32_sqrt_const_case(
+            arg_offset,
+            const_offset,
+            result_offset,
             0x4110_0000,
             0x4040_0000,
             &finish_label,
