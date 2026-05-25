@@ -8066,6 +8066,9 @@ fn phase43_sincos_examples_compile_via_picc() {
         "examples/pic16f877a/math_sincos_profile_compare.c",
         "examples/pic16f877a/math_sincos_rom_input.c",
         "examples/pic16f877a/math_sincos_resource_report.c",
+        "examples/pic16f877a/math_sincos_shared_core.c",
+        "examples/pic16f877a/math_sincos_size_compare.c",
+        "examples/pic16f877a/math_sincos_runtime_profiles.c",
     ] {
         let output = compile_example_via_picc_cli_with_extra_args(
             "pic16f877a",
