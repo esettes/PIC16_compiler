@@ -216,12 +216,18 @@ fn symbol_u32(core: &Pic16Core, map: &str, needle: &str) -> u32 {
 }
 
 const PHASE40_SQRTF_PRECISE_ABS_TOLERANCE: f32 = 0.03125;
+const PHASE43_TRIG_COMPACT_ABS_TOLERANCE: f32 = 0.10;
+const PHASE43_TRIG_BALANCED_ABS_TOLERANCE: f32 = 0.05;
 
 fn symbol_f32_bits(core: &Pic16Core, map: &str, needle: &str) -> u32 {
     symbol_u32(core, map, needle)
 }
 
 fn sqrt_abs_error(actual_bits: u32, expected: f32) -> f32 {
+    (f32::from_bits(actual_bits) - expected).abs()
+}
+
+fn f32_abs_error(actual_bits: u32, expected: f32) -> f32 {
     (f32::from_bits(actual_bits) - expected).abs()
 }
 
