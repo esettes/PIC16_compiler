@@ -3302,9 +3302,9 @@ void main(void) {
 "#,
         MathProfile::Balanced,
     );
-    assert!(sin_map.contains("__rt_f32_sin"));
-    assert!(sin_map.contains("__rt_f32_sincos_core"));
-    assert!(!sin_map.contains("__rt_f32_cos"));
+    assert!(map_symbol_address(&sin_map, "__rt_f32_sin").is_some());
+    assert!(map_symbol_address(&sin_map, "__rt_f32_sincos_core").is_some());
+    assert!(map_symbol_address(&sin_map, "__rt_f32_cos").is_none());
     assert!(
         f32_abs_error(symbol_f32_bits(&sin_core, &sin_map, "result"), 1.0)
             <= PHASE43_TRIG_BALANCED_ABS_TOLERANCE
@@ -3326,9 +3326,9 @@ void main(void) {
 "#,
         MathProfile::Compact,
     );
-    assert!(cos_map.contains("__rt_f32_cos"));
-    assert!(cos_map.contains("__rt_f32_sincos_core"));
-    assert!(!cos_map.contains("__rt_f32_sin"));
+    assert!(map_symbol_address(&cos_map, "__rt_f32_cos").is_some());
+    assert!(map_symbol_address(&cos_map, "__rt_f32_sincos_core").is_some());
+    assert!(map_symbol_address(&cos_map, "__rt_f32_sin").is_none());
     assert!(
         f32_abs_error(symbol_f32_bits(&cos_core, &cos_map, "result"), -1.0)
             <= PHASE43_TRIG_COMPACT_ABS_TOLERANCE
@@ -3352,9 +3352,9 @@ void main(void) {
 "#,
         MathProfile::Balanced,
     );
-    assert!(both_map.contains("__rt_f32_sin"));
-    assert!(both_map.contains("__rt_f32_cos"));
-    assert!(both_map.contains("__rt_f32_sincos_core"));
+    assert!(map_symbol_address(&both_map, "__rt_f32_sin").is_some());
+    assert!(map_symbol_address(&both_map, "__rt_f32_cos").is_some());
+    assert!(map_symbol_address(&both_map, "__rt_f32_sincos_core").is_some());
     assert!(
         f32_abs_error(symbol_f32_bits(&both_core, &both_map, "s"), 1.0)
             <= PHASE43_TRIG_BALANCED_ABS_TOLERANCE

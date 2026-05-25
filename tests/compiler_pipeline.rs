@@ -306,6 +306,11 @@ fn parse_runtime_helper_actual_words(report: &str, helper: &str) -> usize {
         .unwrap_or_else(|| panic!("runtime helper {helper} actual word count in memory report"))
 }
 
+fn rendered_map_has_symbol(map: &str, symbol: &str) -> bool {
+    map.lines()
+        .any(|line| line.split_whitespace().nth(1) == Some(symbol))
+}
+
 fn compile_profile_size_report(
     profile: &str,
     input: &str,
@@ -7880,9 +7885,9 @@ void main(void) {
         &["--math-profile", "balanced"],
     );
     let sin_map = read_artifact(&sin_hex, "map");
-    assert!(sin_map.contains("__rt_f32_sin"));
-    assert!(sin_map.contains("__rt_f32_sincos_core"));
-    assert!(!sin_map.contains("__rt_f32_cos"));
+    assert!(rendered_map_has_symbol(&sin_map, "__rt_f32_sin"));
+    assert!(rendered_map_has_symbol(&sin_map, "__rt_f32_sincos_core"));
+    assert!(!rendered_map_has_symbol(&sin_map, "__rt_f32_cos"));
     assert!(sin_report.contains("__rt_f32_sin -> __rt_f32_sincos_core"));
     assert!(sin_report.contains("variant=shared_core_balanced"));
 
@@ -7904,9 +7909,9 @@ void main(void) {
         &["--math-profile", "balanced"],
     );
     let cos_map = read_artifact(&cos_hex, "map");
-    assert!(cos_map.contains("__rt_f32_cos"));
-    assert!(cos_map.contains("__rt_f32_sincos_core"));
-    assert!(!cos_map.contains("__rt_f32_sin"));
+    assert!(rendered_map_has_symbol(&cos_map, "__rt_f32_cos"));
+    assert!(rendered_map_has_symbol(&cos_map, "__rt_f32_sincos_core"));
+    assert!(!rendered_map_has_symbol(&cos_map, "__rt_f32_sin"));
     assert!(cos_report.contains("__rt_f32_cos -> __rt_f32_sincos_core"));
 
     let both = r#"
