@@ -5268,33 +5268,62 @@ impl<'a> CodegenContext<'a> {
         let result_offset = local_base;
         let fallback_label = self.unique_label("rt_f32_trig_fallback");
         let finish_label = self.unique_label("rt_f32_trig_finish");
+        let result_zero_label = self.unique_label("rt_f32_trig_result_zero");
+        let result_pos_one_label = self.unique_label("rt_f32_trig_result_pos_one");
+        let result_neg_one_label = self.unique_label("rt_f32_trig_result_neg_one");
+        let result_pos_sqrt_half_label = self.unique_label("rt_f32_trig_result_pos_sqrt_half");
+        let result_neg_sqrt_half_label = self.unique_label("rt_f32_trig_result_neg_sqrt_half");
 
         for (input_bits, sin_bits, cos_bits) in PHASE43_TRIG_VALIDATED_POINTS {
+            let sin_result_label = trig_result_label_for_bits(
+                *sin_bits,
+                &result_zero_label,
+                &result_pos_one_label,
+                &result_neg_one_label,
+                &result_pos_sqrt_half_label,
+                &result_neg_sqrt_half_label,
+            );
+            let cos_result_label = trig_result_label_for_bits(
+                *cos_bits,
+                &result_zero_label,
+                &result_pos_one_label,
+                &result_neg_one_label,
+                &result_pos_sqrt_half_label,
+                &result_neg_sqrt_half_label,
+            );
             self.emit_f32_sincos_const_case(
                 arg_offset,
                 mode_offset,
-                result_offset,
                 *input_bits,
-                i64::from(*sin_bits),
-                i64::from(*cos_bits),
-                &finish_label,
+                sin_result_label,
+                cos_result_label,
             );
         }
 
         self.program.push(AsmLine::Label(fallback_label));
-        let fallback_sin_label = self.unique_label("rt_f32_trig_fallback_sin");
-        let fallback_cos_label = self.unique_label("rt_f32_trig_fallback_cos");
         self.emit_current_frame_nonzero_branch(
             mode_offset,
             Type::new(ScalarType::U8),
-            &fallback_cos_label,
-            &fallback_sin_label,
+            &result_pos_one_label,
+            &result_zero_label,
         );
-        self.program.push(AsmLine::Label(fallback_sin_label));
+
+        self.program.push(AsmLine::Label(result_zero_label));
         self.clear_current_frame_slot(result_offset, f32_ty);
         self.jump_to_label(&finish_label);
-        self.program.push(AsmLine::Label(fallback_cos_label));
+        self.program.push(AsmLine::Label(result_pos_one_label));
         self.store_i32_const_to_current_frame(result_offset, 0x3F80_0000);
+        self.jump_to_label(&finish_label);
+        self.program.push(AsmLine::Label(result_neg_one_label));
+        self.store_i32_const_to_current_frame(result_offset, 0xBF80_0000);
+        self.jump_to_label(&finish_label);
+        self.program
+            .push(AsmLine::Label(result_pos_sqrt_half_label));
+        self.store_i32_const_to_current_frame(result_offset, 0x3F35_04F3);
+        self.jump_to_label(&finish_label);
+        self.program
+            .push(AsmLine::Label(result_neg_sqrt_half_label));
+        self.store_i32_const_to_current_frame(result_offset, 0xBF35_04F3);
         self.jump_to_label(&finish_label);
 
         self.program.push(AsmLine::Label(finish_label));
@@ -5305,15 +5334,11 @@ impl<'a> CodegenContext<'a> {
         &mut self,
         arg_offset: u16,
         mode_offset: u16,
-        result_offset: u16,
         input_bits: u32,
-        sin_bits: i64,
-        cos_bits: i64,
-        finish_label: &str,
+        sin_result_label: &str,
+        cos_result_label: &str,
     ) {
         let hit_label = self.unique_label("rt_f32_trig_const");
-        let sin_label = self.unique_label("rt_f32_trig_const_sin");
-        let cos_label = self.unique_label("rt_f32_trig_const_cos");
         let byte2_label = self.unique_label("rt_f32_trig_byte2");
         let miss_label = self.unique_label("rt_f32_trig_next_const");
         self.emit_current_frame_byte_equals_branch(
@@ -5333,15 +5358,9 @@ impl<'a> CodegenContext<'a> {
         self.emit_current_frame_nonzero_branch(
             mode_offset,
             Type::new(ScalarType::U8),
-            &cos_label,
-            &sin_label,
+            cos_result_label,
+            sin_result_label,
         );
-        self.program.push(AsmLine::Label(sin_label));
-        self.store_i32_const_to_current_frame(result_offset, sin_bits);
-        self.jump_to_label(finish_label);
-        self.program.push(AsmLine::Label(cos_label));
-        self.store_i32_const_to_current_frame(result_offset, cos_bits);
-        self.jump_to_label(finish_label);
         self.program.push(AsmLine::Label(miss_label));
     }
 
@@ -7284,6 +7303,24 @@ const PHASE43_TRIG_VALIDATED_POINTS: &[(u32, u32, u32)] = &[
     (0x40C9_0FDB, 0x0000_0000, 0x3F80_0000),
     (0xC0C9_0FDB, 0x0000_0000, 0x3F80_0000),
 ];
+
+fn trig_result_label_for_bits<'a>(
+    bits: u32,
+    zero: &'a str,
+    pos_one: &'a str,
+    neg_one: &'a str,
+    pos_sqrt_half: &'a str,
+    neg_sqrt_half: &'a str,
+) -> &'a str {
+    match bits {
+        0x0000_0000 | 0x8000_0000 => zero,
+        0x3F80_0000 => pos_one,
+        0xBF80_0000 => neg_one,
+        0x3F35_04F3 => pos_sqrt_half,
+        0xBF35_04F3 => neg_sqrt_half,
+        _ => zero,
+    }
+}
 
 fn trig_table_label(math_profile: MathProfile) -> &'static str {
     match math_profile {
