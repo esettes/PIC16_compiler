@@ -127,10 +127,11 @@ fn compile_source_with_stack_check(
 
 fn map_symbol_address(map: &str, needle: &str) -> Option<u16> {
     map.lines().find_map(|line| {
-        if !line.contains(needle) {
+        let mut fields = line.split_whitespace();
+        let addr = fields.next()?;
+        if fields.next() != Some(needle) {
             return None;
         }
-        let addr = line.split_whitespace().next()?;
         u16::from_str_radix(addr, 16).ok()
     })
 }
