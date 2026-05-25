@@ -7759,3 +7759,201 @@ fn phase42_compare_minmax_examples_compile_via_picc() {
         assert_hex_is_programmable(&output);
     }
 }
+
+#[test]
+/// Verifies Phase 43 reports finite sin/cos helpers and internal ROM math tables.
+fn phase43_sincos_reporting_and_pruning() {
+    let source = r#"
+#include <math.h>
+
+float angle;
+float s;
+float c;
+
+void main(void) {
+    angle = 1.5707963f;
+    s = sinf(angle);
+    c = cosf(angle);
+}
+"#;
+    let (hex, stdout, report) = compile_profile_source_size_report(
+        "balanced",
+        "phase43-sincos-report",
+        source,
+        &["--math-profile", "balanced"],
+    );
+    let map = read_artifact(&hex, "map");
+    let listing = read_artifact(&hex, "lst");
+    assert!(stdout.contains("Math profile: balanced"));
+    assert!(report.contains("__rt_f32_sin"));
+    assert!(report.contains("__rt_f32_cos"));
+    assert!(report.contains("variant=table_balanced"));
+    assert!(report.contains("__rt_math_sin_qwave_table_balanced"));
+    assert!(map.contains("__rt_math_sin_qwave_table_balanced"));
+    assert!(listing.contains("__rt_math_sin_qwave_table_balanced"));
+    assert_hex_is_programmable(&hex);
+
+    let folded = r#"
+#include <math.h>
+
+float s = sinf(0.0f);
+float c = cosf(0.0f);
+"#;
+    let (folded_hex, _folded_stdout, _folded_report) =
+        compile_profile_source_size_report("balanced", "phase43-sincos-folded", folded, &[]);
+    let folded_map = read_artifact(&folded_hex, "map");
+    assert!(!folded_map.contains("__rt_f32_sin"));
+    assert!(!folded_map.contains("__rt_f32_cos"));
+    assert!(!folded_map.contains("__rt_math_sin_qwave_table"));
+
+    let unused = r#"
+#include <math.h>
+
+float value;
+
+void main(void) {
+    value = 1.0f;
+}
+"#;
+    let (unused_hex, _unused_stdout, _unused_report) =
+        compile_profile_source_size_report("balanced", "phase43-sincos-unused", unused, &[]);
+    let unused_map = read_artifact(&unused_hex, "map");
+    assert!(!unused_map.contains("__rt_f32_sin"));
+    assert!(!unused_map.contains("__rt_f32_cos"));
+    assert!(!unused_map.contains("__rt_math_sin_qwave_table"));
+}
+
+#[test]
+/// Verifies Phase 43 compact/balanced profile reporting and precise deferral for dynamic trig.
+fn phase43_sincos_profile_policy_is_explicit() {
+    let source = r#"
+#include <math.h>
+
+float angle;
+float value;
+
+void main(void) {
+    angle = 0.7853982f;
+    value = sinf(angle);
+}
+"#;
+    let (_compact_hex, _compact_stdout, compact_report) = compile_profile_source_size_report(
+        "balanced",
+        "phase43-sincos-compact",
+        source,
+        &["--math-profile", "compact"],
+    );
+    let (_balanced_hex, _balanced_stdout, balanced_report) = compile_profile_source_size_report(
+        "balanced",
+        "phase43-sincos-balanced",
+        source,
+        &["--math-profile", "balanced"],
+    );
+    assert!(compact_report.contains("variant=table_compact"));
+    assert!(compact_report.contains("__rt_math_sin_qwave_table_compact"));
+    assert!(balanced_report.contains("variant=table_balanced"));
+    assert!(balanced_report.contains("__rt_math_sin_qwave_table_balanced"));
+
+    let precise_error = compile_error(
+        "pic16f877a",
+        "phase43-sincos-precise-deferred.c",
+        r#"
+#include <math.h>
+
+float angle;
+float value;
+
+void main(void) {
+    angle = 1.5707963f;
+    value = sinf(angle);
+}
+"#,
+    );
+    assert!(precise_error.contains("sinf") || precise_error.contains("__rt_f32_sin"));
+}
+
+#[test]
+/// Verifies Phase 43 diagnostics reject wrong sin/cos forms and ISR helper calls.
+fn phase43_sincos_diagnostics_are_explicit() {
+    let wrong_count = compile_error(
+        "pic16f877a",
+        "phase43-sinf-wrong-count.c",
+        r#"
+#include <math.h>
+
+float value;
+
+void main(void) {
+    value = sinf();
+}
+"#,
+    );
+    assert!(wrong_count.contains("expects 1 argument"));
+
+    let wrong_type = compile_error(
+        "pic16f877a",
+        "phase43-cosf-wrong-type.c",
+        r#"
+#include <math.h>
+
+float value;
+
+void main(void) {
+    int input = 1;
+    value = cosf(input);
+}
+"#,
+    );
+    assert!(wrong_type.contains("expects a float argument"));
+
+    let unsupported_double = compile_error(
+        "pic16f877a",
+        "phase43-sin-unsupported.c",
+        r#"
+#include <math.h>
+
+float value;
+
+void main(void) {
+    value = sin(1.0f);
+}
+"#,
+    );
+    assert!(unsupported_double.contains("unsupported double math function `sin`"));
+
+    let isr = compile_error(
+        "pic16f877a",
+        "phase43-sinf-isr.c",
+        r#"
+#include <math.h>
+
+float value;
+
+void __interrupt isr(void) {
+    value = sinf(value);
+}
+
+void main(void) {}
+"#,
+    );
+    assert!(isr.contains("cannot call `sinf`"));
+    assert!(isr.contains("float math helper"));
+}
+
+#[test]
+/// Verifies checked-in Phase 43 sin/cos examples compile and report resources.
+fn phase43_sincos_examples_compile_via_picc() {
+    for example in [
+        "examples/pic16f877a/math_sincos_basic.c",
+        "examples/pic16f877a/math_sincos_profile_compare.c",
+        "examples/pic16f877a/math_sincos_rom_input.c",
+        "examples/pic16f877a/math_sincos_resource_report.c",
+    ] {
+        let output = compile_example_via_picc_cli_with_extra_args(
+            "pic16f877a",
+            example,
+            &["--size", "--memory-report", "--verify-hex"],
+        );
+        assert_hex_is_programmable(&output);
+    }
+}
