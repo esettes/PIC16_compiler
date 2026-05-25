@@ -884,6 +884,7 @@ impl<'a> CodegenContext<'a> {
         }
         self.emit_function_pointer_dispatchers();
         self.emit_runtime_helpers(diagnostics);
+        self.emit_runtime_math_tables();
     }
 
     /// Applies backend-local optimization passes and returns a summary for reporting.
@@ -1468,6 +1469,26 @@ impl<'a> CodegenContext<'a> {
                     helper.label()
                 ),
                 Some("Phase 36 allows only inline `fabsf` inside ISRs".to_string()),
+            );
+            if let Some(dst) = dst {
+                self.clear_temp(function.symbol, dst, f32_ty);
+            }
+            return;
+        }
+        if matches!(helper, RuntimeHelper::F32Sin | RuntimeHelper::F32Cos)
+            && self.options.math_profile == MathProfile::Precise
+        {
+            diagnostics.error(
+                "backend",
+                None,
+                format!(
+                    "`{}` is deferred for --math-profile precise in phase 43",
+                    helper.label()
+                ),
+                Some(
+                    "use --math-profile compact or balanced for finite table-driven sinf/cosf"
+                        .to_string(),
+                ),
             );
             if let Some(dst) = dst {
                 self.clear_temp(function.symbol, dst, f32_ty);
@@ -4162,6 +4183,40 @@ impl<'a> CodegenContext<'a> {
         }
         for helper in helpers {
             self.emit_runtime_helper(helper);
+        }
+    }
+
+    /// Emits internal Phase 43 finite trig lookup data as RETLW ROM tables.
+    fn emit_runtime_math_tables(&mut self) {
+        if !self
+            .used_helpers
+            .iter()
+            .any(|helper| matches!(helper, RuntimeHelper::F32Sin | RuntimeHelper::F32Cos))
+        {
+            return;
+        }
+        if self.options.math_profile == MathProfile::Precise {
+            return;
+        }
+        let label = trig_table_label(self.options.math_profile);
+        let entries = trig_table_entries(self.options.math_profile);
+        self.program.push(AsmLine::Comment(format!(
+            "runtime ROM math tables (Phase 43) profile={}",
+            self.options.math_profile.as_str()
+        )));
+        self.program.push(AsmLine::Comment(format!(
+            "ROM math table {label} ({} f32 quarter-wave entries, little-endian RETLW bytes)",
+            entries.len()
+        )));
+        self.program.push(AsmLine::Label(label.to_string()));
+        self.program.push(AsmLine::Instr(AsmInstr::Addwf {
+            f: low7(self.target.sfr_address("PCL").unwrap_or(0x02)),
+            d: Dest::F,
+        }));
+        for bits in entries {
+            for byte in bits.to_le_bytes() {
+                self.program.push(AsmLine::Instr(AsmInstr::Retlw(byte)));
+            }
         }
     }
 
