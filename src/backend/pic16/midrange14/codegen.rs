@@ -4466,6 +4466,12 @@ impl<'a> CodegenContext<'a> {
                     self.emit_float_f32_sqrt_helper(arg0_offset, local_base);
                 }
             }
+            RuntimeHelper::F32Sin => {
+                self.emit_float_f32_trig_helper(arg0_offset, local_base, true);
+            }
+            RuntimeHelper::F32Cos => {
+                self.emit_float_f32_trig_helper(arg0_offset, local_base, false);
+            }
             RuntimeHelper::F32ToQ16 => {
                 self.emit_float_to_q16_frame(
                     0,
