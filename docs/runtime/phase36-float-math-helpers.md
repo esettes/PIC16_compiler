@@ -13,6 +13,7 @@ __rt_f32_round
 __rt_f32_sqrt
 __rt_f32_sin
 __rt_f32_cos
+__rt_f32_sincos_core
 ```
 
 Behavior:
@@ -24,7 +25,7 @@ Behavior:
 - `roundf` converts to absolute Q16.16, adds raw `0.5`, truncates to an integer, reapplies the sign, and converts back to f32
 - Phase 37 `sqrtf` returns exact validated finite cases, uses a compact bit-level approximation for other positive values, and returns `0.0f` for negative inputs
 - Phase 41 `fminf` / `fmaxf` return one original operand; Phase 42 lowers them to `__rt_f32_cmp` plus local select instead of separate min/max helpers
-- Phase 43 `sinf` / `cosf` use finite table-backed validated points in radians; compact and balanced helpers are approximate and not libm replacements
+- Phase 44 `sinf` / `cosf` use small wrappers around one finite table-backed shared core in radians; compact and balanced helpers are approximate and not libm replacements
 
 Runtime integration:
 

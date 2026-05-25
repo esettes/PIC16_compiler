@@ -121,7 +121,7 @@ __rt_f32_sqrt: category=math variant=compact_approx ...
 
 `compact` and default `balanced` currently use `variant=compact_approx` for dynamic `sqrtf`. `precise` uses `variant=precise_table_refined` and reports the Phase 40 validated tolerance for positive inputs in `[0.25, 64.0]`. The precise variant is larger than compact, so compare `Program words` and `math` helper totals before selecting it on small targets.
 
-For Phase 43 trig, reports show `__rt_f32_sin` / `__rt_f32_cos` plus the selected internal ROM table. `compact` reports `variant=table_compact`; default `balanced` reports `variant=table_balanced`. Dynamic precise-profile trig is deferred and fails before a final report is emitted.
+For Phase 44 trig, reports show `__rt_f32_sin` / `__rt_f32_cos` wrappers, shared `__rt_f32_sincos_core`, and the selected internal ROM table. `compact` reports `variant=shared_core_compact` for the core; default `balanced` reports `variant=shared_core_balanced`. Dynamic precise-profile trig is deferred and fails before a final report is emitted.
 
 Phase 34/35 add variant/dependency detail for compact helpers:
 

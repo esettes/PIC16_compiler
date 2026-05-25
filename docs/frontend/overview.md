@@ -55,7 +55,7 @@ Current Phase 18 frontend surface:
 - accepts dynamic integer/fixed-point float casts through helper lowering
 - accepts Phase 29 dynamic float comparisons
 - accepts Phase 30 file-scope `const __rom float[]` tables with direct indexing
-- accepts Phase 36/37/41/42/43 `math.h` declarations for `fabsf`, `truncf`, `floorf`, `ceilf`, `roundf`, `sqrtf`, `fminf`, `fmaxf`, `sinf`, and `cosf`
+- accepts Phase 36/37/41/42/43/44 `math.h` declarations for `fabsf`, `truncf`, `floorf`, `ceilf`, `roundf`, `sqrtf`, `fminf`, `fmaxf`, `sinf`, and `cosf`
 - accepts Phase 38/39 math profile selection through CLI; source syntax is unchanged
 - folds supported math calls with finite constant float arguments
 - rejects implicit mixed float/integer arithmetic, float bitfields, float switch expressions, ROM/data pointer mixing, and helper-backed float work in ISRs

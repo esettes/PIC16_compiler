@@ -22,10 +22,10 @@ Phase 40 documents the tested precise range as positive inputs in `[0.25, 64.0]`
 
 Phase 41 `fminf` / `fmaxf` are not accuracy-profile-dependent. Phase 42 lowers them to compact `__rt_f32_cmp` plus local select and returns one of the original operands.
 
-Phase 43 `sinf` / `cosf` use the math profile:
+Phase 44 `sinf` / `cosf` use the math profile and share one runtime core:
 
-- `compact`: `variant=table_compact`, smaller internal ROM quarter-wave table, validated tolerance `<= 0.10`
-- `balanced`: default `variant=table_balanced`, larger internal ROM quarter-wave table, validated tolerance `<= 0.05`
+- `compact`: `variant=shared_core_compact`, smaller internal ROM quarter-wave table, validated tolerance `<= 0.10`
+- `balanced`: default `variant=shared_core_balanced`, larger internal ROM quarter-wave table, validated tolerance `<= 0.05`
 - `precise`: dynamic `sinf` / `cosf` is deferred and diagnoses; constant folded calls still fold at compile time
 
 Runtime profile still controls helper sharing/size strategy. Math profile controls numerical policy. Do not use `--math-profile precise` for dynamic trig in Phase 43.
@@ -42,8 +42,8 @@ Inspect:
 - `Runtime helper contribution`
 - `variant=compact_approx`
 - `variant=precise_table_refined`
-- `variant=table_compact`
-- `variant=table_balanced`
+- `variant=shared_core_compact`
+- `variant=shared_core_balanced`
 - `Math accuracy`
 - `math` helper word totals
 

@@ -1482,7 +1482,7 @@ impl<'a> CodegenContext<'a> {
                 "backend",
                 None,
                 format!(
-                    "`{}` is deferred for --math-profile precise in phase 43",
+                    "`{}` is deferred for --math-profile precise in phase 44",
                     helper.label()
                 ),
                 Some(
@@ -4199,7 +4199,7 @@ impl<'a> CodegenContext<'a> {
         }
     }
 
-    /// Emits internal Phase 43 finite trig lookup data as RETLW ROM tables.
+    /// Emits internal Phase 43/44 finite trig lookup data as RETLW ROM tables.
     fn emit_runtime_math_tables(&mut self) {
         if !self
             .used_helpers
@@ -4214,7 +4214,7 @@ impl<'a> CodegenContext<'a> {
         let label = trig_table_label(self.options.math_profile);
         let entries = trig_table_entries(self.options.math_profile);
         self.program.push(AsmLine::Comment(format!(
-            "runtime ROM math tables (Phase 43) profile={}",
+            "runtime ROM math tables (Phase 44) profile={}",
             self.options.math_profile.as_str()
         )));
         self.program.push(AsmLine::Comment(format!(
@@ -7276,13 +7276,13 @@ fn runtime_helper_variant(
 fn math_accuracy_policy(math_profile: MathProfile) -> &'static str {
     match math_profile {
         MathProfile::Compact => {
-            "compact sqrtf: finite-only compact approximation; sinf/cosf compact validated-table points with coarse fallback"
+            "compact sqrtf: finite-only compact approximation; sinf/cosf shared-core compact validated-table points with coarse fallback"
         }
         MathProfile::Balanced => {
-            "balanced sqrtf: currently aliases compact finite approximation; sinf/cosf use balanced validated-table points with coarse fallback"
+            "balanced sqrtf: currently aliases compact finite approximation; sinf/cosf use shared-core balanced validated-table points with coarse fallback"
         }
         MathProfile::Precise => {
-            "precise sqrtf: table-refined finite approximation; validated positives in [0.25, 64.0] within +/-0.03125; sinf/cosf precise dynamic helpers are deferred in Phase 43"
+            "precise sqrtf: table-refined finite approximation; validated positives in [0.25, 64.0] within +/-0.03125; sinf/cosf precise dynamic helpers are deferred"
         }
     }
 }
