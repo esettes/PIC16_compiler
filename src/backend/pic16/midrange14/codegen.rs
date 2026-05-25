@@ -4480,10 +4480,13 @@ impl<'a> CodegenContext<'a> {
                 }
             }
             RuntimeHelper::F32Sin => {
-                self.emit_float_f32_trig_helper(arg0_offset, local_base, true);
+                self.emit_float_f32_trig_wrapper(arg0_offset, local_base, 0);
             }
             RuntimeHelper::F32Cos => {
-                self.emit_float_f32_trig_helper(arg0_offset, local_base, false);
+                self.emit_float_f32_trig_wrapper(arg0_offset, local_base, 1);
+            }
+            RuntimeHelper::F32SinCosCore => {
+                self.emit_float_f32_sincos_core_helper(arg0_offset, arg0_offset + 4, local_base);
             }
             RuntimeHelper::F32ToQ16 => {
                 self.emit_float_to_q16_frame(
@@ -5226,44 +5229,91 @@ impl<'a> CodegenContext<'a> {
         self.program.push(AsmLine::Label(miss_label));
     }
 
-    /// Emits finite Phase 43 sinf/cosf through validated table points plus a coarse fallback.
-    fn emit_float_f32_trig_helper(&mut self, arg_offset: u16, local_base: u16, is_sin: bool) {
+    /// Emits Phase 44 thin sinf/cosf wrappers around the shared trig core.
+    fn emit_float_f32_trig_wrapper(&mut self, arg_offset: u16, result_offset: u16, mode: u8) {
+        let core = RuntimeHelper::F32SinCosCore;
+        let info = core.info();
+        debug_assert_eq!(info.arg_bytes, 5);
+        self.emit_stack_growth_check(info.arg_bytes, "runtime helper __rt_f32_sincos_core args");
+        for byte in 0..4u16 {
+            self.load_current_frame_byte_to_w(arg_offset + byte);
+            self.push_w();
+        }
+        self.emit_const_to_w(mode);
+        self.push_w();
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage(info.label.to_string())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Call(info.label.to_string())));
+        self.restore_code_page_after_call();
+        self.store_w_to_addr(self.layout.helpers.w_save);
+        self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(info.arg_bytes));
+        self.load_addr_to_w(self.layout.helpers.w_save);
+        self.store_w_to_current_frame_byte(result_offset);
+        for byte in 1..4usize {
+            self.load_return_byte_to_w(byte);
+            self.store_w_to_current_frame_byte(result_offset + byte as u16);
+        }
+        self.emit_return_current_frame_value(result_offset, Type::new(ScalarType::F32));
+    }
+
+    /// Emits finite Phase 44 shared sinf/cosf core through validated table points plus fallback.
+    fn emit_float_f32_sincos_core_helper(
+        &mut self,
+        arg_offset: u16,
+        mode_offset: u16,
+        local_base: u16,
+    ) {
         let f32_ty = Type::new(ScalarType::F32);
         let result_offset = local_base;
         let fallback_label = self.unique_label("rt_f32_trig_fallback");
         let finish_label = self.unique_label("rt_f32_trig_finish");
 
         for (input_bits, sin_bits, cos_bits) in PHASE43_TRIG_VALIDATED_POINTS {
-            self.emit_f32_trig_const_case(
+            self.emit_f32_sincos_const_case(
                 arg_offset,
+                mode_offset,
                 result_offset,
                 *input_bits,
-                i64::from(if is_sin { *sin_bits } else { *cos_bits }),
+                i64::from(*sin_bits),
+                i64::from(*cos_bits),
                 &finish_label,
             );
         }
 
         self.program.push(AsmLine::Label(fallback_label));
-        if is_sin {
-            self.clear_current_frame_slot(result_offset, f32_ty);
-        } else {
-            self.store_i32_const_to_current_frame(result_offset, 0x3F80_0000);
-        }
+        let fallback_sin_label = self.unique_label("rt_f32_trig_fallback_sin");
+        let fallback_cos_label = self.unique_label("rt_f32_trig_fallback_cos");
+        self.emit_current_frame_nonzero_branch(
+            mode_offset,
+            Type::new(ScalarType::U8),
+            &fallback_cos_label,
+            &fallback_sin_label,
+        );
+        self.program.push(AsmLine::Label(fallback_sin_label));
+        self.clear_current_frame_slot(result_offset, f32_ty);
+        self.jump_to_label(&finish_label);
+        self.program.push(AsmLine::Label(fallback_cos_label));
+        self.store_i32_const_to_current_frame(result_offset, 0x3F80_0000);
         self.jump_to_label(&finish_label);
 
         self.program.push(AsmLine::Label(finish_label));
         self.emit_return_current_frame_value(result_offset, f32_ty);
     }
 
-    fn emit_f32_trig_const_case(
+    fn emit_f32_sincos_const_case(
         &mut self,
         arg_offset: u16,
+        mode_offset: u16,
         result_offset: u16,
         input_bits: u32,
-        result_bits: i64,
+        sin_bits: i64,
+        cos_bits: i64,
         finish_label: &str,
     ) {
         let hit_label = self.unique_label("rt_f32_trig_const");
+        let sin_label = self.unique_label("rt_f32_trig_const_sin");
+        let cos_label = self.unique_label("rt_f32_trig_const_cos");
         let byte2_label = self.unique_label("rt_f32_trig_byte2");
         let miss_label = self.unique_label("rt_f32_trig_next_const");
         self.emit_current_frame_byte_equals_branch(
@@ -5280,7 +5330,17 @@ impl<'a> CodegenContext<'a> {
             &miss_label,
         );
         self.program.push(AsmLine::Label(hit_label));
-        self.store_i32_const_to_current_frame(result_offset, result_bits);
+        self.emit_current_frame_nonzero_branch(
+            mode_offset,
+            Type::new(ScalarType::U8),
+            &cos_label,
+            &sin_label,
+        );
+        self.program.push(AsmLine::Label(sin_label));
+        self.store_i32_const_to_current_frame(result_offset, sin_bits);
+        self.jump_to_label(finish_label);
+        self.program.push(AsmLine::Label(cos_label));
+        self.store_i32_const_to_current_frame(result_offset, cos_bits);
         self.jump_to_label(finish_label);
         self.program.push(AsmLine::Label(miss_label));
     }
@@ -7175,9 +7235,12 @@ fn runtime_helper_variant(
         };
     }
     if matches!(helper, RuntimeHelper::F32Sin | RuntimeHelper::F32Cos) {
+        return "wrapper";
+    }
+    if helper == RuntimeHelper::F32SinCosCore {
         return match math_profile {
-            MathProfile::Compact => "table_compact",
-            MathProfile::Balanced => "table_balanced",
+            MathProfile::Compact => "shared_core_compact",
+            MathProfile::Balanced => "shared_core_balanced",
             MathProfile::Precise => "precise_deferred",
         };
     }
