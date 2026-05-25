@@ -7194,13 +7194,13 @@ fn runtime_helper_variant(
 fn math_accuracy_policy(math_profile: MathProfile) -> &'static str {
     match math_profile {
         MathProfile::Compact => {
-            "compact math: sqrtf compact approximation; sinf/cosf compact validated-table points with coarse fallback"
+            "compact sqrtf: finite-only compact approximation; sinf/cosf compact validated-table points with coarse fallback"
         }
         MathProfile::Balanced => {
-            "balanced math: sqrtf aliases compact; sinf/cosf use balanced validated-table points with coarse fallback"
+            "balanced sqrtf: currently aliases compact finite approximation; sinf/cosf use balanced validated-table points with coarse fallback"
         }
         MathProfile::Precise => {
-            "precise math: sqrtf table-refined; sinf/cosf precise dynamic helpers are deferred in Phase 43"
+            "precise sqrtf: table-refined finite approximation; validated positives in [0.25, 64.0] within +/-0.03125; sinf/cosf precise dynamic helpers are deferred in Phase 43"
         }
     }
 }
