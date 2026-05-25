@@ -118,7 +118,7 @@ Phase 27 float lowering notes:
 - Phase 29 dynamic 32-bit integer float casts lower to explicit `I32ToF32`, `U32ToF32`, `F32ToI32`, and `F32ToU32` cast IR
 - Phase 29 dynamic float comparisons lower as float compare conditions consumed by the backend helper call path
 - Phase 30 ROM float indexing reuses `RomRead32`; the IR carries raw 32-bit f32 bytes as an ordinary `float` temp result
-- Phase 36/37/41/42 finite math calls remain ordinary direct call IR nodes; the backend recognizes `fabsf`, `truncf`, `floorf`, `ceilf`, `roundf`, `sqrtf`, `fminf`, and `fmaxf` symbols; Phase 42 lowers `fminf` / `fmaxf` to `__rt_f32_cmp` plus local select instead of separate helpers
+- Phase 36/37/41/42/43 finite math calls remain ordinary direct call IR nodes; the backend recognizes `fabsf`, `truncf`, `floorf`, `ceilf`, `roundf`, `sqrtf`, `fminf`, `fmaxf`, `sinf`, and `cosf` symbols; Phase 42 lowers `fminf` / `fmaxf` to `__rt_f32_cmp` plus local select instead of separate helpers; Phase 43 lowers `sinf` / `cosf` to finite table-backed runtime helpers
 - Phase 38/39 math profile selection is backend policy; IR remains unchanged while backend chooses compact or precise `sqrtf` helper variants
 - Phase 36 constant math calls are folded before IR lowering when their argument is a finite constant
 - implicit mixed float/integer arithmetic is intentionally not inserted

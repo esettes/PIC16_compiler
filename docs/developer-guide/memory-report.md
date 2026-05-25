@@ -46,8 +46,9 @@ picc --target pic16f877a -I include --memory-report-file build/app.mem -o build/
 - selected math profile and math helper variant names
 - selected math accuracy policy, including the Phase 40 precise `sqrtf` validated tolerance
 - float helper contribution when `__rt_f32_*` helpers are emitted
-- math helper contribution when `fabsf`, `truncf`, `floorf`, `ceilf`, `roundf`, or `sqrtf` pull finite math helpers
+- math helper contribution when `fabsf`, `truncf`, `floorf`, `ceilf`, `roundf`, `sqrtf`, `sinf`, or `cosf` pull finite math helpers
 - `fminf` / `fmaxf` contribution through compact `__rt_f32_cmp` plus call-site select code
+- internal Phase 43 ROM math tables such as `__rt_math_sin_qwave_table_balanced`
 - ROM float table contribution when `const __rom float[]` objects are emitted
 - largest program-memory contributors
 
@@ -119,6 +120,8 @@ __rt_f32_sqrt: category=math variant=compact_approx ...
 ```
 
 `compact` and default `balanced` currently use `variant=compact_approx` for dynamic `sqrtf`. `precise` uses `variant=precise_table_refined` and reports the Phase 40 validated tolerance for positive inputs in `[0.25, 64.0]`. The precise variant is larger than compact, so compare `Program words` and `math` helper totals before selecting it on small targets.
+
+For Phase 43 trig, reports show `__rt_f32_sin` / `__rt_f32_cos` plus the selected internal ROM table. `compact` reports `variant=table_compact`; default `balanced` reports `variant=table_balanced`. Dynamic precise-profile trig is deferred and fails before a final report is emitted.
 
 Phase 34/35 add variant/dependency detail for compact helpers:
 

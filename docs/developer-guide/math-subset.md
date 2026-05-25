@@ -19,6 +19,8 @@ float e = roundf(x);
 float f = sqrtf(x);
 float g = fminf(a, b);
 float h = fmaxf(a, b);
+float i = sinf(x);
+float j = cosf(x);
 ```
 
 `roundf` rounds half away from zero:
@@ -66,6 +68,19 @@ fmaxf(-3.0f, -2.0f) -> -2.0f
 
 They do not implement NaN/Inf behavior. For `+0.0f` and `-0.0f`, the selected result is implementation-defined within the finite-only model.
 
+`sinf` and `cosf` are finite-only Phase 43 approximations:
+
+```text
+sinf(0.0f)        -> 0.0f
+cosf(0.0f)        -> 1.0f
+sinf(1.5707963f) -> approximately 1.0f
+cosf(3.1415927f) -> approximately -1.0f
+```
+
+Inputs are radians. Dynamic compact and balanced helpers use internal ROM quarter-wave tables and validated table points in `[-2π, +2π]`. Compact tolerance is `<= 0.10`; balanced tolerance is `<= 0.05` for simulator-validated points. Outside the validated points, runtime fallback is coarse and finite; use ROM calibration tables or fixed-point if exact trig behavior matters.
+
+`--math-profile precise` currently diagnoses dynamic `sinf` / `cosf` as deferred. It does not silently use compact behavior. Constant finite `sinf` / `cosf` calls fold at compile time with host `f32` behavior and do not emit trig helpers.
+
 Recommended workflow:
 
 ```bash
@@ -76,6 +91,6 @@ Notes:
 
 - PIC16F877A is the safer default for math-heavy examples
 - `fabsf` can be inline-safe in ISRs
-- `truncf`, `floorf`, `ceilf`, `roundf`, `sqrtf`, `fminf`, and `fmaxf` pull helpers and are rejected in ISRs
+- `truncf`, `floorf`, `ceilf`, `roundf`, `sqrtf`, `fminf`, `fmaxf`, `sinf`, and `cosf` pull helpers and are rejected in ISRs
 - unused `#include <math.h>` does not emit math helpers
-- unsupported names such as `sqrt`, `sin`, or `fabs` are intentionally not declared
+- unsupported names such as `sqrt`, `sin`, `cos`, or `fabs` are intentionally not declared

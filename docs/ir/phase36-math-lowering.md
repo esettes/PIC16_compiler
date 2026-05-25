@@ -13,6 +13,8 @@ roundf -> __rt_f32_round
 sqrtf -> __rt_f32_sqrt
 fminf -> __rt_f32_cmp + local select
 fmaxf -> __rt_f32_cmp + local select
+sinf  -> __rt_f32_sin
+cosf  -> __rt_f32_cos
 ```
 
 Constant calls fold before IR lowering when their arguments are finite raw f32 constants.

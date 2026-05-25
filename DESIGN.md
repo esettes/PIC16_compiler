@@ -241,6 +241,21 @@ Phase 41 adds two finite-only selection functions to the minimal math subset:
 
 This phase still does not add `double`, trigonometry, exp/log/pow, errno, fenv, or full ISO C `math.h`.
 
+### Phase 43 Finite Table-Driven `sinf` / `cosf`
+
+Phase 43 adds two finite-only trigonometric functions:
+
+- `include/math.h` declares `float sinf(float x)` and `float cosf(float x)`
+- inputs are interpreted as radians
+- dynamic helpers use validated table points backed by internal ROM RETLW quarter-wave tables
+- `compact` uses `variant=table_compact` with tolerance `<= 0.10` on simulator-validated points
+- default `balanced` uses `variant=table_balanced` with tolerance `<= 0.05` on simulator-validated points
+- dynamic `precise` `sinf` / `cosf` is deferred and emits a diagnostic instead of silently downgrading
+- constant finite calls fold with host `f32::sin` / `f32::cos` and do not emit trig helpers
+- reports show `__rt_f32_sin`, `__rt_f32_cos`, and internal ROM table symbols such as `__rt_math_sin_qwave_table_balanced`
+
+This phase still does not add `double`, `tanf`, `atanf`, exp/log/pow, errno, fenv, or full ISO C `math.h`.
+
 ### Phase 4 Stack-first ABI
 
 Current ABI is stack-first, caller-pushed, upward-growing.

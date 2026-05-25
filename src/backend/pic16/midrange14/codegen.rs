@@ -5217,16 +5217,14 @@ impl<'a> CodegenContext<'a> {
     fn emit_float_f32_trig_helper(&mut self, arg_offset: u16, local_base: u16, is_sin: bool) {
         let f32_ty = Type::new(ScalarType::F32);
         let result_offset = local_base;
-        let const_offset = result_offset + 4;
         let fallback_label = self.unique_label("rt_f32_trig_fallback");
         let finish_label = self.unique_label("rt_f32_trig_finish");
 
         for (input_bits, sin_bits, cos_bits) in PHASE43_TRIG_VALIDATED_POINTS {
             self.emit_f32_trig_const_case(
                 arg_offset,
-                const_offset,
                 result_offset,
-                i64::from(*input_bits),
+                *input_bits,
                 i64::from(if is_sin { *sin_bits } else { *cos_bits }),
                 &finish_label,
             );
@@ -5247,19 +5245,24 @@ impl<'a> CodegenContext<'a> {
     fn emit_f32_trig_const_case(
         &mut self,
         arg_offset: u16,
-        const_offset: u16,
         result_offset: u16,
-        input_bits: i64,
+        input_bits: u32,
         result_bits: i64,
         finish_label: &str,
     ) {
         let hit_label = self.unique_label("rt_f32_trig_const");
+        let byte2_label = self.unique_label("rt_f32_trig_byte2");
         let miss_label = self.unique_label("rt_f32_trig_next_const");
-        self.store_i32_const_to_current_frame(const_offset, input_bits);
-        self.emit_current_frame_equal_branch(
-            arg_offset,
-            const_offset,
-            Type::new(ScalarType::U32),
+        self.emit_current_frame_byte_equals_branch(
+            arg_offset + 3,
+            ((input_bits >> 24) & 0xFF) as u8,
+            &byte2_label,
+            &miss_label,
+        );
+        self.program.push(AsmLine::Label(byte2_label));
+        self.emit_current_frame_byte_equals_branch(
+            arg_offset + 2,
+            ((input_bits >> 16) & 0xFF) as u8,
             &hit_label,
             &miss_label,
         );
