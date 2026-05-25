@@ -1468,7 +1468,7 @@ impl<'a> CodegenContext<'a> {
                     self.symbol_name(function.symbol),
                     helper.label()
                 ),
-                Some("Phase 36 allows only inline `fabsf` inside ISRs".to_string()),
+                Some("only inline `fabsf` is allowed inside ISRs".to_string()),
             );
             if let Some(dst) = dst {
                 self.clear_temp(function.symbol, dst, f32_ty);
