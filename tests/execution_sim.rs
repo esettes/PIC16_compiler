@@ -3175,7 +3175,12 @@ fn executes_phase42_minmax_balanced_and_small_profiles() {
     }
 }
 
-fn dynamic_trig_result_bits(math_profile: MathProfile, name: &str, function: &str, literal: &str) -> u32 {
+fn dynamic_trig_result_bits(
+    math_profile: MathProfile,
+    name: &str,
+    function: &str,
+    literal: &str,
+) -> u32 {
     let source = format!(
         r#"
 #include <math.h>
