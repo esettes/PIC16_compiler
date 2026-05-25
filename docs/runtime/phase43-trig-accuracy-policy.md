@@ -29,7 +29,7 @@ Tolerance:
 ```text
 compact:  absolute error <= 0.10 on validated simulator points
 balanced: absolute error <= 0.05 on validated simulator points
-precise:  dynamic sinf/cosf deferred in Phase 43
+precise:  dynamic sinf/cosf deferred
 ```
 
 Constant folded trig may be more accurate because semantic folding uses host `f32::sin` / `f32::cos`.
