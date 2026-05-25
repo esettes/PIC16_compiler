@@ -11,5 +11,7 @@ float roundf(float x);
 float sqrtf(float x);
 float fminf(float a, float b);
 float fmaxf(float a, float b);
+float sinf(float x);
+float cosf(float x);
 
 #endif

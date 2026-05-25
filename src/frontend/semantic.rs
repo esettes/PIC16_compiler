@@ -2772,6 +2772,15 @@ impl<'a> SemanticAnalyzer<'a> {
         diagnostics: &mut DiagnosticBag,
     ) -> Option<TypedExpr> {
         if let ExprKind::Name(name) = &callee.kind {
+            if matches!(name.as_str(), "sin" | "cos") {
+                diagnostics.error(
+                    "semantic",
+                    Some(span),
+                    format!("unsupported double math function `{name}`"),
+                    Some("use finite float `sinf` / `cosf`; double math is not supported".to_string()),
+                );
+                return None;
+            }
             if name == "__rom_read8" {
                 return self.analyze_rom_read8_expr(args, span, diagnostics);
             }
@@ -3026,13 +3035,23 @@ impl<'a> SemanticAnalyzer<'a> {
     fn is_float_math_builtin(name: &str) -> bool {
         matches!(
             name,
-            "fabsf" | "truncf" | "floorf" | "ceilf" | "roundf" | "sqrtf" | "fminf" | "fmaxf"
+            "fabsf"
+                | "truncf"
+                | "floorf"
+                | "ceilf"
+                | "roundf"
+                | "sqrtf"
+                | "fminf"
+                | "fmaxf"
+                | "sinf"
+                | "cosf"
         )
     }
 
     fn float_math_arg_count(name: &str) -> Option<usize> {
         match name {
-            "fabsf" | "truncf" | "floorf" | "ceilf" | "roundf" | "sqrtf" => Some(1),
+            "fabsf" | "truncf" | "floorf" | "ceilf" | "roundf" | "sqrtf" | "sinf"
+            | "cosf" => Some(1),
             "fminf" | "fmaxf" => Some(2),
             _ => None,
         }
@@ -3079,6 +3098,8 @@ impl<'a> SemanticAnalyzer<'a> {
                     values[0].sqrt()
                 }
             }
+            "sinf" if values.len() == 1 => values[0].sin(),
+            "cosf" if values.len() == 1 => values[0].cos(),
             "fminf" if values.len() == 2 => {
                 if values[0] <= values[1] {
                     values[0]
