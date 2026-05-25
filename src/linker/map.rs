@@ -214,6 +214,7 @@ fn is_math_helper(name: &str) -> bool {
             | "__rt_f32_sqrt"
             | "__rt_f32_sin"
             | "__rt_f32_cos"
+            | "__rt_f32_sincos_core"
             | "__rt_math_sin_qwave_table_compact"
             | "__rt_math_sin_qwave_table_balanced"
     )
