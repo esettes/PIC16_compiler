@@ -154,6 +154,32 @@ fn compile_error(target: &str, name: &str, source: &str) -> String {
     format!("{error}")
 }
 
+fn compile_error_with_extra_args(
+    target: &str,
+    name: &str,
+    source: &str,
+    extra_args: &[&str],
+) -> String {
+    let input = temp_file(name);
+    fs::write(&input, source).expect("fixture");
+    let output = temp_file("error.hex");
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_picc"));
+    command.args(["--target", target, "-I", "include"]);
+    command.args(extra_args);
+    let output = command
+        .arg("-o")
+        .arg(output)
+        .arg(input)
+        .output()
+        .expect("run picc error");
+    assert!(!output.status.success(), "compile should fail");
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
 /// Compiles one source file path using a custom warning profile.
 fn compile_path_with_profile(
     target: &str,
@@ -7854,7 +7880,7 @@ void main(void) {
     assert!(balanced_report.contains("variant=table_balanced"));
     assert!(balanced_report.contains("__rt_math_sin_qwave_table_balanced"));
 
-    let precise_error = compile_error(
+    let precise_error = compile_error_with_extra_args(
         "pic16f877a",
         "phase43-sincos-precise-deferred.c",
         r#"
@@ -7868,6 +7894,7 @@ void main(void) {
     value = sinf(angle);
 }
 "#,
+        &["--math-profile", "precise"],
     );
     assert!(precise_error.contains("sinf") || precise_error.contains("__rt_f32_sin"));
 }
