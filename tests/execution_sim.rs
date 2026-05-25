@@ -3174,3 +3174,107 @@ fn executes_phase42_minmax_balanced_and_small_profiles() {
         }
     }
 }
+
+fn dynamic_trig_result_bits(math_profile: MathProfile, name: &str, function: &str, literal: &str) -> u32 {
+    let source = format!(
+        r#"
+#include <math.h>
+
+float result;
+
+void main(void) {{
+    float angle;
+    angle = {literal};
+    result = {function}(angle);
+}}
+"#
+    );
+    let (core, map) = run_source_with_math_profile(
+        "pic16f877a",
+        &format!("phase43-{function}-{name}.c"),
+        &source,
+        math_profile,
+    );
+    symbol_f32_bits(&core, &map, "result")
+}
+
+#[test]
+fn executes_phase43_sinf_cosf_balanced_validated_points() {
+    for (name, function, literal, expected) in [
+        ("sin-zero", "sinf", "0.0f", 0.0),
+        ("cos-zero", "cosf", "0.0f", 1.0),
+        ("sin-half-pi", "sinf", "1.5707963f", 1.0),
+        ("cos-pi", "cosf", "3.1415927f", -1.0),
+        ("sin-pi", "sinf", "3.1415927f", 0.0),
+        ("cos-half-pi", "cosf", "1.5707963f", 0.0),
+        ("sin-neg-half-pi", "sinf", "-1.5707963f", -1.0),
+        ("cos-neg-pi", "cosf", "-3.1415927f", -1.0),
+    ] {
+        let bits = dynamic_trig_result_bits(MathProfile::Balanced, name, function, literal);
+        assert!(
+            f32_abs_error(bits, expected) <= PHASE43_TRIG_BALANCED_ABS_TOLERANCE,
+            "{name}: actual={} expected={expected}",
+            f32::from_bits(bits)
+        );
+    }
+}
+
+#[test]
+fn executes_phase43_sinf_cosf_compact_validated_points() {
+    for (name, function, literal, expected) in [
+        ("sin-quarter-pi", "sinf", "0.7853982f", 0.70710677),
+        ("cos-quarter-pi", "cosf", "0.7853982f", 0.70710677),
+        ("sin-two-pi", "sinf", "6.2831855f", 0.0),
+        ("cos-two-pi", "cosf", "6.2831855f", 1.0),
+    ] {
+        let bits = dynamic_trig_result_bits(MathProfile::Compact, name, function, literal);
+        assert!(
+            f32_abs_error(bits, expected) <= PHASE43_TRIG_COMPACT_ABS_TOLERANCE,
+            "{name}: actual={} expected={expected}",
+            f32::from_bits(bits)
+        );
+    }
+}
+
+#[test]
+fn executes_phase43_sincos_rom_struct_and_function_paths() {
+    let (core, map) = run_source_with_math_profile(
+        "pic16f877a",
+        "phase43-sincos-rom-struct-call.c",
+        r#"
+#include <math.h>
+
+const __rom float angles[] = {
+    0.0f,
+    1.5707963f,
+    3.1415927f
+};
+
+struct Trig {
+    float s;
+    float c;
+};
+
+struct Trig result;
+float returned;
+
+float sin_from_function(float angle) {
+    return sinf(angle);
+}
+
+void main(void) {
+    float angle;
+    angle = angles[1];
+    result.s = sinf(angle);
+    result.c = cosf(angle);
+    returned = sin_from_function(angle);
+}
+"#,
+        MathProfile::Balanced,
+    );
+    assert!(map.contains("__rt_f32_sin"));
+    assert!(map.contains("__rt_f32_cos"));
+    assert!(map.contains("__rt_math_sin_qwave_table_balanced"));
+    assert!(f32_abs_error(symbol_f32_bits(&core, &map, "result"), 1.0) <= 0.05);
+    assert!(f32_abs_error(symbol_f32_bits(&core, &map, "returned"), 1.0) <= 0.05);
+}
