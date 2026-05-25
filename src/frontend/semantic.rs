@@ -2777,7 +2777,10 @@ impl<'a> SemanticAnalyzer<'a> {
                     "semantic",
                     Some(span),
                     format!("unsupported double math function `{name}`"),
-                    Some("use finite float `sinf` / `cosf`; double math is not supported".to_string()),
+                    Some(
+                        "use finite float `sinf` / `cosf`; double math is not supported"
+                            .to_string(),
+                    ),
                 );
                 return None;
             }
@@ -3050,8 +3053,9 @@ impl<'a> SemanticAnalyzer<'a> {
 
     fn float_math_arg_count(name: &str) -> Option<usize> {
         match name {
-            "fabsf" | "truncf" | "floorf" | "ceilf" | "roundf" | "sqrtf" | "sinf"
-            | "cosf" => Some(1),
+            "fabsf" | "truncf" | "floorf" | "ceilf" | "roundf" | "sqrtf" | "sinf" | "cosf" => {
+                Some(1)
+            }
             "fminf" | "fmaxf" => Some(2),
             _ => None,
         }

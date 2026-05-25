@@ -7824,6 +7824,8 @@ void main(void) {
 
 float s = sinf(0.0f);
 float c = cosf(0.0f);
+
+void main(void) {}
 "#;
     let (folded_hex, _folded_stdout, _folded_report) =
         compile_profile_source_size_report("balanced", "phase43-sincos-folded", folded, &[]);
