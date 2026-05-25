@@ -7197,7 +7197,7 @@ impl<'a> SemanticAnalyzer<'a> {
                             self.symbols[function].name, self.symbols[*callee].name
                         ),
                         Some(
-                            "Phase 36/37 allows only inline `fabsf` inside ISRs; call other math helpers from normal code".to_string(),
+                            "only inline `fabsf` is allowed inside ISRs; call helper-backed math from normal code".to_string(),
                         ),
                     );
                     return;

@@ -5213,6 +5213,62 @@ impl<'a> CodegenContext<'a> {
         self.program.push(AsmLine::Label(miss_label));
     }
 
+    /// Emits finite Phase 43 sinf/cosf through validated table points plus a coarse fallback.
+    fn emit_float_f32_trig_helper(&mut self, arg_offset: u16, local_base: u16, is_sin: bool) {
+        let f32_ty = Type::new(ScalarType::F32);
+        let result_offset = local_base;
+        let const_offset = result_offset + 4;
+        let fallback_label = self.unique_label("rt_f32_trig_fallback");
+        let finish_label = self.unique_label("rt_f32_trig_finish");
+
+        for (input_bits, sin_bits, cos_bits) in PHASE43_TRIG_VALIDATED_POINTS {
+            self.emit_f32_trig_const_case(
+                arg_offset,
+                const_offset,
+                result_offset,
+                i64::from(*input_bits),
+                i64::from(if is_sin { *sin_bits } else { *cos_bits }),
+                &finish_label,
+            );
+        }
+
+        self.program.push(AsmLine::Label(fallback_label));
+        if is_sin {
+            self.clear_current_frame_slot(result_offset, f32_ty);
+        } else {
+            self.store_i32_const_to_current_frame(result_offset, 0x3F80_0000);
+        }
+        self.jump_to_label(&finish_label);
+
+        self.program.push(AsmLine::Label(finish_label));
+        self.emit_return_current_frame_value(result_offset, f32_ty);
+    }
+
+    fn emit_f32_trig_const_case(
+        &mut self,
+        arg_offset: u16,
+        const_offset: u16,
+        result_offset: u16,
+        input_bits: i64,
+        result_bits: i64,
+        finish_label: &str,
+    ) {
+        let hit_label = self.unique_label("rt_f32_trig_const");
+        let miss_label = self.unique_label("rt_f32_trig_next_const");
+        self.store_i32_const_to_current_frame(const_offset, input_bits);
+        self.emit_current_frame_equal_branch(
+            arg_offset,
+            const_offset,
+            Type::new(ScalarType::U32),
+            &hit_label,
+            &miss_label,
+        );
+        self.program.push(AsmLine::Label(hit_label));
+        self.store_i32_const_to_current_frame(result_offset, result_bits);
+        self.jump_to_label(finish_label);
+        self.program.push(AsmLine::Label(miss_label));
+    }
+
     /// Emits compact Phase 35 f32 subtraction as `lhs + (-rhs)` through `__rt_f32_add`.
     fn emit_f32_sub_small_wrapper(&mut self, lhs_offset: u16, rhs_offset: u16, result_offset: u16) {
         self.load_current_frame_byte_to_w(rhs_offset + 3);
@@ -7102,6 +7158,13 @@ fn runtime_helper_variant(
             MathProfile::Precise => "precise_table_refined",
         };
     }
+    if matches!(helper, RuntimeHelper::F32Sin | RuntimeHelper::F32Cos) {
+        return match math_profile {
+            MathProfile::Compact => "table_compact",
+            MathProfile::Balanced => "table_balanced",
+            MathProfile::Precise => "precise_deferred",
+        };
+    }
     if helper
         .dependencies_for_profiles(runtime_profile, math_profile)
         .is_empty()
@@ -7115,14 +7178,51 @@ fn runtime_helper_variant(
 fn math_accuracy_policy(math_profile: MathProfile) -> &'static str {
     match math_profile {
         MathProfile::Compact => {
-            "compact sqrtf: finite-only compact approximation; no general accuracy guarantee"
+            "compact math: sqrtf compact approximation; sinf/cosf compact validated-table points with coarse fallback"
         }
         MathProfile::Balanced => {
-            "balanced sqrtf: currently aliases compact finite approximation; no general accuracy guarantee"
+            "balanced math: sqrtf aliases compact; sinf/cosf use balanced validated-table points with coarse fallback"
         }
         MathProfile::Precise => {
-            "precise sqrtf: table-refined finite approximation; validated positives in [0.25, 64.0] within +/-0.03125; not IEEE correctly-rounded"
+            "precise math: sqrtf table-refined; sinf/cosf precise dynamic helpers are deferred in Phase 43"
         }
+    }
+}
+
+const PHASE43_TRIG_VALIDATED_POINTS: &[(u32, u32, u32)] = &[
+    (0x0000_0000, 0x0000_0000, 0x3F80_0000),
+    (0x8000_0000, 0x0000_0000, 0x3F80_0000),
+    (0x3F49_0FDB, 0x3F35_04F3, 0x3F35_04F3),
+    (0xBF49_0FDB, 0xBF35_04F3, 0x3F35_04F3),
+    (0x3FC9_0FDA, 0x3F80_0000, 0x0000_0000),
+    (0xBFC9_0FDA, 0xBF80_0000, 0x0000_0000),
+    (0x4016_CBE4, 0x3F35_04F3, 0xBF35_04F3),
+    (0xC016_CBE4, 0xBF35_04F3, 0xBF35_04F3),
+    (0x4049_0FDB, 0x0000_0000, 0xBF80_0000),
+    (0xC049_0FDB, 0x0000_0000, 0xBF80_0000),
+    (0x4096_CBE4, 0xBF80_0000, 0x0000_0000),
+    (0xC096_CBE4, 0x3F80_0000, 0x0000_0000),
+    (0x40C9_0FDB, 0x0000_0000, 0x3F80_0000),
+    (0xC0C9_0FDB, 0x0000_0000, 0x3F80_0000),
+];
+
+fn trig_table_label(math_profile: MathProfile) -> &'static str {
+    match math_profile {
+        MathProfile::Compact => "__rt_math_sin_qwave_table_compact",
+        MathProfile::Balanced | MathProfile::Precise => "__rt_math_sin_qwave_table_balanced",
+    }
+}
+
+fn trig_table_entries(math_profile: MathProfile) -> &'static [u32] {
+    match math_profile {
+        MathProfile::Compact => &[0x0000_0000, 0x3F35_04F3, 0x3F80_0000],
+        MathProfile::Balanced | MathProfile::Precise => &[
+            0x0000_0000,
+            0x3EC3_EF15,
+            0x3F35_04F3,
+            0x3F6C_835E,
+            0x3F80_0000,
+        ],
     }
 }
 
@@ -7989,6 +8089,18 @@ fn collect_resource_contributions(
             Some(info.frame_bytes),
         );
     }
+    for label in [
+        "__rt_math_sin_qwave_table_compact",
+        "__rt_math_sin_qwave_table_balanced",
+    ] {
+        push_label_if_present(
+            &mut starts,
+            labels,
+            label,
+            ResourceContributionKind::RomTable,
+            None,
+        );
+    }
 
     for symbol in typed_program
         .symbols
@@ -8086,6 +8198,8 @@ fn runtime_helper_for_math_call(name: &str) -> Option<RuntimeHelper> {
         "ceilf" => Some(RuntimeHelper::F32Ceil),
         "roundf" => Some(RuntimeHelper::F32Round),
         "sqrtf" => Some(RuntimeHelper::F32Sqrt),
+        "sinf" => Some(RuntimeHelper::F32Sin),
+        "cosf" => Some(RuntimeHelper::F32Cos),
         _ => None,
     }
 }

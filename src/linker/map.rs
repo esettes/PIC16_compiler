@@ -75,6 +75,13 @@ pub fn render_map(map: &MapFile) -> String {
     );
     render_grouped(
         &mut output,
+        "    math",
+        true,
+        &map.code_symbols,
+        is_math_helper,
+    );
+    render_grouped(
+        &mut output,
         "    conversion",
         true,
         &map.code_symbols,
@@ -189,11 +196,27 @@ fn is_fixed_helper(name: &str) -> bool {
 }
 
 fn is_float_helper(name: &str) -> bool {
-    name.starts_with("__rt_f32_") && !is_conversion_helper(name)
+    name.starts_with("__rt_f32_") && !is_conversion_helper(name) && !is_math_helper(name)
 }
 
 fn is_conversion_helper(name: &str) -> bool {
     name.contains("_to_f32") || name.contains("__rt_f32_to_")
+}
+
+fn is_math_helper(name: &str) -> bool {
+    matches!(
+        name,
+        "__rt_f32_fabs"
+            | "__rt_f32_trunc"
+            | "__rt_f32_floor"
+            | "__rt_f32_ceil"
+            | "__rt_f32_round"
+            | "__rt_f32_sqrt"
+            | "__rt_f32_sin"
+            | "__rt_f32_cos"
+            | "__rt_math_sin_qwave_table_compact"
+            | "__rt_math_sin_qwave_table_balanced"
+    )
 }
 
 fn is_shift_helper(name: &str) -> bool {
