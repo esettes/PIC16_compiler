@@ -7813,10 +7813,16 @@ void main(void) {
     assert!(stdout.contains("Math profile: balanced"));
     assert!(report.contains("__rt_f32_sin"));
     assert!(report.contains("__rt_f32_cos"));
-    assert!(report.contains("variant=table_balanced"));
+    assert!(report.contains("__rt_f32_sincos_core"));
+    assert!(report.contains("variant=wrapper"));
+    assert!(report.contains("variant=shared_core_balanced"));
+    assert!(report.contains("__rt_f32_sin -> __rt_f32_sincos_core"));
+    assert!(report.contains("__rt_f32_cos -> __rt_f32_sincos_core"));
     assert!(report.contains("__rt_math_sin_qwave_table_balanced"));
     assert!(map.contains("__rt_math_sin_qwave_table_balanced"));
+    assert!(map.contains("__rt_f32_sincos_core"));
     assert!(listing.contains("__rt_math_sin_qwave_table_balanced"));
+    assert!(listing.contains("variant=shared_core_balanced"));
     assert_hex_is_programmable(&hex);
 
     let folded = r#"
@@ -7832,6 +7838,7 @@ void main(void) {}
     let folded_map = read_artifact(&folded_hex, "map");
     assert!(!folded_map.contains("__rt_f32_sin"));
     assert!(!folded_map.contains("__rt_f32_cos"));
+    assert!(!folded_map.contains("__rt_f32_sincos_core"));
     assert!(!folded_map.contains("__rt_math_sin_qwave_table"));
 
     let unused = r#"
@@ -7848,7 +7855,89 @@ void main(void) {
     let unused_map = read_artifact(&unused_hex, "map");
     assert!(!unused_map.contains("__rt_f32_sin"));
     assert!(!unused_map.contains("__rt_f32_cos"));
+    assert!(!unused_map.contains("__rt_f32_sincos_core"));
     assert!(!unused_map.contains("__rt_math_sin_qwave_table"));
+}
+
+#[test]
+/// Verifies Phase 44 emits one shared trig core and prunes unused sin/cos wrappers.
+fn phase44_sincos_shared_core_pruning_and_size() {
+    let sin_only = r#"
+#include <math.h>
+
+float angle;
+float value;
+
+void main(void) {
+    angle = 1.5707963f;
+    value = sinf(angle);
+}
+"#;
+    let (sin_hex, _sin_stdout, sin_report) = compile_profile_source_size_report(
+        "balanced",
+        "phase44-sin-only",
+        sin_only,
+        &["--math-profile", "balanced"],
+    );
+    let sin_map = read_artifact(&sin_hex, "map");
+    assert!(sin_map.contains("__rt_f32_sin"));
+    assert!(sin_map.contains("__rt_f32_sincos_core"));
+    assert!(!sin_map.contains("__rt_f32_cos"));
+    assert!(sin_report.contains("__rt_f32_sin -> __rt_f32_sincos_core"));
+    assert!(sin_report.contains("variant=shared_core_balanced"));
+
+    let cos_only = r#"
+#include <math.h>
+
+float angle;
+float value;
+
+void main(void) {
+    angle = 3.1415927f;
+    value = cosf(angle);
+}
+"#;
+    let (cos_hex, _cos_stdout, cos_report) = compile_profile_source_size_report(
+        "balanced",
+        "phase44-cos-only",
+        cos_only,
+        &["--math-profile", "balanced"],
+    );
+    let cos_map = read_artifact(&cos_hex, "map");
+    assert!(cos_map.contains("__rt_f32_cos"));
+    assert!(cos_map.contains("__rt_f32_sincos_core"));
+    assert!(!cos_map.contains("__rt_f32_sin"));
+    assert!(cos_report.contains("__rt_f32_cos -> __rt_f32_sincos_core"));
+
+    let both = r#"
+#include <math.h>
+
+float angle;
+float s;
+float c;
+
+void main(void) {
+    angle = 1.5707963f;
+    s = sinf(angle);
+    c = cosf(angle);
+}
+"#;
+    let (_both_hex, _both_stdout, both_report) = compile_profile_source_size_report(
+        "balanced",
+        "phase44-sincos-both",
+        both,
+        &["--math-profile", "balanced"],
+    );
+    let sin_words = parse_runtime_helper_actual_words(&both_report, "__rt_f32_sin");
+    let cos_words = parse_runtime_helper_actual_words(&both_report, "__rt_f32_cos");
+    let core_words = parse_runtime_helper_actual_words(&both_report, "__rt_f32_sincos_core");
+    assert!(sin_words < 700, "sin wrapper too large: {sin_words}");
+    assert!(cos_words < 700, "cos wrapper too large: {cos_words}");
+    assert!(core_words < 2770, "shared core should be smaller than old standalone helper");
+    assert!(
+        sin_words + cos_words + core_words < 5540,
+        "shared sin+cos helpers should beat duplicated Phase 43 bodies"
+    );
 }
 
 #[test]
@@ -7877,9 +7966,9 @@ void main(void) {
         source,
         &["--math-profile", "balanced"],
     );
-    assert!(compact_report.contains("variant=table_compact"));
+    assert!(compact_report.contains("variant=shared_core_compact"));
     assert!(compact_report.contains("__rt_math_sin_qwave_table_compact"));
-    assert!(balanced_report.contains("variant=table_balanced"));
+    assert!(balanced_report.contains("variant=shared_core_balanced"));
     assert!(balanced_report.contains("__rt_math_sin_qwave_table_balanced"));
 
     let precise_error = compile_error_with_extra_args(

@@ -3283,3 +3283,84 @@ void main(void) {
     assert!(f32_abs_error(symbol_f32_bits(&core, &map, "result"), 1.0) <= 0.05);
     assert!(f32_abs_error(symbol_f32_bits(&core, &map, "returned"), 1.0) <= 0.05);
 }
+
+#[test]
+fn executes_phase44_sincos_shared_core_usage_patterns() {
+    let (sin_core, sin_map) = run_source_with_math_profile(
+        "pic16f877a",
+        "phase44-sin-only-shared-core.c",
+        r#"
+#include <math.h>
+
+float result;
+
+void main(void) {
+    float angle;
+    angle = 1.5707963f;
+    result = sinf(angle);
+}
+"#,
+        MathProfile::Balanced,
+    );
+    assert!(sin_map.contains("__rt_f32_sin"));
+    assert!(sin_map.contains("__rt_f32_sincos_core"));
+    assert!(!sin_map.contains("__rt_f32_cos"));
+    assert!(
+        f32_abs_error(symbol_f32_bits(&sin_core, &sin_map, "result"), 1.0)
+            <= PHASE43_TRIG_BALANCED_ABS_TOLERANCE
+    );
+
+    let (cos_core, cos_map) = run_source_with_math_profile(
+        "pic16f877a",
+        "phase44-cos-only-shared-core.c",
+        r#"
+#include <math.h>
+
+float result;
+
+void main(void) {
+    float angle;
+    angle = 3.1415927f;
+    result = cosf(angle);
+}
+"#,
+        MathProfile::Compact,
+    );
+    assert!(cos_map.contains("__rt_f32_cos"));
+    assert!(cos_map.contains("__rt_f32_sincos_core"));
+    assert!(!cos_map.contains("__rt_f32_sin"));
+    assert!(
+        f32_abs_error(symbol_f32_bits(&cos_core, &cos_map, "result"), -1.0)
+            <= PHASE43_TRIG_COMPACT_ABS_TOLERANCE
+    );
+
+    let (both_core, both_map) = run_source_with_math_profile(
+        "pic16f877a",
+        "phase44-sincos-both-shared-core.c",
+        r#"
+#include <math.h>
+
+float s;
+float c;
+
+void main(void) {
+    float angle;
+    angle = 1.5707963f;
+    s = sinf(angle);
+    c = cosf(angle);
+}
+"#,
+        MathProfile::Balanced,
+    );
+    assert!(both_map.contains("__rt_f32_sin"));
+    assert!(both_map.contains("__rt_f32_cos"));
+    assert!(both_map.contains("__rt_f32_sincos_core"));
+    assert!(
+        f32_abs_error(symbol_f32_bits(&both_core, &both_map, "s"), 1.0)
+            <= PHASE43_TRIG_BALANCED_ABS_TOLERANCE
+    );
+    assert!(
+        f32_abs_error(symbol_f32_bits(&both_core, &both_map, "c"), 0.0)
+            <= PHASE43_TRIG_BALANCED_ABS_TOLERANCE
+    );
+}
