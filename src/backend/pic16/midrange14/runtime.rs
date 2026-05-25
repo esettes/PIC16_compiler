@@ -78,6 +78,8 @@ pub enum RuntimeHelper {
     F32Ceil,
     F32Round,
     F32Sqrt,
+    F32Sin,
+    F32Cos,
     F32ToQ16,
     Q16ToF32,
     I32ToF32,
@@ -159,6 +161,8 @@ impl RuntimeHelper {
         RuntimeHelper::F32Ceil,
         RuntimeHelper::F32Round,
         RuntimeHelper::F32Sqrt,
+        RuntimeHelper::F32Sin,
+        RuntimeHelper::F32Cos,
         RuntimeHelper::F32ToQ16,
         RuntimeHelper::Q16ToF32,
         RuntimeHelper::I32ToF32,
@@ -492,6 +496,20 @@ impl RuntimeHelper {
                 local_bytes: 8,
                 frame_bytes: 10,
             },
+            Self::F32Sin => RuntimeHelperInfo {
+                label: "__rt_f32_sin",
+                operand_ty: Type::new(ScalarType::F32),
+                arg_bytes: 4,
+                local_bytes: 8,
+                frame_bytes: 10,
+            },
+            Self::F32Cos => RuntimeHelperInfo {
+                label: "__rt_f32_cos",
+                operand_ty: Type::new(ScalarType::F32),
+                arg_bytes: 4,
+                local_bytes: 8,
+                frame_bytes: 10,
+            },
             Self::F32ToQ16 => RuntimeHelperInfo {
                 label: "__rt_f32_to_q16_16",
                 operand_ty: Type::new(ScalarType::F32),
@@ -566,7 +584,9 @@ impl RuntimeHelper {
             | Self::F32Floor
             | Self::F32Ceil
             | Self::F32Round
-            | Self::F32Sqrt => RuntimeHelperCategory::Math,
+            | Self::F32Sqrt
+            | Self::F32Sin
+            | Self::F32Cos => RuntimeHelperCategory::Math,
             Self::F32ToQ16
             | Self::Q16ToF32
             | Self::I32ToF32
