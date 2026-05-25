@@ -3511,6 +3511,19 @@ impl<'a> CodegenContext<'a> {
         self.jump_to_label(clear_label);
     }
 
+    fn emit_current_frame_byte_equals_branch(
+        &mut self,
+        offset: u16,
+        value: u8,
+        equal_label: &str,
+        not_equal_label: &str,
+    ) {
+        self.load_current_frame_byte_to_w(offset);
+        self.program.push(AsmLine::Instr(AsmInstr::Xorlw(value)));
+        self.branch_if_bit_set(low7(STATUS_ADDR), STATUS_Z_BIT, equal_label);
+        self.jump_to_label(not_equal_label);
+    }
+
     /// Clears one scalar slot that lives inside the active call frame.
     fn clear_current_frame_slot(&mut self, offset: u16, ty: Type) {
         for byte in 0..ty.byte_width() {
