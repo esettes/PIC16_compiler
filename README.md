@@ -33,11 +33,15 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 42: float compare/minmax compaction, on top of Phase 41 finite `fminf` / `fmaxf`, Phase 40 numeric accuracy harness and expanded precise-profile finite `sqrtf`, Phase 39 precise-profile `sqrtf`, Phase 38 math accuracy profiles, Phase 37 finite `sqrtf`, Phase 36 minimal finite `math.h` for `float`, Phase 35 fixed/float helper compaction, Phase 34 integer helper compaction, Phase 33 runtime helper reporting, Phase 32 page-aware code layout, Phase 31 backend page-safety, Phase 30 ROM float tables, Phase 29 dynamic float comparisons and 32-bit integer conversions, Phase 28 float hardening, Phase 27 basic finite software `float`, Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, and the earlier frontend/backend phases**.
+Current implementation is **Phase 43: finite table-driven `sinf` / `cosf`, on top of Phase 42 float compare/minmax compaction, Phase 41 finite `fminf` / `fmaxf`, Phase 40 numeric accuracy harness and expanded precise-profile finite `sqrtf`, Phase 39 precise-profile `sqrtf`, Phase 38 math accuracy profiles, Phase 37 finite `sqrtf`, Phase 36 minimal finite `math.h` for `float`, Phase 35 fixed/float helper compaction, Phase 34 integer helper compaction, Phase 33 runtime helper reporting, Phase 32 page-aware code layout, Phase 31 backend page-safety, Phase 30 ROM float tables, Phase 29 dynamic float comparisons and 32-bit integer conversions, Phase 28 float hardening, Phase 27 basic finite software `float`, Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, and the earlier frontend/backend phases**.
 
-Phase 42 scope:
+Phase 43 scope:
 
-- `include/math.h` exposes the finite float-only subset `fabsf`, `truncf`, `floorf`, `ceilf`, `roundf`, `sqrtf`, `fminf`, and `fmaxf`
+- `include/math.h` exposes the finite float-only subset `fabsf`, `truncf`, `floorf`, `ceilf`, `roundf`, `sqrtf`, `fminf`, `fmaxf`, `sinf`, and `cosf`
+- `sinf` / `cosf` interpret input as radians and use internal ROM quarter-wave tables for validated finite points
+- compact trig tolerance is `<= 0.10`; balanced trig tolerance is `<= 0.05` for simulator-validated points in `[-2π, +2π]`
+- dynamic precise-profile `sinf` / `cosf` is deferred and diagnoses instead of silently falling back
+- internal ROM math tables such as `__rt_math_sin_qwave_table_balanced` are emitted only when dynamic trig helpers are used and appear in reports, `.map`, and `.lst`
 - dynamic float comparisons use compact raw finite f32 ordering in `__rt_f32_cmp` instead of Q16.16 conversion
 - `fminf` / `fmaxf` lower to `__rt_f32_cmp` plus local compare/select code; no `__rt_f32_min` or `__rt_f32_max` helper body is emitted
 - constant math calls fold when their argument is a finite compile-time `float`
@@ -51,8 +55,8 @@ Phase 42 scope:
 - `precise` is at least as accurate as compact for tested non-perfect roots and strictly better for multiple tested roots, but it is still finite-only and not a correctly-rounded IEEE-754 implementation
 - math helpers are demand-pruned, categorized as `math helper`, and reported in `--size`, `--memory-report`, stack data, `.map`, and `.lst`
 - compare/minmax compaction is validated under balanced and small runtime profiles
-- `fabsf` may be used in ISRs only when it lowers inline; other math helpers, including `sqrtf`, `fminf`, and `fmaxf`, remain rejected in ISRs
-- no `double`, no full ISO C `math.h`, no trigonometry, no errno/fenv, and no IEEE NaN/Inf promise
+- `fabsf` may be used in ISRs only when it lowers inline; other math helpers, including `sqrtf`, `fminf`, `fmaxf`, `sinf`, and `cosf`, remain rejected in ISRs
+- no `double`, no full ISO C `math.h`, no `tanf`/`atanf`/`powf`/`expf`/`logf`, no errno/fenv, and no IEEE NaN/Inf promise
 
 Phase 35 scope:
 
@@ -1161,4 +1165,4 @@ picc --list-targets
 
 ## Current Limits
 
-Phase 42 compacts float compare/minmax, but current hard limits remain: no `double`, no full math library (`sin`, `cos`, `pow`, `exp`, `log`, etc.), no correctly-rounded IEEE dynamic `sqrtf`, no full IEEE NaN/Inf/subnormal compliance, no ISO/IEEE NaN or signed-zero `fminf` / `fmaxf` semantics, no dynamic mixed float/integer arithmetic, no general ROM pointer model, no code-space pointers, no address-of ROM elements, no ROM/data pointer mixing, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no helper-backed math inside ISR except inline `fabsf`, no fixed-point modulo, no raw computed PIC16 indirect calls, and no recursion. Float/math helpers are large; resource fitting can reject helper-heavy programs on real targets. Helper-backed float expressions are most robust when ROM-read values are first copied into RAM globals/statics before arithmetic, comparison, or math calls. Use fixed-point or validated calibration tables when exact square-root behavior matters outside the documented precise table and tolerance range. The emulator is intentionally core-only: no full peripheral timing model, no asynchronous interrupt scheduling, and no claim of complete PIC16 device emulation.
+Phase 43 adds finite table-driven `sinf` / `cosf`, but current hard limits remain: no `double`, no full math library (`tanf`, `atanf`, `powf`, `expf`, `logf`, etc.), no correctly-rounded IEEE dynamic `sqrtf`, no full IEEE NaN/Inf/subnormal compliance, no ISO/IEEE NaN or signed-zero `fminf` / `fmaxf` semantics, no general-purpose libm-grade argument reduction for trig, no dynamic mixed float/integer arithmetic, no general ROM pointer model, no code-space pointers, no address-of ROM elements, no ROM/data pointer mixing, no jump tables, no case/default labels buried under other control statements, no anonymous nested aggregate fields, no signed bitfields, no multidimensional ROM arrays, no incomplete-struct/union pointers, no pointer-to-function-pointer object model, no helper-backed math inside ISR except inline `fabsf`, no fixed-point modulo, no raw computed PIC16 indirect calls, and no recursion. Float/math helpers are large; resource fitting can reject helper-heavy programs on real targets. Helper-backed float expressions are most robust when ROM-read values are first copied into RAM globals/statics before arithmetic, comparison, or math calls. Use fixed-point or validated calibration tables when exact square-root or trigonometric behavior matters outside the documented validated points and tolerance range. The emulator is intentionally core-only: no full peripheral timing model, no asynchronous interrupt scheduling, and no claim of complete PIC16 device emulation.
