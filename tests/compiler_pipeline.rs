@@ -7816,11 +7816,14 @@ void main(void) {
     let map = read_artifact(&hex, "map");
     let listing = read_artifact(&hex, "lst");
     assert!(stdout.contains("Math profile: balanced"));
+    assert!(stdout.contains("validated range [-2pi,+2pi]"));
     assert!(report.contains("__rt_f32_sin"));
     assert!(report.contains("__rt_f32_cos"));
     assert!(report.contains("__rt_f32_sincos_core"));
     assert!(report.contains("variant=wrapper"));
     assert!(report.contains("variant=shared_core_balanced"));
+    assert!(report.contains("validated range [-2pi,+2pi]"));
+    assert!(report.contains("common +/-3pi and +/-4pi aliases"));
     assert!(report.contains("__rt_f32_sin -> __rt_f32_sincos_core"));
     assert!(report.contains("__rt_f32_cos -> __rt_f32_sincos_core"));
     assert!(report.contains("__rt_math_sin_qwave_table_balanced"));
@@ -7853,6 +7856,27 @@ float value;
 
 void main(void) {
     value = 1.0f;
+}
+
+#[test]
+/// Verifies Phase 45 constant folded trig calls stay host-folded and do not emit trig runtime.
+fn phase45_sincos_constant_folding_prunes_trig_runtime() {
+    let source = r#"
+#include <math.h>
+
+float s = sinf(0.78539816f);
+float c = cosf(0.78539816f);
+
+void main(void) {}
+"#;
+    let (hex, _stdout, report) =
+        compile_profile_source_size_report("balanced", "phase45-sincos-fold-pi4", source, &[]);
+    let map = read_artifact(&hex, "map");
+    assert!(!map.contains("__rt_f32_sin"));
+    assert!(!map.contains("__rt_f32_cos"));
+    assert!(!map.contains("__rt_f32_sincos_core"));
+    assert!(!map.contains("__rt_math_sin_qwave_table"));
+    assert!(!report.contains("__rt_f32_sincos_core"));
 }
 "#;
     let (unused_hex, _unused_stdout, _unused_report) =
