@@ -26,6 +26,8 @@ The shared core performs the Phase 43 finite table-point matching and coarse fal
 - precise dynamic trig remains deferred
 - no NaN/Inf/errno/fenv/libm behavior is provided
 
+Phase 45 expands simulator validation for the shared core and adds deterministic aliases for common `±3pi` / `±4pi` inputs. It does not add full range reduction.
+
 Pruning rules:
 
 - no dynamic trig call: no wrappers, no shared core, no trig ROM table

@@ -16,13 +16,26 @@ Validated dynamic points are within `[-2pi, +2pi]`:
 
 ```text
 0
+±pi/6
 ±pi/4
+±pi/3
 ±pi/2
+±2pi/3
 ±3pi/4
+±5pi/6
 ±pi
 ±3pi/2
 ±2pi
 ```
+
+Phase 45 also tests common moderate out-of-range aliases:
+
+```text
+±3pi
+±4pi
+```
+
+Those aliases are deterministic point matches, not general argument reduction.
 
 Tolerance:
 
@@ -34,4 +47,4 @@ precise:  dynamic sinf/cosf deferred
 
 Constant folded trig may be more accurate because semantic folding uses host `f32::sin` / `f32::cos`.
 
-Outside validated points, dynamic fallback is coarse and finite. Use ROM calibration tables or fixed-point if exact behavior matters.
+Outside documented points, dynamic fallback is coarse and finite. Use ROM calibration tables or fixed-point if exact behavior matters.

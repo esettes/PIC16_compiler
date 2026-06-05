@@ -27,3 +27,5 @@ ROM RETLW table __rt_math_sin_qwave_table_balanced
 ```
 
 No linker relaxation may remove required page setup across helper-to-helper calls unless the final layout proves it safe.
+
+Phase 45 expands the shared core point set, so helper size can increase. Resource fitting and page validation still treat `__rt_f32_sincos_core` as one math helper section with page-safe wrapper calls.

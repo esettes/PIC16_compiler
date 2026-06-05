@@ -5275,10 +5275,8 @@ impl<'a> CodegenContext<'a> {
         let result_neg_half_label = self.unique_label("rt_f32_trig_result_neg_half");
         let result_pos_sqrt_half_label = self.unique_label("rt_f32_trig_result_pos_sqrt_half");
         let result_neg_sqrt_half_label = self.unique_label("rt_f32_trig_result_neg_sqrt_half");
-        let result_pos_sqrt3_half_label =
-            self.unique_label("rt_f32_trig_result_pos_sqrt3_half");
-        let result_neg_sqrt3_half_label =
-            self.unique_label("rt_f32_trig_result_neg_sqrt3_half");
+        let result_pos_sqrt3_half_label = self.unique_label("rt_f32_trig_result_pos_sqrt3_half");
+        let result_neg_sqrt3_half_label = self.unique_label("rt_f32_trig_result_neg_sqrt3_half");
 
         for (input_bits, sin_bits, cos_bits) in PHASE43_TRIG_VALIDATED_POINTS {
             let sin_result_label = trig_result_label_for_bits(

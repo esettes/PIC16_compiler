@@ -270,6 +270,20 @@ Phase 44 keeps Phase 43 trig semantics but compacts runtime:
 
 This phase does not change trig accuracy, add new math functions, or claim libm/IEEE compliance.
 
+### Phase 45 Trig Accuracy Harness and Range Hardening
+
+Phase 45 keeps the Phase 44 shared-core runtime and expands validation:
+
+- simulator trig harness compares raw f32 RAM results against host `f32::sin` / `f32::cos`
+- compact tolerance remains `<= 0.10`; balanced tolerance remains `<= 0.05`
+- validated dynamic range remains `[-2pi, +2pi]`
+- validated points include `pi/6`, `pi/4`, `pi/3`, `pi/2`, `2pi/3`, `3pi/4`, `5pi/6`, `pi`, negative mirrors, and `±2pi`
+- common moderate out-of-range aliases `±3pi` and `±4pi` are matched deterministically
+- outside documented points, fallback remains coarse and finite
+- constant finite trig still folds with host `f32` and emits no trig helper/table
+
+This phase does not implement full argument reduction, precise dynamic trig, or new math functions.
+
 ### Phase 4 Stack-first ABI
 
 Current ABI is stack-first, caller-pushed, upward-growing.

@@ -77,7 +77,7 @@ sinf(1.5707963f) -> approximately 1.0f
 cosf(3.1415927f) -> approximately -1.0f
 ```
 
-Inputs are radians. Dynamic compact and balanced helpers use one shared `__rt_f32_sincos_core`, internal ROM quarter-wave tables, and validated table points in `[-2π, +2π]`. Compact tolerance is `<= 0.10`; balanced tolerance is `<= 0.05` for simulator-validated points. Outside the validated points, runtime fallback is coarse and finite; use ROM calibration tables or fixed-point if exact trig behavior matters.
+Inputs are radians. Dynamic compact and balanced helpers use one shared `__rt_f32_sincos_core`, internal ROM quarter-wave tables, and validated table points in `[-2π, +2π]`. Compact tolerance is `<= 0.10`; balanced tolerance is `<= 0.05` for simulator-validated points. Phase 45 also validates deterministic common-multiple aliases for `±3π` and `±4π`. Outside documented points, runtime fallback is coarse and finite; use ROM calibration tables or fixed-point if exact trig behavior matters.
 
 `--math-profile precise` currently diagnoses dynamic `sinf` / `cosf` as deferred. It does not silently use compact behavior. Constant finite `sinf` / `cosf` calls fold at compile time with host `f32` behavior and do not emit trig helpers.
 
