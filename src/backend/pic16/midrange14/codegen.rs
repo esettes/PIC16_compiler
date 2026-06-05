@@ -5277,32 +5277,21 @@ impl<'a> CodegenContext<'a> {
         let result_neg_sqrt_half_label = self.unique_label("rt_f32_trig_result_neg_sqrt_half");
         let result_pos_sqrt3_half_label = self.unique_label("rt_f32_trig_result_pos_sqrt3_half");
         let result_neg_sqrt3_half_label = self.unique_label("rt_f32_trig_result_neg_sqrt3_half");
+        let result_labels = TrigResultLabels {
+            zero: &result_zero_label,
+            pos_one: &result_pos_one_label,
+            neg_one: &result_neg_one_label,
+            pos_half: &result_pos_half_label,
+            neg_half: &result_neg_half_label,
+            pos_sqrt_half: &result_pos_sqrt_half_label,
+            neg_sqrt_half: &result_neg_sqrt_half_label,
+            pos_sqrt3_half: &result_pos_sqrt3_half_label,
+            neg_sqrt3_half: &result_neg_sqrt3_half_label,
+        };
 
         for (input_bits, sin_bits, cos_bits) in PHASE43_TRIG_VALIDATED_POINTS {
-            let sin_result_label = trig_result_label_for_bits(
-                *sin_bits,
-                &result_zero_label,
-                &result_pos_one_label,
-                &result_neg_one_label,
-                &result_pos_half_label,
-                &result_neg_half_label,
-                &result_pos_sqrt_half_label,
-                &result_neg_sqrt_half_label,
-                &result_pos_sqrt3_half_label,
-                &result_neg_sqrt3_half_label,
-            );
-            let cos_result_label = trig_result_label_for_bits(
-                *cos_bits,
-                &result_zero_label,
-                &result_pos_one_label,
-                &result_neg_one_label,
-                &result_pos_half_label,
-                &result_neg_half_label,
-                &result_pos_sqrt_half_label,
-                &result_neg_sqrt_half_label,
-                &result_pos_sqrt3_half_label,
-                &result_neg_sqrt3_half_label,
-            );
+            let sin_result_label = trig_result_label_for_bits(*sin_bits, &result_labels);
+            let cos_result_label = trig_result_label_for_bits(*cos_bits, &result_labels);
             self.emit_f32_sincos_const_case(
                 arg_offset,
                 mode_offset,
@@ -7342,8 +7331,7 @@ const PHASE43_TRIG_VALIDATED_POINTS: &[(u32, u32, u32)] = &[
     (0xC149_0FDB, 0x0000_0000, 0x3F80_0000),
 ];
 
-fn trig_result_label_for_bits<'a>(
-    bits: u32,
+struct TrigResultLabels<'a> {
     zero: &'a str,
     pos_one: &'a str,
     neg_one: &'a str,
@@ -7353,18 +7341,20 @@ fn trig_result_label_for_bits<'a>(
     neg_sqrt_half: &'a str,
     pos_sqrt3_half: &'a str,
     neg_sqrt3_half: &'a str,
-) -> &'a str {
+}
+
+fn trig_result_label_for_bits<'a>(bits: u32, labels: &'a TrigResultLabels<'a>) -> &'a str {
     match bits {
-        0x0000_0000 | 0x8000_0000 => zero,
-        0x3F80_0000 => pos_one,
-        0xBF80_0000 => neg_one,
-        0x3F00_0000 => pos_half,
-        0xBF00_0000 => neg_half,
-        0x3F35_04F3 => pos_sqrt_half,
-        0xBF35_04F3 => neg_sqrt_half,
-        0x3F5D_B3D7 => pos_sqrt3_half,
-        0xBF5D_B3D7 => neg_sqrt3_half,
-        _ => zero,
+        0x0000_0000 | 0x8000_0000 => labels.zero,
+        0x3F80_0000 => labels.pos_one,
+        0xBF80_0000 => labels.neg_one,
+        0x3F00_0000 => labels.pos_half,
+        0xBF00_0000 => labels.neg_half,
+        0x3F35_04F3 => labels.pos_sqrt_half,
+        0xBF35_04F3 => labels.neg_sqrt_half,
+        0x3F5D_B3D7 => labels.pos_sqrt3_half,
+        0xBF5D_B3D7 => labels.neg_sqrt3_half,
+        _ => labels.zero,
     }
 }
 

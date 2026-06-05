@@ -7962,7 +7962,10 @@ void main(void) {
     let core_words = parse_runtime_helper_actual_words(&both_report, "__rt_f32_sincos_core");
     assert!(sin_words < 700, "sin wrapper too large: {sin_words}");
     assert!(cos_words < 700, "cos wrapper too large: {cos_words}");
-    assert!(core_words < 4500, "shared core grew too large: {core_words}");
+    assert!(
+        core_words < 4500,
+        "shared core grew too large: {core_words}"
+    );
     assert!(
         sin_words + cos_words + core_words < 5540,
         "shared sin+cos helpers should beat duplicated Phase 43 bodies"
