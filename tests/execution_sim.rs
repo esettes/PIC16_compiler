@@ -3204,6 +3204,68 @@ void main(void) {{
     symbol_f32_bits(&core, &map, "result")
 }
 
+fn phase45_trig_points() -> &'static [(&'static str, &'static str, f32)] {
+    &[
+        ("zero", "0.0f", 0.0),
+        ("pi6", "0.5235988f", 0.5235988),
+        ("pi4", "0.7853982f", 0.7853982),
+        ("pi3", "1.0471976f", 1.0471976),
+        ("pi2", "1.5707963f", 1.5707963),
+        ("twopi3", "2.0943952f", 2.0943952),
+        ("threepi4", "2.3561945f", 2.3561945),
+        ("fivepi6", "2.6179938f", 2.6179938),
+        ("pi", "3.1415927f", 3.1415927),
+        ("negpi6", "-0.5235988f", -0.5235988),
+        ("negpi4", "-0.7853982f", -0.7853982),
+        ("negpi2", "-1.5707963f", -1.5707963),
+        ("negpi", "-3.1415927f", -3.1415927),
+        ("twopi", "6.2831855f", 6.2831855),
+        ("negtwopi", "-6.2831855f", -6.2831855),
+        ("threepi", "9.424778f", 9.424778),
+        ("negthreepi", "-9.424778f", -9.424778),
+        ("fourpi", "12.566371f", 12.566371),
+        ("negfourpi", "-12.566371f", -12.566371),
+    ]
+}
+
+fn run_phase45_trig_grid(math_profile: MathProfile, fixture: &str) -> (Pic16Core, String) {
+    let mut source = String::from("#include <math.h>\n\n");
+    for (name, _, _) in phase45_trig_points() {
+        source.push_str(&format!("float sin_{name};\nfloat cos_{name};\n"));
+    }
+    source.push_str("\nvoid main(void) {\n    float angle;\n");
+    for (name, literal, _) in phase45_trig_points() {
+        source.push_str(&format!(
+            "    angle = {literal};\n    sin_{name} = sinf(angle);\n    cos_{name} = cosf(angle);\n"
+        ));
+    }
+    source.push_str("}\n");
+    run_source_with_math_profile("pic16f877a", fixture, &source, math_profile)
+}
+
+fn assert_phase45_trig_grid(math_profile: MathProfile, tolerance: f32) {
+    let (core, map) = run_phase45_trig_grid(
+        math_profile,
+        &format!("phase45-trig-accuracy-{math_profile:?}.c"),
+    );
+    for (name, _, input) in phase45_trig_points() {
+        let sin_bits = symbol_f32_bits(&core, &map, &format!("sin_{name}"));
+        let cos_bits = symbol_f32_bits(&core, &map, &format!("cos_{name}"));
+        let sin_expected = input.sin();
+        let cos_expected = input.cos();
+        assert!(
+            f32_abs_error(sin_bits, sin_expected) <= tolerance,
+            "{math_profile:?} sin {name}: actual={} expected={sin_expected}",
+            f32::from_bits(sin_bits)
+        );
+        assert!(
+            f32_abs_error(cos_bits, cos_expected) <= tolerance,
+            "{math_profile:?} cos {name}: actual={} expected={cos_expected}",
+            f32::from_bits(cos_bits)
+        );
+    }
+}
+
 #[test]
 fn executes_phase43_sinf_cosf_balanced_validated_points() {
     for (name, function, literal, expected) in [
@@ -3222,6 +3284,38 @@ fn executes_phase43_sinf_cosf_balanced_validated_points() {
             "{name}: actual={} expected={expected}",
             f32::from_bits(bits)
         );
+    }
+}
+
+#[test]
+fn executes_phase45_trig_accuracy_grid_compact_and_balanced() {
+    assert_phase45_trig_grid(MathProfile::Compact, PHASE43_TRIG_COMPACT_ABS_TOLERANCE);
+    assert_phase45_trig_grid(MathProfile::Balanced, PHASE43_TRIG_BALANCED_ABS_TOLERANCE);
+}
+
+#[test]
+fn executes_phase45_balanced_trig_is_no_worse_than_compact_on_grid() {
+    let (compact_core, compact_map) =
+        run_phase45_trig_grid(MathProfile::Compact, "phase45-trig-compact-compare.c");
+    let (balanced_core, balanced_map) =
+        run_phase45_trig_grid(MathProfile::Balanced, "phase45-trig-balanced-compare.c");
+    for (name, _, input) in phase45_trig_points() {
+        let expected_sin = input.sin();
+        let expected_cos = input.cos();
+        let compact_sin_err =
+            f32_abs_error(symbol_f32_bits(&compact_core, &compact_map, &format!("sin_{name}")), expected_sin);
+        let balanced_sin_err = f32_abs_error(
+            symbol_f32_bits(&balanced_core, &balanced_map, &format!("sin_{name}")),
+            expected_sin,
+        );
+        let compact_cos_err =
+            f32_abs_error(symbol_f32_bits(&compact_core, &compact_map, &format!("cos_{name}")), expected_cos);
+        let balanced_cos_err = f32_abs_error(
+            symbol_f32_bits(&balanced_core, &balanced_map, &format!("cos_{name}")),
+            expected_cos,
+        );
+        assert!(balanced_sin_err <= compact_sin_err + f32::EPSILON, "sin {name}");
+        assert!(balanced_cos_err <= compact_cos_err + f32::EPSILON, "cos {name}");
     }
 }
 
