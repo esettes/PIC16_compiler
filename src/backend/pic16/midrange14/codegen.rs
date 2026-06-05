@@ -5271,8 +5271,14 @@ impl<'a> CodegenContext<'a> {
         let result_zero_label = self.unique_label("rt_f32_trig_result_zero");
         let result_pos_one_label = self.unique_label("rt_f32_trig_result_pos_one");
         let result_neg_one_label = self.unique_label("rt_f32_trig_result_neg_one");
+        let result_pos_half_label = self.unique_label("rt_f32_trig_result_pos_half");
+        let result_neg_half_label = self.unique_label("rt_f32_trig_result_neg_half");
         let result_pos_sqrt_half_label = self.unique_label("rt_f32_trig_result_pos_sqrt_half");
         let result_neg_sqrt_half_label = self.unique_label("rt_f32_trig_result_neg_sqrt_half");
+        let result_pos_sqrt3_half_label =
+            self.unique_label("rt_f32_trig_result_pos_sqrt3_half");
+        let result_neg_sqrt3_half_label =
+            self.unique_label("rt_f32_trig_result_neg_sqrt3_half");
 
         for (input_bits, sin_bits, cos_bits) in PHASE43_TRIG_VALIDATED_POINTS {
             let sin_result_label = trig_result_label_for_bits(
@@ -5280,16 +5286,24 @@ impl<'a> CodegenContext<'a> {
                 &result_zero_label,
                 &result_pos_one_label,
                 &result_neg_one_label,
+                &result_pos_half_label,
+                &result_neg_half_label,
                 &result_pos_sqrt_half_label,
                 &result_neg_sqrt_half_label,
+                &result_pos_sqrt3_half_label,
+                &result_neg_sqrt3_half_label,
             );
             let cos_result_label = trig_result_label_for_bits(
                 *cos_bits,
                 &result_zero_label,
                 &result_pos_one_label,
                 &result_neg_one_label,
+                &result_pos_half_label,
+                &result_neg_half_label,
                 &result_pos_sqrt_half_label,
                 &result_neg_sqrt_half_label,
+                &result_pos_sqrt3_half_label,
+                &result_neg_sqrt3_half_label,
             );
             self.emit_f32_sincos_const_case(
                 arg_offset,
@@ -5317,6 +5331,12 @@ impl<'a> CodegenContext<'a> {
         self.program.push(AsmLine::Label(result_neg_one_label));
         self.store_i32_const_to_current_frame(result_offset, 0xBF80_0000);
         self.jump_to_label(&finish_label);
+        self.program.push(AsmLine::Label(result_pos_half_label));
+        self.store_i32_const_to_current_frame(result_offset, 0x3F00_0000);
+        self.jump_to_label(&finish_label);
+        self.program.push(AsmLine::Label(result_neg_half_label));
+        self.store_i32_const_to_current_frame(result_offset, 0xBF00_0000);
+        self.jump_to_label(&finish_label);
         self.program
             .push(AsmLine::Label(result_pos_sqrt_half_label));
         self.store_i32_const_to_current_frame(result_offset, 0x3F35_04F3);
@@ -5324,6 +5344,14 @@ impl<'a> CodegenContext<'a> {
         self.program
             .push(AsmLine::Label(result_neg_sqrt_half_label));
         self.store_i32_const_to_current_frame(result_offset, 0xBF35_04F3);
+        self.jump_to_label(&finish_label);
+        self.program
+            .push(AsmLine::Label(result_pos_sqrt3_half_label));
+        self.store_i32_const_to_current_frame(result_offset, 0x3F5D_B3D7);
+        self.jump_to_label(&finish_label);
+        self.program
+            .push(AsmLine::Label(result_neg_sqrt3_half_label));
+        self.store_i32_const_to_current_frame(result_offset, 0xBF5D_B3D7);
         self.jump_to_label(&finish_label);
 
         self.program.push(AsmLine::Label(finish_label));
