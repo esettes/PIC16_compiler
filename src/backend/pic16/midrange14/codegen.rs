@@ -7304,10 +7304,10 @@ fn runtime_helper_variant(
 fn math_accuracy_policy(math_profile: MathProfile) -> &'static str {
     match math_profile {
         MathProfile::Compact => {
-            "compact sqrtf: finite-only compact approximation; sinf/cosf shared-core compact validated-table points with coarse fallback"
+            "compact sqrtf: finite-only compact approximation; sinf/cosf shared-core compact trig tolerance <=0.10 in validated range [-2pi,+2pi], common +/-3pi and +/-4pi aliases, coarse fallback outside"
         }
         MathProfile::Balanced => {
-            "balanced sqrtf: currently aliases compact finite approximation; sinf/cosf use shared-core balanced validated-table points with coarse fallback"
+            "balanced sqrtf: currently aliases compact finite approximation; sinf/cosf shared-core balanced trig tolerance <=0.05 in validated range [-2pi,+2pi], common +/-3pi and +/-4pi aliases, coarse fallback outside"
         }
         MathProfile::Precise => {
             "precise sqrtf: table-refined finite approximation; validated positives in [0.25, 64.0] within +/-0.03125; sinf/cosf precise dynamic helpers are deferred"
@@ -7318,18 +7318,30 @@ fn math_accuracy_policy(math_profile: MathProfile) -> &'static str {
 const PHASE43_TRIG_VALIDATED_POINTS: &[(u32, u32, u32)] = &[
     (0x0000_0000, 0x0000_0000, 0x3F80_0000),
     (0x8000_0000, 0x0000_0000, 0x3F80_0000),
+    (0x3F06_0A92, 0x3F00_0000, 0x3F5D_B3D7),
+    (0xBF06_0A92, 0xBF00_0000, 0x3F5D_B3D7),
     (0x3F49_0FDB, 0x3F35_04F3, 0x3F35_04F3),
     (0xBF49_0FDB, 0xBF35_04F3, 0x3F35_04F3),
+    (0x3F86_0A92, 0x3F5D_B3D7, 0x3F00_0000),
+    (0xBF86_0A92, 0xBF5D_B3D7, 0x3F00_0000),
     (0x3FC9_0FDA, 0x3F80_0000, 0x0000_0000),
     (0xBFC9_0FDA, 0xBF80_0000, 0x0000_0000),
+    (0x4006_0A92, 0x3F5D_B3D7, 0xBF00_0000),
+    (0xC006_0A92, 0xBF5D_B3D7, 0xBF00_0000),
     (0x4016_CBE4, 0x3F35_04F3, 0xBF35_04F3),
     (0xC016_CBE4, 0xBF35_04F3, 0xBF35_04F3),
+    (0x4027_8D36, 0x3F00_0000, 0xBF5D_B3D7),
+    (0xC027_8D36, 0xBF00_0000, 0xBF5D_B3D7),
     (0x4049_0FDB, 0x0000_0000, 0xBF80_0000),
     (0xC049_0FDB, 0x0000_0000, 0xBF80_0000),
     (0x4096_CBE4, 0xBF80_0000, 0x0000_0000),
     (0xC096_CBE4, 0x3F80_0000, 0x0000_0000),
     (0x40C9_0FDB, 0x0000_0000, 0x3F80_0000),
     (0xC0C9_0FDB, 0x0000_0000, 0x3F80_0000),
+    (0x4116_CBE4, 0x0000_0000, 0xBF80_0000),
+    (0xC116_CBE4, 0x0000_0000, 0xBF80_0000),
+    (0x4149_0FDB, 0x0000_0000, 0x3F80_0000),
+    (0xC149_0FDB, 0x0000_0000, 0x3F80_0000),
 ];
 
 fn trig_result_label_for_bits<'a>(
@@ -7337,15 +7349,23 @@ fn trig_result_label_for_bits<'a>(
     zero: &'a str,
     pos_one: &'a str,
     neg_one: &'a str,
+    pos_half: &'a str,
+    neg_half: &'a str,
     pos_sqrt_half: &'a str,
     neg_sqrt_half: &'a str,
+    pos_sqrt3_half: &'a str,
+    neg_sqrt3_half: &'a str,
 ) -> &'a str {
     match bits {
         0x0000_0000 | 0x8000_0000 => zero,
         0x3F80_0000 => pos_one,
         0xBF80_0000 => neg_one,
+        0x3F00_0000 => pos_half,
+        0xBF00_0000 => neg_half,
         0x3F35_04F3 => pos_sqrt_half,
         0xBF35_04F3 => neg_sqrt_half,
+        0x3F5D_B3D7 => pos_sqrt3_half,
+        0xBF5D_B3D7 => neg_sqrt3_half,
         _ => zero,
     }
 }
