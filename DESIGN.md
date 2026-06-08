@@ -284,6 +284,18 @@ Phase 45 keeps the Phase 44 shared-core runtime and expands validation:
 
 This phase does not implement full argument reduction, precise dynamic trig, or new math functions.
 
+### Phase 46 Moderate Trig Range Reduction
+
+Phase 46 keeps the Phase 44 shared-core runtime and extends the finite trig alias set:
+
+- compact tolerance remains `<= 0.10`; balanced tolerance remains `<= 0.05`
+- validated table-point grid in `[-2pi, +2pi]` remains unchanged
+- scoped moderate aliases now cover common multiples through `±8pi`
+- reports describe the trig policy as table-driven finite matching with scoped moderate aliases, not general libm range reduction
+- constant finite trig still folds with host `f32` and emits no trig helper/table
+
+This phase does not implement continuous argument reduction, precise dynamic trig, or new math functions.
+
 ### Phase 4 Stack-first ABI
 
 Current ABI is stack-first, caller-pushed, upward-growing.

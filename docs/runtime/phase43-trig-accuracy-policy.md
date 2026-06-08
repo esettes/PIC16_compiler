@@ -28,14 +28,17 @@ Validated dynamic points are within `[-2pi, +2pi]`:
 ±2pi
 ```
 
-Phase 45 also tests common moderate out-of-range aliases:
+Phase 46 also tests scoped moderate common-multiple aliases:
 
 ```text
 ±3pi
 ±4pi
+±5pi
+±6pi
+±8pi
 ```
 
-Those aliases are deterministic point matches, not general argument reduction.
+Those aliases are deterministic point matches, not continuous argument reduction.
 
 Tolerance:
 

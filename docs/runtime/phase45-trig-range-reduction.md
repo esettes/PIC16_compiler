@@ -2,7 +2,7 @@
 
 # Phase 45 Trig Range Reduction
 
-Phase 45 does not implement full range reduction.
+Phase 45 does not implement full range reduction. Phase 46 extends the same bounded strategy with more scoped aliases.
 
 Implemented hardening:
 
@@ -12,11 +12,18 @@ Implemented hardening:
   - `-3pi`
   - `4pi`
   - `-4pi`
+- Phase 46 extends aliases through:
+  - `5pi`
+  - `-5pi`
+  - `6pi`
+  - `-6pi`
+  - `8pi`
+  - `-8pi`
 - fallback remains deterministic and coarse outside documented points
 
 Reason:
 
-Full range reduction for arbitrary finite f32 inputs would require more runtime code and likely more helper dependencies. Phase 45 keeps cost bounded while improving common firmware cases.
+Full range reduction for arbitrary finite f32 inputs would require more runtime code and likely more helper dependencies. Phase 45/46 keep cost bounded while improving common firmware cases.
 
 Policy:
 

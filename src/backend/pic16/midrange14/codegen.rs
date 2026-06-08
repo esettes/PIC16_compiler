@@ -5257,7 +5257,7 @@ impl<'a> CodegenContext<'a> {
         self.emit_return_current_frame_value(result_offset, Type::new(ScalarType::F32));
     }
 
-    /// Emits finite Phase 44 shared sinf/cosf core through validated table points plus fallback.
+    /// Emits finite Phase 46 shared sinf/cosf core through validated table points plus fallback.
     fn emit_float_f32_sincos_core_helper(
         &mut self,
         arg_offset: u16,
@@ -5289,7 +5289,7 @@ impl<'a> CodegenContext<'a> {
             neg_sqrt3_half: &result_neg_sqrt3_half_label,
         };
 
-        for (input_bits, sin_bits, cos_bits) in PHASE43_TRIG_VALIDATED_POINTS {
+        for (input_bits, sin_bits, cos_bits) in PHASE46_TRIG_VALIDATED_POINTS {
             let sin_result_label = trig_result_label_for_bits(*sin_bits, &result_labels);
             let cos_result_label = trig_result_label_for_bits(*cos_bits, &result_labels);
             self.emit_f32_sincos_const_case(
@@ -7291,10 +7291,10 @@ fn runtime_helper_variant(
 fn math_accuracy_policy(math_profile: MathProfile) -> &'static str {
     match math_profile {
         MathProfile::Compact => {
-            "compact sqrtf: finite-only compact approximation; sinf/cosf shared-core compact trig tolerance <=0.10 in validated range [-2pi,+2pi], common +/-3pi and +/-4pi aliases, coarse fallback outside"
+            "compact sqrtf: finite-only compact approximation; sinf/cosf shared-core compact trig tolerance <=0.10 in validated range [-2pi,+2pi], scoped moderate aliases through +/-8pi, coarse fallback outside"
         }
         MathProfile::Balanced => {
-            "balanced sqrtf: currently aliases compact finite approximation; sinf/cosf shared-core balanced trig tolerance <=0.05 in validated range [-2pi,+2pi], common +/-3pi and +/-4pi aliases, coarse fallback outside"
+            "balanced sqrtf: currently aliases compact finite approximation; sinf/cosf shared-core balanced trig tolerance <=0.05 in validated range [-2pi,+2pi], scoped moderate aliases through +/-8pi, coarse fallback outside"
         }
         MathProfile::Precise => {
             "precise sqrtf: table-refined finite approximation; validated positives in [0.25, 64.0] within +/-0.03125; sinf/cosf precise dynamic helpers are deferred"
@@ -7302,7 +7302,7 @@ fn math_accuracy_policy(math_profile: MathProfile) -> &'static str {
     }
 }
 
-const PHASE43_TRIG_VALIDATED_POINTS: &[(u32, u32, u32)] = &[
+const PHASE46_TRIG_VALIDATED_POINTS: &[(u32, u32, u32)] = &[
     (0x0000_0000, 0x0000_0000, 0x3F80_0000),
     (0x8000_0000, 0x0000_0000, 0x3F80_0000),
     (0x3F06_0A92, 0x3F00_0000, 0x3F5D_B3D7),
@@ -7329,6 +7329,12 @@ const PHASE43_TRIG_VALIDATED_POINTS: &[(u32, u32, u32)] = &[
     (0xC116_CBE4, 0x0000_0000, 0xBF80_0000),
     (0x4149_0FDB, 0x0000_0000, 0x3F80_0000),
     (0xC149_0FDB, 0x0000_0000, 0x3F80_0000),
+    (0x417B_53D1, 0x0000_0000, 0xBF80_0000),
+    (0xC17B_53D1, 0x0000_0000, 0xBF80_0000),
+    (0x4196_CBE4, 0x0000_0000, 0x3F80_0000),
+    (0xC196_CBE4, 0x0000_0000, 0x3F80_0000),
+    (0x41C9_0FDB, 0x0000_0000, 0x3F80_0000),
+    (0xC1C9_0FDB, 0x0000_0000, 0x3F80_0000),
 ];
 
 struct TrigResultLabels<'a> {

@@ -7823,7 +7823,7 @@ void main(void) {
     assert!(report.contains("variant=wrapper"));
     assert!(report.contains("variant=shared_core_balanced"));
     assert!(report.contains("validated range [-2pi,+2pi]"));
-    assert!(report.contains("common +/-3pi and +/-4pi aliases"));
+    assert!(report.contains("scoped moderate aliases through +/-8pi"));
     assert!(report.contains("__rt_f32_sin -> __rt_f32_sincos_core"));
     assert!(report.contains("__rt_f32_cos -> __rt_f32_sincos_core"));
     assert!(report.contains("__rt_math_sin_qwave_table_balanced"));
@@ -8104,6 +8104,9 @@ fn phase43_sincos_examples_compile_via_picc() {
         "examples/pic16f877a/math_sincos_accuracy.c",
         "examples/pic16f877a/math_sincos_range_reduction.c",
         "examples/pic16f877a/math_sincos_compact_vs_balanced.c",
+        "examples/pic16f877a/math_sincos_range_moderate.c",
+        "examples/pic16f877a/math_sincos_range_profiles.c",
+        "examples/pic16f877a/math_sincos_range_resource_report.c",
     ] {
         let output = compile_example_via_picc_cli_with_extra_args(
             "pic16f877a",

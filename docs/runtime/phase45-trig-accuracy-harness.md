@@ -41,13 +41,19 @@ pi
 -2pi
 ```
 
-Common alias checks:
+Phase 46 extends common alias checks:
 
 ```text
 3pi
 -3pi
 4pi
 -4pi
+5pi
+-5pi
+6pi
+-6pi
+8pi
+-8pi
 ```
 
 This harness proves documented finite behavior on tested inputs only. It does not prove libm-grade argument reduction.

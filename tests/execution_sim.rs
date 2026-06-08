@@ -3204,7 +3204,7 @@ void main(void) {{
     symbol_f32_bits(&core, &map, "result")
 }
 
-fn phase45_trig_points() -> &'static [(&'static str, &'static str, f32)] {
+fn phase46_trig_points() -> &'static [(&'static str, &'static str, f32)] {
     use std::f32::consts::{FRAC_PI_2, FRAC_PI_3, FRAC_PI_4, FRAC_PI_6, PI, TAU};
 
     &[
@@ -3227,10 +3227,16 @@ fn phase45_trig_points() -> &'static [(&'static str, &'static str, f32)] {
         ("negthreepi", "-9.424778f", -3.0 * PI),
         ("fourpi", "12.566371f", 2.0 * TAU),
         ("negfourpi", "-12.566371f", -2.0 * TAU),
+        ("fivepi", "15.707963f", 5.0 * PI),
+        ("negfivepi", "-15.707963f", -5.0 * PI),
+        ("sixpi", "18.849556f", 6.0 * PI),
+        ("negsixpi", "-18.849556f", -6.0 * PI),
+        ("eightpi", "25.132742f", 4.0 * TAU),
+        ("negeightpi", "-25.132742f", -4.0 * TAU),
     ]
 }
 
-fn run_phase45_trig_grid(
+fn run_phase46_trig_grid(
     math_profile: MathProfile,
     fixture: &str,
     points: &[(&'static str, &'static str, f32)],
@@ -3249,11 +3255,11 @@ fn run_phase45_trig_grid(
     run_source_with_math_profile("pic16f877a", fixture, &source, math_profile)
 }
 
-fn assert_phase45_trig_grid(math_profile: MathProfile, tolerance: f32) {
-    for (chunk_index, points) in phase45_trig_points().chunks(2).enumerate() {
-        let (core, map) = run_phase45_trig_grid(
+fn assert_phase46_trig_grid(math_profile: MathProfile, tolerance: f32) {
+    for (chunk_index, points) in phase46_trig_points().chunks(2).enumerate() {
+        let (core, map) = run_phase46_trig_grid(
             math_profile,
-            &format!("phase45-trig-accuracy-{math_profile:?}-{chunk_index}.c"),
+            &format!("phase46-trig-accuracy-{math_profile:?}-{chunk_index}.c"),
             points,
         );
         for (name, _, input) in points {
@@ -3297,22 +3303,22 @@ fn executes_phase43_sinf_cosf_balanced_validated_points() {
 }
 
 #[test]
-fn executes_phase45_trig_accuracy_grid_compact_and_balanced() {
-    assert_phase45_trig_grid(MathProfile::Compact, PHASE43_TRIG_COMPACT_ABS_TOLERANCE);
-    assert_phase45_trig_grid(MathProfile::Balanced, PHASE43_TRIG_BALANCED_ABS_TOLERANCE);
+fn executes_phase46_trig_accuracy_grid_compact_and_balanced() {
+    assert_phase46_trig_grid(MathProfile::Compact, PHASE43_TRIG_COMPACT_ABS_TOLERANCE);
+    assert_phase46_trig_grid(MathProfile::Balanced, PHASE43_TRIG_BALANCED_ABS_TOLERANCE);
 }
 
 #[test]
-fn executes_phase45_balanced_trig_is_no_worse_than_compact_on_grid() {
-    for (chunk_index, points) in phase45_trig_points().chunks(2).enumerate() {
-        let (compact_core, compact_map) = run_phase45_trig_grid(
+fn executes_phase46_balanced_trig_is_no_worse_than_compact_on_grid() {
+    for (chunk_index, points) in phase46_trig_points().chunks(2).enumerate() {
+        let (compact_core, compact_map) = run_phase46_trig_grid(
             MathProfile::Compact,
-            &format!("phase45-trig-compact-compare-{chunk_index}.c"),
+            &format!("phase46-trig-compact-compare-{chunk_index}.c"),
             points,
         );
-        let (balanced_core, balanced_map) = run_phase45_trig_grid(
+        let (balanced_core, balanced_map) = run_phase46_trig_grid(
             MathProfile::Balanced,
-            &format!("phase45-trig-balanced-compare-{chunk_index}.c"),
+            &format!("phase46-trig-balanced-compare-{chunk_index}.c"),
             points,
         );
         for (name, _, input) in points {

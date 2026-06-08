@@ -10,7 +10,7 @@ balanced -> shared_core_balanced, tolerance <= 0.05 on validated grid
 precise  -> dynamic trig deferred
 ```
 
-`compact` and `balanced` both use the Phase 44 shared core. Balanced reports a larger internal ROM table and stricter documented tolerance, but Phase 45 still uses deterministic validated point matches plus coarse fallback. Balanced is tested to be no worse than compact on the validated grid.
+`compact` and `balanced` both use the Phase 44 shared core. Balanced reports a larger internal ROM table and stricter documented tolerance, but Phase 45/46 still use deterministic validated point matches plus coarse fallback. Balanced is tested to be no worse than compact on the validated grid and scoped aliases through `±8pi`.
 
 Reports include:
 
@@ -29,6 +29,7 @@ Constant folding:
 Remaining limits:
 
 - no full argument reduction
+- scoped aliases only through documented moderate multiples
 - no `precise` dynamic trig
 - no NaN/Inf behavior
 - no correctly-rounded IEEE/libm guarantee
