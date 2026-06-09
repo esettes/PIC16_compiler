@@ -2772,13 +2772,13 @@ impl<'a> SemanticAnalyzer<'a> {
         diagnostics: &mut DiagnosticBag,
     ) -> Option<TypedExpr> {
         if let ExprKind::Name(name) = &callee.kind {
-            if matches!(name.as_str(), "sin" | "cos") {
+            if matches!(name.as_str(), "sin" | "cos" | "tan") {
                 diagnostics.error(
                     "semantic",
                     Some(span),
                     format!("unsupported double math function `{name}`"),
                     Some(
-                        "use finite float `sinf` / `cosf`; double math is not supported"
+                        "use finite float `sinf` / `cosf` / `tanf`; double math is not supported"
                             .to_string(),
                     ),
                 );
@@ -3048,14 +3048,14 @@ impl<'a> SemanticAnalyzer<'a> {
                 | "fmaxf"
                 | "sinf"
                 | "cosf"
+                | "tanf"
         )
     }
 
     fn float_math_arg_count(name: &str) -> Option<usize> {
         match name {
-            "fabsf" | "truncf" | "floorf" | "ceilf" | "roundf" | "sqrtf" | "sinf" | "cosf" => {
-                Some(1)
-            }
+            "fabsf" | "truncf" | "floorf" | "ceilf" | "roundf" | "sqrtf" | "sinf" | "cosf"
+            | "tanf" => Some(1),
             "fminf" | "fmaxf" => Some(2),
             _ => None,
         }
@@ -3104,6 +3104,7 @@ impl<'a> SemanticAnalyzer<'a> {
             }
             "sinf" if values.len() == 1 => values[0].sin(),
             "cosf" if values.len() == 1 => values[0].cos(),
+            "tanf" if values.len() == 1 => finite_tanf(values[0]),
             "fminf" if values.len() == 2 => {
                 if values[0] <= values[1] {
                     values[0]

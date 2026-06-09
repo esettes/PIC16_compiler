@@ -13,5 +13,6 @@ float fminf(float a, float b);
 float fmaxf(float a, float b);
 float sinf(float x);
 float cosf(float x);
+float tanf(float x);
 
 #endif
