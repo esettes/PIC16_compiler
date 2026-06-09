@@ -5240,7 +5240,7 @@ impl<'a> CodegenContext<'a> {
         self.program.push(AsmLine::Label(miss_label));
     }
 
-    /// Emits Phase 44 thin sinf/cosf wrappers around the shared trig core.
+    /// Emits Phase 44/48 thin sinf/cosf/tanf wrappers around the shared trig core.
     fn emit_float_f32_trig_wrapper(&mut self, arg_offset: u16, result_offset: u16, mode: u8) {
         let core = RuntimeHelper::F32SinCosCore;
         let info = core.info();
@@ -5268,7 +5268,7 @@ impl<'a> CodegenContext<'a> {
         self.emit_return_current_frame_value(result_offset, Type::new(ScalarType::F32));
     }
 
-    /// Emits finite Phase 47 shared sinf/cosf core through sign-normalized validated points plus fallback.
+    /// Emits finite Phase 48 shared sinf/cosf/tanf core through sign-normalized validated points plus fallback.
     fn emit_float_f32_sincos_core_helper(
         &mut self,
         arg_offset: u16,
@@ -5290,6 +5290,12 @@ impl<'a> CodegenContext<'a> {
         let result_neg_sqrt_half_label = self.unique_label("rt_f32_trig_result_neg_sqrt_half");
         let result_pos_sqrt3_half_label = self.unique_label("rt_f32_trig_result_pos_sqrt3_half");
         let result_neg_sqrt3_half_label = self.unique_label("rt_f32_trig_result_neg_sqrt3_half");
+        let result_pos_tan30_label = self.unique_label("rt_f32_trig_result_pos_tan30");
+        let result_neg_tan30_label = self.unique_label("rt_f32_trig_result_neg_tan30");
+        let result_pos_sqrt3_label = self.unique_label("rt_f32_trig_result_pos_sqrt3");
+        let result_neg_sqrt3_label = self.unique_label("rt_f32_trig_result_neg_sqrt3");
+        let result_pos_tan_sat_label = self.unique_label("rt_f32_trig_result_pos_tan_sat");
+        let result_neg_tan_sat_label = self.unique_label("rt_f32_trig_result_neg_tan_sat");
         let result_labels = TrigResultLabels {
             zero: &result_zero_label,
             pos_one: &result_pos_one_label,
@@ -5300,6 +5306,12 @@ impl<'a> CodegenContext<'a> {
             neg_sqrt_half: &result_neg_sqrt_half_label,
             pos_sqrt3_half: &result_pos_sqrt3_half_label,
             neg_sqrt3_half: &result_neg_sqrt3_half_label,
+            pos_tan30: &result_pos_tan30_label,
+            neg_tan30: &result_neg_tan30_label,
+            pos_sqrt3: &result_pos_sqrt3_label,
+            neg_sqrt3: &result_neg_sqrt3_label,
+            pos_tan_sat: &result_pos_tan_sat_label,
+            neg_tan_sat: &result_neg_tan_sat_label,
         };
 
         self.load_current_frame_byte_to_w(arg_offset + 3);
@@ -5309,11 +5321,14 @@ impl<'a> CodegenContext<'a> {
         self.program.push(AsmLine::Instr(AsmInstr::Andlw(0x7F)));
         self.store_w_to_current_frame_byte(abs_high_offset);
 
-        for (input_bits, sin_bits, cos_bits) in PHASE47_TRIG_POSITIVE_POINTS {
+        for (input_bits, sin_bits, cos_bits, tan_bits) in PHASE48_TRIG_POSITIVE_POINTS {
             let sin_result_label = trig_result_label_for_bits(*sin_bits, &result_labels);
             let neg_sin_result_label =
                 trig_negated_result_label_for_bits(*sin_bits, &result_labels);
             let cos_result_label = trig_result_label_for_bits(*cos_bits, &result_labels);
+            let tan_result_label = trig_result_label_for_bits(*tan_bits, &result_labels);
+            let neg_tan_result_label =
+                trig_negated_result_label_for_bits(*tan_bits, &result_labels);
             self.emit_f32_sincos_abs_const_case(SincosAbsCase {
                 abs_high_offset,
                 byte2_offset: arg_offset + 2,
@@ -5323,10 +5338,20 @@ impl<'a> CodegenContext<'a> {
                 sin_result_label,
                 neg_sin_result_label,
                 cos_result_label,
+                tan_result_label,
+                neg_tan_result_label,
             });
         }
 
         self.program.push(AsmLine::Label(fallback_label));
+        let fallback_sincos_label = self.unique_label("rt_f32_trig_fallback_sincos");
+        self.branch_on_current_frame_bit(
+            mode_offset,
+            1,
+            &result_zero_label,
+            &fallback_sincos_label,
+        );
+        self.program.push(AsmLine::Label(fallback_sincos_label));
         self.emit_current_frame_nonzero_branch(
             mode_offset,
             Type::new(ScalarType::U8),
@@ -5365,6 +5390,24 @@ impl<'a> CodegenContext<'a> {
             .push(AsmLine::Label(result_neg_sqrt3_half_label));
         self.store_i32_const_to_current_frame(result_offset, 0xBF5D_B3D7);
         self.jump_to_label(&finish_label);
+        self.program.push(AsmLine::Label(result_pos_tan30_label));
+        self.store_i32_const_to_current_frame(result_offset, 0x3F13_CD3A);
+        self.jump_to_label(&finish_label);
+        self.program.push(AsmLine::Label(result_neg_tan30_label));
+        self.store_i32_const_to_current_frame(result_offset, 0xBF13_CD3A);
+        self.jump_to_label(&finish_label);
+        self.program.push(AsmLine::Label(result_pos_sqrt3_label));
+        self.store_i32_const_to_current_frame(result_offset, 0x3FDD_B3D7);
+        self.jump_to_label(&finish_label);
+        self.program.push(AsmLine::Label(result_neg_sqrt3_label));
+        self.store_i32_const_to_current_frame(result_offset, 0xBFDD_B3D7);
+        self.jump_to_label(&finish_label);
+        self.program.push(AsmLine::Label(result_pos_tan_sat_label));
+        self.store_i32_const_to_current_frame(result_offset, PHASE48_TAN_SAT_BITS);
+        self.jump_to_label(&finish_label);
+        self.program.push(AsmLine::Label(result_neg_tan_sat_label));
+        self.store_i32_const_to_current_frame(result_offset, 0xC6FF_FE00);
+        self.jump_to_label(&finish_label);
 
         self.program.push(AsmLine::Label(finish_label));
         self.emit_return_current_frame_value(result_offset, f32_ty);
@@ -5374,7 +5417,9 @@ impl<'a> CodegenContext<'a> {
         let hit_label = self.unique_label("rt_f32_trig_const");
         let byte2_label = self.unique_label("rt_f32_trig_byte2");
         let miss_label = self.unique_label("rt_f32_trig_next_const");
+        let sincos_mode_label = self.unique_label("rt_f32_trig_sincos_mode");
         let sin_mode_label = self.unique_label("rt_f32_trig_sin_mode");
+        let tan_mode_label = self.unique_label("rt_f32_trig_tan_mode");
         self.emit_current_frame_byte_equals_branch(
             case.abs_high_offset,
             ((case.input_bits >> 24) & 0x7F) as u8,
@@ -5389,6 +5434,8 @@ impl<'a> CodegenContext<'a> {
             &miss_label,
         );
         self.program.push(AsmLine::Label(hit_label));
+        self.branch_on_current_frame_bit(case.mode_offset, 1, &tan_mode_label, &sincos_mode_label);
+        self.program.push(AsmLine::Label(sincos_mode_label));
         self.emit_current_frame_nonzero_branch(
             case.mode_offset,
             Type::new(ScalarType::U8),
@@ -5401,6 +5448,13 @@ impl<'a> CodegenContext<'a> {
             7,
             case.neg_sin_result_label,
             case.sin_result_label,
+        );
+        self.program.push(AsmLine::Label(tan_mode_label));
+        self.branch_on_current_frame_bit(
+            case.sign_offset,
+            7,
+            case.neg_tan_result_label,
+            case.tan_result_label,
         );
         self.program.push(AsmLine::Label(miss_label));
     }
@@ -8416,6 +8470,7 @@ fn runtime_helper_for_math_call(name: &str) -> Option<RuntimeHelper> {
         "sqrtf" => Some(RuntimeHelper::F32Sqrt),
         "sinf" => Some(RuntimeHelper::F32Sin),
         "cosf" => Some(RuntimeHelper::F32Cos),
+        "tanf" => Some(RuntimeHelper::F32Tan),
         _ => None,
     }
 }
