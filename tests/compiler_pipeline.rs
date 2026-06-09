@@ -8124,6 +8124,144 @@ void main(void) {}
 }
 
 #[test]
+/// Verifies Phase 48 reports `tanf` as a wrapper over the shared trig core and prunes folded/runtime-unused cases.
+fn phase48_tanf_reporting_and_pruning() {
+    let source = r#"
+#include <math.h>
+
+float angle;
+float value;
+
+void main(void) {
+    angle = 0.7853982f;
+    value = tanf(angle);
+}
+"#;
+    let (hex, stdout, report) = compile_profile_source_size_report(
+        "balanced",
+        "phase48-tanf-report",
+        source,
+        &["--math-profile", "balanced"],
+    );
+    let map = read_artifact(&hex, "map");
+    let listing = read_artifact(&hex, "lst");
+    assert!(stdout.contains("Math profile: balanced"));
+    assert!(report.contains("__rt_f32_tan"));
+    assert!(report.contains("__rt_f32_sincos_core"));
+    assert!(report.contains("variant=wrapper"));
+    assert!(report.contains("variant=shared_core_balanced"));
+    assert!(report.contains("__rt_f32_tan -> __rt_f32_sincos_core"));
+    assert!(report.contains("finite tan pole saturation"));
+    assert!(rendered_map_has_symbol(&map, "__rt_f32_tan"));
+    assert!(rendered_map_has_symbol(&map, "__rt_f32_sincos_core"));
+    assert!(!rendered_map_has_symbol(&map, "__rt_f32_sin"));
+    assert!(!rendered_map_has_symbol(&map, "__rt_f32_cos"));
+    assert!(listing.contains("__rt_f32_tan"));
+    assert!(listing.contains("__rt_f32_sincos_core"));
+    assert_hex_is_programmable(&hex);
+
+    let tan_words = parse_runtime_helper_actual_words(&report, "__rt_f32_tan");
+    let core_words = parse_runtime_helper_actual_words(&report, "__rt_f32_sincos_core");
+    assert!(tan_words < 700, "tan wrapper too large: {tan_words}");
+    assert!(
+        core_words < 4500,
+        "shared trig core should not duplicate tan body: {core_words}"
+    );
+
+    let folded = r#"
+#include <math.h>
+
+float value = tanf(0.78539816f);
+
+void main(void) {}
+"#;
+    let (folded_hex, _folded_stdout, folded_report) =
+        compile_profile_source_size_report("balanced", "phase48-tanf-folded", folded, &[]);
+    let folded_map = read_artifact(&folded_hex, "map");
+    assert!(!folded_map.contains("__rt_f32_tan"));
+    assert!(!folded_map.contains("__rt_f32_sincos_core"));
+    assert!(!folded_map.contains("__rt_math_sin_qwave_table"));
+    assert!(!folded_report.contains("__rt_f32_tan"));
+
+    let precise_error = compile_error_with_extra_args(
+        "pic16f877a",
+        "phase48-tanf-precise-deferred.c",
+        source,
+        &["--math-profile", "precise"],
+    );
+    assert!(precise_error.contains("tanf") || precise_error.contains("__rt_f32_tan"));
+    assert!(precise_error.contains("deferred"));
+}
+
+#[test]
+/// Verifies Phase 48 diagnostics reject wrong tan forms and ISR helper calls.
+fn phase48_tanf_diagnostics_are_explicit() {
+    let wrong_count = compile_error(
+        "pic16f877a",
+        "phase48-tanf-wrong-count.c",
+        r#"
+#include <math.h>
+
+float value;
+
+void main(void) {
+    value = tanf();
+}
+"#,
+    );
+    assert!(wrong_count.contains("expects 1 argument"));
+
+    let wrong_type = compile_error(
+        "pic16f877a",
+        "phase48-tanf-wrong-type.c",
+        r#"
+#include <math.h>
+
+float value;
+
+void main(void) {
+    int input = 1;
+    value = tanf(input);
+}
+"#,
+    );
+    assert!(wrong_type.contains("expects a float argument"));
+
+    let unsupported_double = compile_error(
+        "pic16f877a",
+        "phase48-tan-unsupported.c",
+        r#"
+#include <math.h>
+
+float value;
+
+void main(void) {
+    value = tan(1.0f);
+}
+"#,
+    );
+    assert!(unsupported_double.contains("unsupported double math function `tan`"));
+
+    let isr = compile_error(
+        "pic16f877a",
+        "phase48-tanf-isr.c",
+        r#"
+#include <math.h>
+
+float value;
+
+void __interrupt isr(void) {
+    value = tanf(value);
+}
+
+void main(void) {}
+"#,
+    );
+    assert!(isr.contains("cannot call `tanf`"));
+    assert!(isr.contains("float math helper"));
+}
+
+#[test]
 /// Verifies checked-in Phase 43 sin/cos examples compile and report resources.
 fn phase43_sincos_examples_compile_via_picc() {
     for example in [
@@ -8143,6 +8281,24 @@ fn phase43_sincos_examples_compile_via_picc() {
         "examples/pic16f877a/math_sincos_core_size_recovery.c",
         "examples/pic16f877a/math_sincos_alias_compaction.c",
         "examples/pic16f877a/math_sincos_phase47_resource_report.c",
+    ] {
+        let output = compile_example_via_picc_cli_with_extra_args(
+            "pic16f877a",
+            example,
+            &["--size", "--memory-report", "--verify-hex"],
+        );
+        assert_hex_is_programmable(&output);
+    }
+}
+
+#[test]
+/// Verifies checked-in Phase 48 tangent examples compile and report resources.
+fn phase48_tanf_examples_compile_via_picc() {
+    for example in [
+        "examples/pic16f877a/math_tanf_basic.c",
+        "examples/pic16f877a/math_tanf_profile_compare.c",
+        "examples/pic16f877a/math_tanf_poles.c",
+        "examples/pic16f877a/math_tanf_resource_report.c",
     ] {
         let output = compile_example_via_picc_cli_with_extra_args(
             "pic16f877a",
