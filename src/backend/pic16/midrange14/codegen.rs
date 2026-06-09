@@ -7294,7 +7294,10 @@ fn runtime_helper_variant(
             MathProfile::Precise => "precise_table_refined",
         };
     }
-    if matches!(helper, RuntimeHelper::F32Sin | RuntimeHelper::F32Cos) {
+    if matches!(
+        helper,
+        RuntimeHelper::F32Sin | RuntimeHelper::F32Cos | RuntimeHelper::F32Tan
+    ) {
         return "wrapper";
     }
     if helper == RuntimeHelper::F32SinCosCore {
@@ -7317,34 +7320,46 @@ fn runtime_helper_variant(
 fn math_accuracy_policy(math_profile: MathProfile) -> &'static str {
     match math_profile {
         MathProfile::Compact => {
-            "compact sqrtf: finite-only compact approximation; sinf/cosf shared-core compact trig tolerance <=0.10 in validated range [-2pi,+2pi], scoped moderate aliases through +/-8pi, coarse fallback outside"
+            "compact sqrtf: finite-only compact approximation; sinf/cosf/tanf shared-core compact trig tolerance <=0.10 for sin/cos and <=0.20 for non-pole tan in validated range [-2pi,+2pi], scoped moderate aliases through +/-8pi, finite tan pole saturation, coarse fallback outside"
         }
         MathProfile::Balanced => {
-            "balanced sqrtf: currently aliases compact finite approximation; sinf/cosf shared-core balanced trig tolerance <=0.05 in validated range [-2pi,+2pi], scoped moderate aliases through +/-8pi, coarse fallback outside"
+            "balanced sqrtf: currently aliases compact finite approximation; sinf/cosf/tanf shared-core balanced trig tolerance <=0.05 for sin/cos and <=0.10 for non-pole tan in validated range [-2pi,+2pi], scoped moderate aliases through +/-8pi, finite tan pole saturation, coarse fallback outside"
         }
         MathProfile::Precise => {
-            "precise sqrtf: table-refined finite approximation; validated positives in [0.25, 64.0] within +/-0.03125; sinf/cosf precise dynamic helpers are deferred"
+            "precise sqrtf: table-refined finite approximation; validated positives in [0.25, 64.0] within +/-0.03125; sinf/cosf/tanf precise dynamic helpers are deferred"
         }
     }
 }
 
-const PHASE47_TRIG_POSITIVE_POINTS: &[(u32, u32, u32)] = &[
-    (0x0000_0000, 0x0000_0000, 0x3F80_0000),
-    (0x3F06_0A92, 0x3F00_0000, 0x3F5D_B3D7),
-    (0x3F49_0FDB, 0x3F35_04F3, 0x3F35_04F3),
-    (0x3F86_0A92, 0x3F5D_B3D7, 0x3F00_0000),
-    (0x3FC9_0FDA, 0x3F80_0000, 0x0000_0000),
-    (0x4006_0A92, 0x3F5D_B3D7, 0xBF00_0000),
-    (0x4016_CBE4, 0x3F35_04F3, 0xBF35_04F3),
-    (0x4027_8D36, 0x3F00_0000, 0xBF5D_B3D7),
-    (0x4049_0FDB, 0x0000_0000, 0xBF80_0000),
-    (0x4096_CBE4, 0xBF80_0000, 0x0000_0000),
-    (0x40C9_0FDB, 0x0000_0000, 0x3F80_0000),
-    (0x4116_CBE4, 0x0000_0000, 0xBF80_0000),
-    (0x4149_0FDB, 0x0000_0000, 0x3F80_0000),
-    (0x417B_53D1, 0x0000_0000, 0xBF80_0000),
-    (0x4196_CBE4, 0x0000_0000, 0x3F80_0000),
-    (0x41C9_0FDB, 0x0000_0000, 0x3F80_0000),
+const PHASE48_TAN_SAT_BITS: u32 = 0x46FF_FE00;
+
+const PHASE48_TRIG_POSITIVE_POINTS: &[(u32, u32, u32, u32)] = &[
+    (0x0000_0000, 0x0000_0000, 0x3F80_0000, 0x0000_0000),
+    (0x3F06_0A92, 0x3F00_0000, 0x3F5D_B3D7, 0x3F13_CD3A),
+    (0x3F49_0FDB, 0x3F35_04F3, 0x3F35_04F3, 0x3F80_0000),
+    (0x3F86_0A92, 0x3F5D_B3D7, 0x3F00_0000, 0x3FDD_B3D7),
+    (
+        0x3FC9_0FDA,
+        0x3F80_0000,
+        0x0000_0000,
+        PHASE48_TAN_SAT_BITS,
+    ),
+    (0x4006_0A92, 0x3F5D_B3D7, 0xBF00_0000, 0xBFDD_B3D7),
+    (0x4016_CBE4, 0x3F35_04F3, 0xBF35_04F3, 0xBF80_0000),
+    (0x4027_8D36, 0x3F00_0000, 0xBF5D_B3D7, 0xBF13_CD3A),
+    (0x4049_0FDB, 0x0000_0000, 0xBF80_0000, 0x0000_0000),
+    (
+        0x4096_CBE4,
+        0xBF80_0000,
+        0x0000_0000,
+        PHASE48_TAN_SAT_BITS,
+    ),
+    (0x40C9_0FDB, 0x0000_0000, 0x3F80_0000, 0x0000_0000),
+    (0x4116_CBE4, 0x0000_0000, 0xBF80_0000, 0x0000_0000),
+    (0x4149_0FDB, 0x0000_0000, 0x3F80_0000, 0x0000_0000),
+    (0x417B_53D1, 0x0000_0000, 0xBF80_0000, 0x0000_0000),
+    (0x4196_CBE4, 0x0000_0000, 0x3F80_0000, 0x0000_0000),
+    (0x41C9_0FDB, 0x0000_0000, 0x3F80_0000, 0x0000_0000),
 ];
 
 struct TrigResultLabels<'a> {
@@ -7357,6 +7372,12 @@ struct TrigResultLabels<'a> {
     neg_sqrt_half: &'a str,
     pos_sqrt3_half: &'a str,
     neg_sqrt3_half: &'a str,
+    pos_tan30: &'a str,
+    neg_tan30: &'a str,
+    pos_sqrt3: &'a str,
+    neg_sqrt3: &'a str,
+    pos_tan_sat: &'a str,
+    neg_tan_sat: &'a str,
 }
 
 struct SincosAbsCase<'a> {
@@ -7368,6 +7389,8 @@ struct SincosAbsCase<'a> {
     sin_result_label: &'a str,
     neg_sin_result_label: &'a str,
     cos_result_label: &'a str,
+    tan_result_label: &'a str,
+    neg_tan_result_label: &'a str,
 }
 
 fn trig_result_label_for_bits<'a>(bits: u32, labels: &'a TrigResultLabels<'a>) -> &'a str {
@@ -7381,6 +7404,12 @@ fn trig_result_label_for_bits<'a>(bits: u32, labels: &'a TrigResultLabels<'a>) -
         0xBF35_04F3 => labels.neg_sqrt_half,
         0x3F5D_B3D7 => labels.pos_sqrt3_half,
         0xBF5D_B3D7 => labels.neg_sqrt3_half,
+        0x3F13_CD3A => labels.pos_tan30,
+        0xBF13_CD3A => labels.neg_tan30,
+        0x3FDD_B3D7 => labels.pos_sqrt3,
+        0xBFDD_B3D7 => labels.neg_sqrt3,
+        PHASE48_TAN_SAT_BITS => labels.pos_tan_sat,
+        0xC6FF_FE00 => labels.neg_tan_sat,
         _ => labels.zero,
     }
 }
