@@ -19,7 +19,7 @@ ABI:
 - stack and memory reports include helper cost
 - Phase 44 makes `__rt_f32_sin` and `__rt_f32_cos` wrappers around one shared core
 
-Implementation is finite table-refined, not libm. The shared core matches validated f32 angle spellings and returns validated raw f32 results. Phase 45 adds `pi/6`, `pi/3`, `2pi/3`, `5pi/6`, negative mirrors, and common `±3pi` / `±4pi` aliases. Phase 46 extends scoped common-multiple aliases through `±8pi`. Fallback returns a coarse finite value.
+Implementation is finite table-refined, not libm. The shared core matches validated f32 angle spellings and returns validated raw f32 results. Phase 45 adds `pi/6`, `pi/3`, `2pi/3`, `5pi/6`, negative mirrors, and common `±3pi` / `±4pi` aliases. Phase 46 extends scoped common-multiple aliases through `±8pi`. Phase 47 stores those aliases with sign-normalized matching to reduce duplicated branches. Fallback returns a coarse finite value.
 
 Internal ROM table emitted when dynamic trig is used:
 

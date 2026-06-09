@@ -296,6 +296,18 @@ Phase 46 keeps the Phase 44 shared-core runtime and extends the finite trig alia
 
 This phase does not implement continuous argument reduction, precise dynamic trig, or new math functions.
 
+### Phase 47 Trig Shared-Core Size Recovery
+
+Phase 47 keeps Phase 46 behavior but compacts the shared trig core:
+
+- alias matching is sign-normalized, so positive and negative angle spellings no longer duplicate full branches
+- `sin(-x)` applies sign after one magnitude match; `cos(-x)` reuses the positive magnitude result
+- scoped aliases through `±8pi` remain validated
+- compact and balanced tolerances remain unchanged
+- balanced `__rt_f32_sincos_core` drops below the Phase 46 `4429`-word baseline and meets the preferred `<=3500`-word target
+
+This phase does not add `tanf`, continuous argument reduction, precise dynamic trig, or new math functions.
+
 ### Phase 4 Stack-first ABI
 
 Current ABI is stack-first, caller-pushed, upward-growing.

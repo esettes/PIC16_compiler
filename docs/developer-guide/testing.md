@@ -24,7 +24,7 @@ Phase 41 min/max validation lives in the same suites. It checks `fminf` / `fmaxf
 
 Phase 42 compare/minmax compaction validation checks compact `__rt_f32_cmp` helper size, absence of `__rt_f32_min` / `__rt_f32_max` wrappers, report visibility under balanced and small runtime profiles, checked-in compaction examples, and simulator execution for positive, negative, zero, equality, and min/max cases.
 
-Phase 46 trig validation checks finite `sinf` / `cosf` semantic diagnostics, shared-core pruning, internal ROM math table visibility, compact/balanced math-profile reporting, ISR rejection, checked-in examples, size reduction, simulator accuracy grids for compact/balanced profiles, and scoped moderate aliases through `±8pi`.
+Phase 47 trig validation checks finite `sinf` / `cosf` semantic diagnostics, shared-core pruning, internal ROM math table visibility, compact/balanced math-profile reporting, ISR rejection, checked-in examples, core size recovery, simulator accuracy grids for compact/balanced profiles, and scoped moderate aliases through `±8pi`.
 
 Phase 26 validation lives in `tests/compiler_pipeline.rs` and `src/hex/intel_hex.rs`. It checks raw and symbolic config words, duplicate/unknown config diagnostics, config emission in `.hex/.map/.lst`, final HEX validation reports, program overflow rejection without `--size`, programmer command printing, configurable Makefile flashing, and hardware smoke examples.
 

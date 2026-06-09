@@ -37,3 +37,5 @@ precise:  dynamic trig deferred
 ```
 
 Constant folded `sinf` / `cosf` still use host `f32` and emit no trig helper or ROM table, so folded constants may be more accurate than dynamic compact/balanced runtime.
+
+Phase 47 reuses this validation to prove alias compaction did not change Phase 46 behavior.

@@ -28,9 +28,9 @@ Phase 44 `sinf` / `cosf` use the math profile and share one runtime core:
 - `balanced`: default `variant=shared_core_balanced`, larger internal ROM quarter-wave table, validated tolerance `<= 0.05`
 - `precise`: dynamic `sinf` / `cosf` is deferred and diagnoses; constant folded calls still fold at compile time
 
-Phase 46 validates compact and balanced trig over the documented point grid in `[-2pi,+2pi]` plus scoped common aliases through `±8pi`. Balanced uses the same shared-core point matcher and must be no worse than compact on the validated grid; it does not imply continuous or libm-grade argument reduction.
+Phase 46 validates compact and balanced trig over the documented point grid in `[-2pi,+2pi]` plus scoped common aliases through `±8pi`. Phase 47 compacts those aliases with one sign-normalized matcher. Balanced uses the same shared-core point matcher and must be no worse than compact on the validated grid; it does not imply continuous or libm-grade argument reduction.
 
-Runtime profile still controls helper sharing/size strategy. Math profile controls numerical policy. Do not use `--math-profile precise` for dynamic trig in Phase 46.
+Runtime profile still controls helper sharing/size strategy. Math profile controls numerical policy. Do not use `--math-profile precise` for dynamic trig in Phase 47.
 
 ## Report Workflow
 

@@ -27,3 +27,5 @@ This is not continuous argument reduction. The helper matches documented f32 lit
 Reason:
 
 Full argument reduction would require larger runtime code and more helper dependencies. Phase 46 improves common firmware angles while preserving bounded PIC16 resource cost.
+
+Phase 47 keeps this behavior and reduces core size by matching positive magnitudes once, then applying sine sign for negative inputs.

@@ -23,7 +23,7 @@ Implemented hardening:
 
 Reason:
 
-Full range reduction for arbitrary finite f32 inputs would require more runtime code and likely more helper dependencies. Phase 45/46 keep cost bounded while improving common firmware cases.
+Full range reduction for arbitrary finite f32 inputs would require more runtime code and likely more helper dependencies. Phase 45/46 keep cost bounded while improving common firmware cases. Phase 47 reduces duplicated positive/negative branches but does not expand the range policy.
 
 Policy:
 

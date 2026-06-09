@@ -56,4 +56,6 @@ Phase 46 extends common alias checks:
 -8pi
 ```
 
+Phase 47 keeps the same harness and validates the sign-normalized compact core against the same points.
+
 This harness proves documented finite behavior on tested inputs only. It does not prove libm-grade argument reduction.
