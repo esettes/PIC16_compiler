@@ -5257,7 +5257,7 @@ impl<'a> CodegenContext<'a> {
         self.emit_return_current_frame_value(result_offset, Type::new(ScalarType::F32));
     }
 
-    /// Emits finite Phase 46 shared sinf/cosf core through validated table points plus fallback.
+    /// Emits finite Phase 47 shared sinf/cosf core through sign-normalized validated points plus fallback.
     fn emit_float_f32_sincos_core_helper(
         &mut self,
         arg_offset: u16,
@@ -5266,6 +5266,8 @@ impl<'a> CodegenContext<'a> {
     ) {
         let f32_ty = Type::new(ScalarType::F32);
         let result_offset = local_base;
+        let sign_offset = result_offset + 4;
+        let abs_high_offset = result_offset + 5;
         let fallback_label = self.unique_label("rt_f32_trig_fallback");
         let finish_label = self.unique_label("rt_f32_trig_finish");
         let result_zero_label = self.unique_label("rt_f32_trig_result_zero");
@@ -5289,14 +5291,26 @@ impl<'a> CodegenContext<'a> {
             neg_sqrt3_half: &result_neg_sqrt3_half_label,
         };
 
-        for (input_bits, sin_bits, cos_bits) in PHASE46_TRIG_VALIDATED_POINTS {
+        self.load_current_frame_byte_to_w(arg_offset + 3);
+        self.program.push(AsmLine::Instr(AsmInstr::Andlw(0x80)));
+        self.store_w_to_current_frame_byte(sign_offset);
+        self.load_current_frame_byte_to_w(arg_offset + 3);
+        self.program.push(AsmLine::Instr(AsmInstr::Andlw(0x7F)));
+        self.store_w_to_current_frame_byte(abs_high_offset);
+
+        for (input_bits, sin_bits, cos_bits) in PHASE47_TRIG_POSITIVE_POINTS {
             let sin_result_label = trig_result_label_for_bits(*sin_bits, &result_labels);
+            let neg_sin_result_label =
+                trig_negated_result_label_for_bits(*sin_bits, &result_labels);
             let cos_result_label = trig_result_label_for_bits(*cos_bits, &result_labels);
-            self.emit_f32_sincos_const_case(
-                arg_offset,
+            self.emit_f32_sincos_abs_const_case(
+                abs_high_offset,
+                arg_offset + 2,
                 mode_offset,
+                sign_offset,
                 *input_bits,
                 sin_result_label,
+                neg_sin_result_label,
                 cos_result_label,
             );
         }
@@ -5345,26 +5359,30 @@ impl<'a> CodegenContext<'a> {
         self.emit_return_current_frame_value(result_offset, f32_ty);
     }
 
-    fn emit_f32_sincos_const_case(
+    fn emit_f32_sincos_abs_const_case(
         &mut self,
-        arg_offset: u16,
+        abs_high_offset: u16,
+        byte2_offset: u16,
         mode_offset: u16,
+        sign_offset: u16,
         input_bits: u32,
         sin_result_label: &str,
+        neg_sin_result_label: &str,
         cos_result_label: &str,
     ) {
         let hit_label = self.unique_label("rt_f32_trig_const");
         let byte2_label = self.unique_label("rt_f32_trig_byte2");
         let miss_label = self.unique_label("rt_f32_trig_next_const");
+        let sin_mode_label = self.unique_label("rt_f32_trig_sin_mode");
         self.emit_current_frame_byte_equals_branch(
-            arg_offset + 3,
-            ((input_bits >> 24) & 0xFF) as u8,
+            abs_high_offset,
+            ((input_bits >> 24) & 0x7F) as u8,
             &byte2_label,
             &miss_label,
         );
         self.program.push(AsmLine::Label(byte2_label));
         self.emit_current_frame_byte_equals_branch(
-            arg_offset + 2,
+            byte2_offset,
             ((input_bits >> 16) & 0xFF) as u8,
             &hit_label,
             &miss_label,
@@ -5374,8 +5392,10 @@ impl<'a> CodegenContext<'a> {
             mode_offset,
             Type::new(ScalarType::U8),
             cos_result_label,
-            sin_result_label,
+            &sin_mode_label,
         );
+        self.program.push(AsmLine::Label(sin_mode_label));
+        self.branch_on_current_frame_bit(sign_offset, 7, neg_sin_result_label, sin_result_label);
         self.program.push(AsmLine::Label(miss_label));
     }
 
@@ -7302,39 +7322,23 @@ fn math_accuracy_policy(math_profile: MathProfile) -> &'static str {
     }
 }
 
-const PHASE46_TRIG_VALIDATED_POINTS: &[(u32, u32, u32)] = &[
+const PHASE47_TRIG_POSITIVE_POINTS: &[(u32, u32, u32)] = &[
     (0x0000_0000, 0x0000_0000, 0x3F80_0000),
-    (0x8000_0000, 0x0000_0000, 0x3F80_0000),
     (0x3F06_0A92, 0x3F00_0000, 0x3F5D_B3D7),
-    (0xBF06_0A92, 0xBF00_0000, 0x3F5D_B3D7),
     (0x3F49_0FDB, 0x3F35_04F3, 0x3F35_04F3),
-    (0xBF49_0FDB, 0xBF35_04F3, 0x3F35_04F3),
     (0x3F86_0A92, 0x3F5D_B3D7, 0x3F00_0000),
-    (0xBF86_0A92, 0xBF5D_B3D7, 0x3F00_0000),
     (0x3FC9_0FDA, 0x3F80_0000, 0x0000_0000),
-    (0xBFC9_0FDA, 0xBF80_0000, 0x0000_0000),
     (0x4006_0A92, 0x3F5D_B3D7, 0xBF00_0000),
-    (0xC006_0A92, 0xBF5D_B3D7, 0xBF00_0000),
     (0x4016_CBE4, 0x3F35_04F3, 0xBF35_04F3),
-    (0xC016_CBE4, 0xBF35_04F3, 0xBF35_04F3),
     (0x4027_8D36, 0x3F00_0000, 0xBF5D_B3D7),
-    (0xC027_8D36, 0xBF00_0000, 0xBF5D_B3D7),
     (0x4049_0FDB, 0x0000_0000, 0xBF80_0000),
-    (0xC049_0FDB, 0x0000_0000, 0xBF80_0000),
     (0x4096_CBE4, 0xBF80_0000, 0x0000_0000),
-    (0xC096_CBE4, 0x3F80_0000, 0x0000_0000),
     (0x40C9_0FDB, 0x0000_0000, 0x3F80_0000),
-    (0xC0C9_0FDB, 0x0000_0000, 0x3F80_0000),
     (0x4116_CBE4, 0x0000_0000, 0xBF80_0000),
-    (0xC116_CBE4, 0x0000_0000, 0xBF80_0000),
     (0x4149_0FDB, 0x0000_0000, 0x3F80_0000),
-    (0xC149_0FDB, 0x0000_0000, 0x3F80_0000),
     (0x417B_53D1, 0x0000_0000, 0xBF80_0000),
-    (0xC17B_53D1, 0x0000_0000, 0xBF80_0000),
     (0x4196_CBE4, 0x0000_0000, 0x3F80_0000),
-    (0xC196_CBE4, 0x0000_0000, 0x3F80_0000),
     (0x41C9_0FDB, 0x0000_0000, 0x3F80_0000),
-    (0xC1C9_0FDB, 0x0000_0000, 0x3F80_0000),
 ];
 
 struct TrigResultLabels<'a> {
@@ -7361,6 +7365,14 @@ fn trig_result_label_for_bits<'a>(bits: u32, labels: &'a TrigResultLabels<'a>) -
         0x3F5D_B3D7 => labels.pos_sqrt3_half,
         0xBF5D_B3D7 => labels.neg_sqrt3_half,
         _ => labels.zero,
+    }
+}
+
+fn trig_negated_result_label_for_bits<'a>(bits: u32, labels: &'a TrigResultLabels<'a>) -> &'a str {
+    if bits == 0 || bits == 0x8000_0000 {
+        labels.zero
+    } else {
+        trig_result_label_for_bits(bits ^ 0x8000_0000, labels)
     }
 }
 
