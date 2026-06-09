@@ -2,7 +2,7 @@
 
 # Phase 43 Trig Accuracy Policy
 
-Phase 43 `sinf` / `cosf` are finite approximations:
+Phase 43 `sinf` / `cosf` and Phase 48 `tanf` are finite approximations:
 
 - radians input
 - no NaN
@@ -45,8 +45,17 @@ Tolerance:
 ```text
 compact:  absolute error <= 0.10 on validated simulator points
 balanced: absolute error <= 0.05 on validated simulator points
-precise:  dynamic sinf/cosf deferred
+precise:  dynamic sinf/cosf/tanf deferred
 ```
+
+Phase 48 tangent uses separate non-pole tolerances:
+
+```text
+compact tanf:  absolute error <= 0.20
+balanced tanf: absolute error <= 0.10
+```
+
+Odd `pi/2` pole-like tangent inputs return finite `±32767.0f` saturation and are tested as policy points, not against host `tan`.
 
 Constant folded trig may be more accurate because semantic folding uses host `f32::sin` / `f32::cos`.
 

@@ -23,7 +23,7 @@ Implemented hardening:
 
 Reason:
 
-Full range reduction for arbitrary finite f32 inputs would require more runtime code and likely more helper dependencies. Phase 45/46 keep cost bounded while improving common firmware cases. Phase 47 reduces duplicated positive/negative branches but does not expand the range policy.
+Full range reduction for arbitrary finite f32 inputs would require more runtime code and likely more helper dependencies. Phase 45/46 keep cost bounded while improving common firmware cases. Phase 47 reduces duplicated positive/negative branches but does not expand the range policy. Phase 48 reuses the same scoped range policy for `tanf` and adds finite pole saturation instead of Inf.
 
 Policy:
 

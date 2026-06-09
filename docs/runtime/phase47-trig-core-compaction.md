@@ -2,7 +2,7 @@
 
 # Phase 47 Trig Core Compaction
 
-Phase 47 reduces the shared `sinf` / `cosf` runtime core after Phase 46 expanded aliases through `±8pi`.
+Phase 47 reduces the shared `sinf` / `cosf` runtime core after Phase 46 expanded aliases through `±8pi`. Phase 48 keeps that sin/cos-only core compact by emitting TAN-mode code only when `tanf` is used.
 
 Phase 46 cost reference:
 
@@ -28,3 +28,5 @@ math helpers total:   4263 words
 ```
 
 Behavior is unchanged from Phase 46. This remains finite table matching plus coarse fallback, not libm range reduction.
+
+With Phase 48, dynamic `tanf` uses the same core with mode `TAN`, adds validated tangent return constants and finite pole saturation, and still avoids duplicating the complete sin/cos runtime.

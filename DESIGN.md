@@ -308,6 +308,23 @@ Phase 47 keeps Phase 46 behavior but compacts the shared trig core:
 
 This phase does not add `tanf`, continuous argument reduction, precise dynamic trig, or new math functions.
 
+### Phase 48 Finite `tanf`
+
+Phase 48 adds finite-only tangent without duplicating the trig runtime:
+
+- `include/math.h` declares `float tanf(float x)`
+- `tanf` is radians-based, finite-only, approximate, and not libm/IEEE tangent
+- dynamic `tanf` lowers to a small `__rt_f32_tan` wrapper
+- `__rt_f32_tan` calls the existing page-safe `__rt_f32_sincos_core` with mode `TAN`
+- the shared core emits TAN-mode code only when `tanf` is actually used, so sin/cos-only programs keep the Phase 47 compact core
+- no `__rt_f32_div` is pulled for tangent; validated tangent values are returned through the same point matcher
+- odd `pi/2` pole-like inputs return finite saturation `+32767.0f` or `-32767.0f`
+- compact non-pole tangent tolerance is `<= 0.20`; balanced non-pole tolerance is `<= 0.10`
+- dynamic `precise` `tanf` is deferred and diagnoses like precise dynamic `sinf` / `cosf`
+- reports show `__rt_f32_tan -> __rt_f32_sincos_core`, selected math profile, helper sizes, ROM table reuse, and the finite pole policy
+
+This phase does not add `atanf`, `atan2f`, continuous argument reduction, `double`, or full ISO C `math.h`.
+
 ### Phase 4 Stack-first ABI
 
 Current ABI is stack-first, caller-pushed, upward-growing.

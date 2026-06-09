@@ -2,7 +2,7 @@
 
 # Phase 46 Trig Moderate Range Reduction
 
-Phase 46 keeps finite table-driven `sinf` / `cosf` and extends moderate range handling through scoped aliases.
+Phase 46 keeps finite table-driven `sinf` / `cosf` and extends moderate range handling through scoped aliases. Phase 48 reuses the same aliases for `tanf`.
 
 Policy:
 
@@ -18,8 +18,11 @@ Implemented behavior:
 
 - base validated point grid remains in `[-2pi,+2pi]`
 - common multiples `±3pi`, `±4pi`, `±5pi`, `±6pi`, and `±8pi` are matched deterministically
-- compact tolerance remains `<= 0.10`
-- balanced tolerance remains `<= 0.05`
+- compact `sinf` / `cosf` tolerance remains `<= 0.10`
+- balanced `sinf` / `cosf` tolerance remains `<= 0.05`
+- Phase 48 compact `tanf` non-pole tolerance is `<= 0.20`
+- Phase 48 balanced `tanf` non-pole tolerance is `<= 0.10`
+- Phase 48 pole-like tangent aliases return finite `±32767.0f` saturation
 - precise dynamic trig remains deferred
 
 This is not continuous argument reduction. The helper matches documented f32 literal spellings used by the simulator harness. Other finite values outside the documented grid use the coarse finite fallback.

@@ -21,7 +21,7 @@ Estado actual del proyecto estudiado:
 - dispositivos soportados: `PIC16F628A` y `PIC16F877A`
 - salida principal: Intel HEX programable
 - salidas auxiliares: `.map`, `.lst` y volcados opcionales de AST, IR y ASM
-- estado funcional actual: Phase 47
+- estado funcional actual: Phase 48
 
 ---
 
@@ -551,6 +551,7 @@ Se introduce un subconjunto pequeño de funciones como:
 - `fmaxf`
 - `sinf`
 - `cosf`
+- `tanf`
 
 La lección es importante: una biblioteca matemática para un microcontrolador no tiene por qué parecerse a la de un sistema operativo grande.
 
@@ -590,11 +591,13 @@ La trigonometría llega con una estrategia clara:
 
 Esto evita duplicar lógica y reduce el coste de runtime.
 
-## Phase 46 y 47: reducción de rango moderada y compactación
+## Phase 46, 47 y 48: reducción de rango moderada, compactación y `tanf`
 
 Phase 46 mejora la evaluación trigonométrica para rangos más amplios sin abandonar el modelo finito y controlado.
 
 Phase 47 recupera tamaño del runtime: el core compartido deja de duplicar ramas positivas y negativas, compara magnitudes positivas una vez y aplica signo sólo para `sinf`.
+
+Phase 48 añade `tanf` como wrapper pequeño sobre el mismo core compartido. No usa `Inf` en los polos: los casos tipo `pi/2` saturan a un valor finito documentado.
 
 Estas fases son muy representativas del estilo del proyecto:
 
@@ -650,7 +653,7 @@ El proyecto no promete:
 
 - `double`
 - ISO C completo
-- `tanf`, `atanf`, `powf`, `expf` o `logf`
+- `atanf`, `powf`, `expf` o `logf`
 - NaN/Inf completos
 - punteros de código genéricos
 

@@ -40,4 +40,4 @@ Use `--math-profile precise` on PIC16F877A when the validated range matters. Use
 
 Phase 41 `fminf` / `fmaxf` do not use the math accuracy profile. They are finite selection helpers built on the existing f32 comparison policy.
 
-Phase 43 `sinf` / `cosf` do use the math profile for compact versus balanced table size/tolerance. They remain finite approximations and do not affect the Phase 40 `sqrtf` tolerance.
+Phase 43/48 `sinf` / `cosf` / `tanf` do use the math profile for compact versus balanced table size/tolerance. They remain finite approximations and do not affect the Phase 40 `sqrtf` tolerance.

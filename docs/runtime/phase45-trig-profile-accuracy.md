@@ -12,6 +12,16 @@ precise  -> dynamic trig deferred
 
 `compact` and `balanced` both use the Phase 44 shared core. Balanced reports a larger internal ROM table and stricter documented tolerance, but Phase 45/46 still use deterministic validated point matches plus coarse fallback. Balanced is tested to be no worse than compact on the validated grid and scoped aliases through `±8pi`.
 
+Phase 48 adds `tanf` to the same policy:
+
+```text
+compact tanf  -> non-pole tolerance <= 0.20
+balanced tanf -> non-pole tolerance <= 0.10
+precise tanf  -> dynamic helper deferred
+```
+
+Odd `pi/2` pole-like tangent inputs are not compared to host `tan`; they return finite `±32767.0f` saturation.
+
 Reports include:
 
 ```text
@@ -22,7 +32,7 @@ __rt_f32_sincos_core: category=math variant=shared_core_balanced ...
 
 Constant folding:
 
-- finite constant `sinf` / `cosf` calls fold with host `f32`
+- finite constant `sinf` / `cosf` / `tanf` calls fold with host `f32`, with tangent clamped to the finite saturation policy
 - folded calls emit no trig helper and no trig ROM table
 - folded results may be more accurate than dynamic compact/balanced runtime
 
@@ -31,5 +41,6 @@ Remaining limits:
 - no full argument reduction
 - scoped aliases only through documented moderate multiples
 - no `precise` dynamic trig
+- no infinite tangent poles
 - no NaN/Inf behavior
 - no correctly-rounded IEEE/libm guarantee

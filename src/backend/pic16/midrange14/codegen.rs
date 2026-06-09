@@ -1478,8 +1478,7 @@ impl<'a> CodegenContext<'a> {
         if matches!(
             helper,
             RuntimeHelper::F32Sin | RuntimeHelper::F32Cos | RuntimeHelper::F32Tan
-        )
-            && self.options.math_profile == MathProfile::Precise
+        ) && self.options.math_profile == MathProfile::Precise
         {
             diagnostics.error(
                 "backend",
@@ -4204,16 +4203,12 @@ impl<'a> CodegenContext<'a> {
 
     /// Emits internal Phase 43/44 finite trig lookup data as RETLW ROM tables.
     fn emit_runtime_math_tables(&mut self) {
-        if !self
-            .used_helpers
-            .iter()
-            .any(|helper| {
-                matches!(
-                    helper,
-                    RuntimeHelper::F32Sin | RuntimeHelper::F32Cos | RuntimeHelper::F32Tan
-                )
-            })
-        {
+        if !self.used_helpers.iter().any(|helper| {
+            matches!(
+                helper,
+                RuntimeHelper::F32Sin | RuntimeHelper::F32Cos | RuntimeHelper::F32Tan
+            )
+        }) {
             return;
         }
         if self.options.math_profile == MathProfile::Precise {
@@ -7421,22 +7416,12 @@ const PHASE48_TRIG_POSITIVE_POINTS: &[(u32, u32, u32, u32)] = &[
     (0x3F06_0A92, 0x3F00_0000, 0x3F5D_B3D7, 0x3F13_CD3A),
     (0x3F49_0FDB, 0x3F35_04F3, 0x3F35_04F3, 0x3F80_0000),
     (0x3F86_0A92, 0x3F5D_B3D7, 0x3F00_0000, 0x3FDD_B3D7),
-    (
-        0x3FC9_0FDA,
-        0x3F80_0000,
-        0x0000_0000,
-        PHASE48_TAN_SAT_BITS,
-    ),
+    (0x3FC9_0FDA, 0x3F80_0000, 0x0000_0000, PHASE48_TAN_SAT_BITS),
     (0x4006_0A92, 0x3F5D_B3D7, 0xBF00_0000, 0xBFDD_B3D7),
     (0x4016_CBE4, 0x3F35_04F3, 0xBF35_04F3, 0xBF80_0000),
     (0x4027_8D36, 0x3F00_0000, 0xBF5D_B3D7, 0xBF13_CD3A),
     (0x4049_0FDB, 0x0000_0000, 0xBF80_0000, 0x0000_0000),
-    (
-        0x4096_CBE4,
-        0xBF80_0000,
-        0x0000_0000,
-        PHASE48_TAN_SAT_BITS,
-    ),
+    (0x4096_CBE4, 0xBF80_0000, 0x0000_0000, PHASE48_TAN_SAT_BITS),
     (0x40C9_0FDB, 0x0000_0000, 0x3F80_0000, 0x0000_0000),
     (0x4116_CBE4, 0x0000_0000, 0xBF80_0000, 0x0000_0000),
     (0x4149_0FDB, 0x0000_0000, 0x3F80_0000, 0x0000_0000),

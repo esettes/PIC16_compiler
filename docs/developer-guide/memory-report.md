@@ -46,7 +46,7 @@ picc --target pic16f877a -I include --memory-report-file build/app.mem -o build/
 - selected math profile and math helper variant names
 - selected math accuracy policy, including the Phase 40 precise `sqrtf` validated tolerance
 - float helper contribution when `__rt_f32_*` helpers are emitted
-- math helper contribution when `fabsf`, `truncf`, `floorf`, `ceilf`, `roundf`, `sqrtf`, `sinf`, or `cosf` pull finite math helpers
+- math helper contribution when `fabsf`, `truncf`, `floorf`, `ceilf`, `roundf`, `sqrtf`, `sinf`, `cosf`, or `tanf` pull finite math helpers
 - `fminf` / `fmaxf` contribution through compact `__rt_f32_cmp` plus call-site select code
 - internal Phase 43 ROM math tables such as `__rt_math_sin_qwave_table_balanced`
 - ROM float table contribution when `const __rom float[]` objects are emitted
@@ -121,7 +121,7 @@ __rt_f32_sqrt: category=math variant=compact_approx ...
 
 `compact` and default `balanced` currently use `variant=compact_approx` for dynamic `sqrtf`. `precise` uses `variant=precise_table_refined` and reports the Phase 40 validated tolerance for positive inputs in `[0.25, 64.0]`. The precise variant is larger than compact, so compare `Program words` and `math` helper totals before selecting it on small targets.
 
-For Phase 47 trig, reports show `__rt_f32_sin` / `__rt_f32_cos` wrappers, shared `__rt_f32_sincos_core`, the selected internal ROM table, and the accuracy policy string. `compact` reports `variant=shared_core_compact` for the core; default `balanced` reports `variant=shared_core_balanced`. The accuracy string records scoped moderate aliases through `±8pi`; the core implementation stores them as sign-normalized matches. Dynamic precise-profile trig is deferred and fails before a final report is emitted.
+For Phase 48 trig, reports show `__rt_f32_sin` / `__rt_f32_cos` / `__rt_f32_tan` wrappers when used, shared `__rt_f32_sincos_core`, the selected internal ROM table, and the accuracy policy string. `compact` reports `variant=shared_core_compact` for the core; default `balanced` reports `variant=shared_core_balanced`. The accuracy string records scoped moderate aliases through `±8pi`, non-pole tangent tolerance, and finite tangent pole saturation. The core implementation stores aliases as sign-normalized matches and emits TAN-mode code only when `tanf` is used. Dynamic precise-profile trig is deferred and fails before a final report is emitted.
 
 Phase 34/35 add variant/dependency detail for compact helpers:
 

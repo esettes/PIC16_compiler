@@ -2,13 +2,14 @@
 
 # Phase 44 Trig Shared Core
 
-Phase 44 reduces finite `sinf` / `cosf` runtime duplication.
+Phase 44 reduces finite `sinf` / `cosf` runtime duplication. Phase 48 extends the same core to `tanf`.
 
 Runtime helpers:
 
 ```text
 __rt_f32_sin           wrapper
 __rt_f32_cos           wrapper
+__rt_f32_tan           wrapper (Phase 48)
 __rt_f32_sincos_core   shared core
 ```
 
@@ -17,6 +18,7 @@ The wrappers push the raw f32 input plus a one-byte mode:
 ```text
 mode=0 -> sin
 mode=1 -> cos
+mode=2 -> tan (Phase 48)
 ```
 
 The shared core performs the Phase 43 finite table-point matching and coarse fallback. It does not change accuracy policy:
@@ -26,20 +28,22 @@ The shared core performs the Phase 43 finite table-point matching and coarse fal
 - precise dynamic trig remains deferred
 - no NaN/Inf/errno/fenv/libm behavior is provided
 
-Phase 45 expands simulator validation for the shared core and adds deterministic aliases for common `±3pi` / `±4pi` inputs. Phase 46 extends that scoped alias set through `±8pi`. Phase 47 compacts the alias matcher by comparing positive magnitudes once and applying sign only for sine. It does not add continuous or libm-grade range reduction.
+Phase 45 expands simulator validation for the shared core and adds deterministic aliases for common `±3pi` / `±4pi` inputs. Phase 46 extends that scoped alias set through `±8pi`. Phase 47 compacts the alias matcher by comparing positive magnitudes once and applying sign only for sine. Phase 48 emits TAN-mode branches only when dynamic `tanf` is used; tangent pole-like points return finite `±32767.0f` saturation. It does not add continuous or libm-grade range reduction.
 
 Pruning rules:
 
 - no dynamic trig call: no wrappers, no shared core, no trig ROM table
 - only `sinf`: `__rt_f32_sin` + shared core + selected table
 - only `cosf`: `__rt_f32_cos` + shared core + selected table
-- both: both wrappers + one shared core + one selected table
+- only `tanf`: `__rt_f32_tan` + shared core + selected table
+- multiple trig calls: only requested wrappers + one shared core + one selected table
 
 Reports show wrapper dependencies:
 
 ```text
 __rt_f32_sin -> __rt_f32_sincos_core
 __rt_f32_cos -> __rt_f32_sincos_core
+__rt_f32_tan -> __rt_f32_sincos_core
 ```
 
-The benefit is program-memory reduction when `sinf` and `cosf` are used together. Cost moves from two large duplicated helpers to small wrappers plus one shared core.
+The benefit is program-memory reduction when trig functions are used together. Cost moves from large duplicated helpers to small wrappers plus one shared core.

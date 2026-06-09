@@ -26,6 +26,8 @@ Phase 42 compare/minmax compaction validation checks compact `__rt_f32_cmp` help
 
 Phase 47 trig validation checks finite `sinf` / `cosf` semantic diagnostics, shared-core pruning, internal ROM math table visibility, compact/balanced math-profile reporting, ISR rejection, checked-in examples, core size recovery, simulator accuracy grids for compact/balanced profiles, and scoped moderate aliases through `±8pi`.
 
+Phase 48 tangent validation checks `tanf` semantic diagnostics, precise-profile deferral, wrapper-to-core dependency reporting, sin/cos wrapper pruning for tan-only programs, checked-in examples, simulator accuracy for compact/balanced non-pole points, finite `±32767.0f` pole saturation, and ROM/struct/function-return paths.
+
 Phase 26 validation lives in `tests/compiler_pipeline.rs` and `src/hex/intel_hex.rs`. It checks raw and symbolic config words, duplicate/unknown config diagnostics, config emission in `.hex/.map/.lst`, final HEX validation reports, program overflow rejection without `--size`, programmer command printing, configurable Makefile flashing, and hardware smoke examples.
 
 Phase 25 resource-report validation lives in `tests/compiler_pipeline.rs`. It checks target descriptors, `--size`, `--memory-report`, `--memory-report-file`, map/listing resource summaries, helper contribution reporting, ROM-table contribution reporting, data-RAM overflow diagnostics, and stack-region overflow diagnostics.

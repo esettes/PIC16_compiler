@@ -15,6 +15,7 @@ fminf -> __rt_f32_cmp + local select
 fmaxf -> __rt_f32_cmp + local select
 sinf  -> __rt_f32_sin
 cosf  -> __rt_f32_cos
+tanf  -> __rt_f32_tan
 ```
 
 Constant calls fold before IR lowering when their arguments are finite raw f32 constants.

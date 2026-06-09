@@ -17,7 +17,9 @@ Rules:
 
 - `cos(-x)` reuses `cos(x)`
 - `sin(-x)` returns `-sin(x)`
+- Phase 48 `tan(-x)` returns `-tan(x)` for validated non-pole aliases
 - zero sine stays raw zero in the finite-only model
+- odd `pi/2` tangent aliases return finite `±32767.0f` saturation in Phase 48
 - no NaN/Inf handling is added
 - precise dynamic trig remains deferred
 
