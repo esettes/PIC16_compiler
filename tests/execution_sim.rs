@@ -3496,3 +3496,92 @@ void main(void) {
             <= PHASE43_TRIG_BALANCED_ABS_TOLERANCE
     );
 }
+
+#[test]
+fn executes_phase48_tanf_non_pole_points_compact_and_balanced() {
+    use std::f32::consts::{FRAC_PI_3, FRAC_PI_4, FRAC_PI_6, PI};
+
+    let cases = [
+        ("zero", "0.0f", 0.0_f32),
+        ("pi6", "0.5235988f", FRAC_PI_6),
+        ("pi4", "0.7853982f", FRAC_PI_4),
+        ("negpi4", "-0.7853982f", -FRAC_PI_4),
+        ("pi3", "1.0471976f", FRAC_PI_3),
+        ("negpi3", "-1.0471976f", -FRAC_PI_3),
+        ("pi", "3.1415927f", PI),
+        ("negpi", "-3.1415927f", -PI),
+        ("threepi", "9.424778f", 3.0 * PI),
+        ("negthreepi", "-9.424778f", -3.0 * PI),
+    ];
+
+    for (profile, tolerance) in [
+        (MathProfile::Compact, PHASE48_TAN_COMPACT_ABS_TOLERANCE),
+        (MathProfile::Balanced, PHASE48_TAN_BALANCED_ABS_TOLERANCE),
+    ] {
+        for (name, literal, input) in cases {
+            let bits = dynamic_trig_result_bits(profile, name, "tanf", literal);
+            let expected = input.tan();
+            assert!(
+                f32_abs_error(bits, expected) <= tolerance,
+                "{profile:?} tan {name}: actual={} expected={expected}",
+                f32::from_bits(bits)
+            );
+        }
+    }
+}
+
+#[test]
+fn executes_phase48_tanf_pole_saturation_policy() {
+    for (name, literal, expected_bits) in [
+        ("pi2", "1.5707963f", PHASE48_TAN_SAT_BITS),
+        ("negpi2", "-1.5707963f", PHASE48_NEG_TAN_SAT_BITS),
+        ("threepi2", "4.712389f", PHASE48_TAN_SAT_BITS),
+        ("negthreepi2", "-4.712389f", PHASE48_NEG_TAN_SAT_BITS),
+    ] {
+        assert_eq!(
+            dynamic_trig_result_bits(MathProfile::Balanced, name, "tanf", literal),
+            expected_bits,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn executes_phase48_tanf_rom_struct_and_function_paths() {
+    let (core, map) = run_source_with_math_profile(
+        "pic16f877a",
+        "phase48-tanf-rom-struct-call.c",
+        r#"
+#include <math.h>
+
+const __rom float angles[] = {
+    0.7853982f,
+    1.0471976f
+};
+
+struct Trig {
+    float t;
+};
+
+struct Trig result;
+float returned;
+
+float tan_from_function(float angle) {
+    return tanf(angle);
+}
+
+void main(void) {
+    float angle;
+    angle = angles[0];
+    result.t = tanf(angle);
+    returned = tan_from_function(angle);
+}
+"#,
+        MathProfile::Balanced,
+    );
+    assert!(map.contains("__rt_f32_tan"));
+    assert!(map.contains("__rt_f32_sincos_core"));
+    assert!(map.contains("__rt_math_sin_qwave_table_balanced"));
+    assert!(f32_abs_error(symbol_f32_bits(&core, &map, "result"), 1.0) <= 0.10);
+    assert!(f32_abs_error(symbol_f32_bits(&core, &map, "returned"), 1.0) <= 0.10);
+}
