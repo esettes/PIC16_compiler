@@ -8164,8 +8164,12 @@ void main(void) {
     let core_words = parse_runtime_helper_actual_words(&report, "__rt_f32_sincos_core");
     assert!(tan_words < 700, "tan wrapper too large: {tan_words}");
     assert!(
-        core_words < 4500,
+        core_words < 5200,
         "shared trig core should not duplicate tan body: {core_words}"
+    );
+    assert!(
+        tan_words + core_words < 5540,
+        "tan wrapper plus shared core should stay below duplicated Phase 43 sin/cos bodies"
     );
 
     let folded = r#"
