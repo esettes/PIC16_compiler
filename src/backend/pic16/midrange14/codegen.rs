@@ -5279,6 +5279,7 @@ impl<'a> CodegenContext<'a> {
         let result_offset = local_base;
         let sign_offset = result_offset + 4;
         let abs_high_offset = result_offset + 5;
+        let include_tan = self.used_helpers.contains(&RuntimeHelper::F32Tan);
         let fallback_label = self.unique_label("rt_f32_trig_fallback");
         let finish_label = self.unique_label("rt_f32_trig_finish");
         let result_zero_label = self.unique_label("rt_f32_trig_result_zero");
@@ -5334,6 +5335,7 @@ impl<'a> CodegenContext<'a> {
                 byte2_offset: arg_offset + 2,
                 mode_offset,
                 sign_offset,
+                include_tan,
                 input_bits: *input_bits,
                 sin_result_label,
                 neg_sin_result_label,
@@ -7439,6 +7441,7 @@ struct SincosAbsCase<'a> {
     byte2_offset: u16,
     mode_offset: u16,
     sign_offset: u16,
+    include_tan: bool,
     input_bits: u32,
     sin_result_label: &'a str,
     neg_sin_result_label: &'a str,
