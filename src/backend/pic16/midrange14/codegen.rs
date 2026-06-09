@@ -5403,7 +5403,7 @@ impl<'a> CodegenContext<'a> {
         self.store_i32_const_to_current_frame(result_offset, 0xBFDD_B3D7);
         self.jump_to_label(&finish_label);
         self.program.push(AsmLine::Label(result_pos_tan_sat_label));
-        self.store_i32_const_to_current_frame(result_offset, PHASE48_TAN_SAT_BITS);
+        self.store_i32_const_to_current_frame(result_offset, i64::from(PHASE48_TAN_SAT_BITS));
         self.jump_to_label(&finish_label);
         self.program.push(AsmLine::Label(result_neg_tan_sat_label));
         self.store_i32_const_to_current_frame(result_offset, 0xC6FF_FE00);
