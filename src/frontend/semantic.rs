@@ -7944,6 +7944,19 @@ fn zero_expr(span: Span) -> TypedExpr {
     }
 }
 
+const FINITE_TANF_SATURATION: f32 = 32767.0;
+
+fn finite_tanf(value: f32) -> f32 {
+    let tan = value.tan();
+    if tan.is_finite() {
+        tan.clamp(-FINITE_TANF_SATURATION, FINITE_TANF_SATURATION)
+    } else if value.is_sign_negative() {
+        -FINITE_TANF_SATURATION
+    } else {
+        FINITE_TANF_SATURATION
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ValueCategory, eval_integer_constant_expr, is_constant_expression};

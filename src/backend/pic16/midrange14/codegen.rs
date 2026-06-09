@@ -1475,18 +1475,21 @@ impl<'a> CodegenContext<'a> {
             }
             return;
         }
-        if matches!(helper, RuntimeHelper::F32Sin | RuntimeHelper::F32Cos)
+        if matches!(
+            helper,
+            RuntimeHelper::F32Sin | RuntimeHelper::F32Cos | RuntimeHelper::F32Tan
+        )
             && self.options.math_profile == MathProfile::Precise
         {
             diagnostics.error(
                 "backend",
                 None,
                 format!(
-                    "`{}` is deferred for --math-profile precise in phase 44",
+                    "`{}` is deferred for --math-profile precise in phase 48",
                     helper.label()
                 ),
                 Some(
-                    "use --math-profile compact or balanced for finite table-driven sinf/cosf"
+                    "use --math-profile compact or balanced for finite table-driven sinf/cosf/tanf"
                         .to_string(),
                 ),
             );
@@ -4204,7 +4207,12 @@ impl<'a> CodegenContext<'a> {
         if !self
             .used_helpers
             .iter()
-            .any(|helper| matches!(helper, RuntimeHelper::F32Sin | RuntimeHelper::F32Cos))
+            .any(|helper| {
+                matches!(
+                    helper,
+                    RuntimeHelper::F32Sin | RuntimeHelper::F32Cos | RuntimeHelper::F32Tan
+                )
+            })
         {
             return;
         }
@@ -4484,6 +4492,9 @@ impl<'a> CodegenContext<'a> {
             }
             RuntimeHelper::F32Cos => {
                 self.emit_float_f32_trig_wrapper(arg0_offset, local_base, 1);
+            }
+            RuntimeHelper::F32Tan => {
+                self.emit_float_f32_trig_wrapper(arg0_offset, local_base, 2);
             }
             RuntimeHelper::F32SinCosCore => {
                 self.emit_float_f32_sincos_core_helper(arg0_offset, arg0_offset + 4, local_base);
