@@ -5346,20 +5346,29 @@ impl<'a> CodegenContext<'a> {
         }
 
         self.program.push(AsmLine::Label(fallback_label));
-        let fallback_sincos_label = self.unique_label("rt_f32_trig_fallback_sincos");
-        self.branch_on_current_frame_bit(
-            mode_offset,
-            1,
-            &result_zero_label,
-            &fallback_sincos_label,
-        );
-        self.program.push(AsmLine::Label(fallback_sincos_label));
-        self.emit_current_frame_nonzero_branch(
-            mode_offset,
-            Type::new(ScalarType::U8),
-            &result_pos_one_label,
-            &result_zero_label,
-        );
+        if include_tan {
+            let fallback_sincos_label = self.unique_label("rt_f32_trig_fallback_sincos");
+            self.branch_on_current_frame_bit(
+                mode_offset,
+                1,
+                &result_zero_label,
+                &fallback_sincos_label,
+            );
+            self.program.push(AsmLine::Label(fallback_sincos_label));
+            self.emit_current_frame_nonzero_branch(
+                mode_offset,
+                Type::new(ScalarType::U8),
+                &result_pos_one_label,
+                &result_zero_label,
+            );
+        } else {
+            self.emit_current_frame_nonzero_branch(
+                mode_offset,
+                Type::new(ScalarType::U8),
+                &result_pos_one_label,
+                &result_zero_label,
+            );
+        }
 
         self.program.push(AsmLine::Label(result_zero_label));
         self.clear_current_frame_slot(result_offset, f32_ty);
@@ -5392,24 +5401,26 @@ impl<'a> CodegenContext<'a> {
             .push(AsmLine::Label(result_neg_sqrt3_half_label));
         self.store_i32_const_to_current_frame(result_offset, 0xBF5D_B3D7);
         self.jump_to_label(&finish_label);
-        self.program.push(AsmLine::Label(result_pos_tan30_label));
-        self.store_i32_const_to_current_frame(result_offset, 0x3F13_CD3A);
-        self.jump_to_label(&finish_label);
-        self.program.push(AsmLine::Label(result_neg_tan30_label));
-        self.store_i32_const_to_current_frame(result_offset, 0xBF13_CD3A);
-        self.jump_to_label(&finish_label);
-        self.program.push(AsmLine::Label(result_pos_sqrt3_label));
-        self.store_i32_const_to_current_frame(result_offset, 0x3FDD_B3D7);
-        self.jump_to_label(&finish_label);
-        self.program.push(AsmLine::Label(result_neg_sqrt3_label));
-        self.store_i32_const_to_current_frame(result_offset, 0xBFDD_B3D7);
-        self.jump_to_label(&finish_label);
-        self.program.push(AsmLine::Label(result_pos_tan_sat_label));
-        self.store_i32_const_to_current_frame(result_offset, i64::from(PHASE48_TAN_SAT_BITS));
-        self.jump_to_label(&finish_label);
-        self.program.push(AsmLine::Label(result_neg_tan_sat_label));
-        self.store_i32_const_to_current_frame(result_offset, 0xC6FF_FE00);
-        self.jump_to_label(&finish_label);
+        if include_tan {
+            self.program.push(AsmLine::Label(result_pos_tan30_label));
+            self.store_i32_const_to_current_frame(result_offset, 0x3F13_CD3A);
+            self.jump_to_label(&finish_label);
+            self.program.push(AsmLine::Label(result_neg_tan30_label));
+            self.store_i32_const_to_current_frame(result_offset, 0xBF13_CD3A);
+            self.jump_to_label(&finish_label);
+            self.program.push(AsmLine::Label(result_pos_sqrt3_label));
+            self.store_i32_const_to_current_frame(result_offset, 0x3FDD_B3D7);
+            self.jump_to_label(&finish_label);
+            self.program.push(AsmLine::Label(result_neg_sqrt3_label));
+            self.store_i32_const_to_current_frame(result_offset, 0xBFDD_B3D7);
+            self.jump_to_label(&finish_label);
+            self.program.push(AsmLine::Label(result_pos_tan_sat_label));
+            self.store_i32_const_to_current_frame(result_offset, i64::from(PHASE48_TAN_SAT_BITS));
+            self.jump_to_label(&finish_label);
+            self.program.push(AsmLine::Label(result_neg_tan_sat_label));
+            self.store_i32_const_to_current_frame(result_offset, 0xC6FF_FE00);
+            self.jump_to_label(&finish_label);
+        }
 
         self.program.push(AsmLine::Label(finish_label));
         self.emit_return_current_frame_value(result_offset, f32_ty);
@@ -5436,14 +5447,28 @@ impl<'a> CodegenContext<'a> {
             &miss_label,
         );
         self.program.push(AsmLine::Label(hit_label));
-        self.branch_on_current_frame_bit(case.mode_offset, 1, &tan_mode_label, &sincos_mode_label);
-        self.program.push(AsmLine::Label(sincos_mode_label));
-        self.emit_current_frame_nonzero_branch(
-            case.mode_offset,
-            Type::new(ScalarType::U8),
-            case.cos_result_label,
-            &sin_mode_label,
-        );
+        if case.include_tan {
+            self.branch_on_current_frame_bit(
+                case.mode_offset,
+                1,
+                &tan_mode_label,
+                &sincos_mode_label,
+            );
+            self.program.push(AsmLine::Label(sincos_mode_label));
+            self.emit_current_frame_nonzero_branch(
+                case.mode_offset,
+                Type::new(ScalarType::U8),
+                case.cos_result_label,
+                &sin_mode_label,
+            );
+        } else {
+            self.emit_current_frame_nonzero_branch(
+                case.mode_offset,
+                Type::new(ScalarType::U8),
+                case.cos_result_label,
+                &sin_mode_label,
+            );
+        }
         self.program.push(AsmLine::Label(sin_mode_label));
         self.branch_on_current_frame_bit(
             case.sign_offset,
@@ -5451,13 +5476,15 @@ impl<'a> CodegenContext<'a> {
             case.neg_sin_result_label,
             case.sin_result_label,
         );
-        self.program.push(AsmLine::Label(tan_mode_label));
-        self.branch_on_current_frame_bit(
-            case.sign_offset,
-            7,
-            case.neg_tan_result_label,
-            case.tan_result_label,
-        );
+        if case.include_tan {
+            self.program.push(AsmLine::Label(tan_mode_label));
+            self.branch_on_current_frame_bit(
+                case.sign_offset,
+                7,
+                case.neg_tan_result_label,
+                case.tan_result_label,
+            );
+        }
         self.program.push(AsmLine::Label(miss_label));
     }
 
