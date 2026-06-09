@@ -5303,16 +5303,16 @@ impl<'a> CodegenContext<'a> {
             let neg_sin_result_label =
                 trig_negated_result_label_for_bits(*sin_bits, &result_labels);
             let cos_result_label = trig_result_label_for_bits(*cos_bits, &result_labels);
-            self.emit_f32_sincos_abs_const_case(
+            self.emit_f32_sincos_abs_const_case(SincosAbsCase {
                 abs_high_offset,
-                arg_offset + 2,
+                byte2_offset: arg_offset + 2,
                 mode_offset,
                 sign_offset,
-                *input_bits,
+                input_bits: *input_bits,
                 sin_result_label,
                 neg_sin_result_label,
                 cos_result_label,
-            );
+            });
         }
 
         self.program.push(AsmLine::Label(fallback_label));
@@ -5359,43 +5359,38 @@ impl<'a> CodegenContext<'a> {
         self.emit_return_current_frame_value(result_offset, f32_ty);
     }
 
-    fn emit_f32_sincos_abs_const_case(
-        &mut self,
-        abs_high_offset: u16,
-        byte2_offset: u16,
-        mode_offset: u16,
-        sign_offset: u16,
-        input_bits: u32,
-        sin_result_label: &str,
-        neg_sin_result_label: &str,
-        cos_result_label: &str,
-    ) {
+    fn emit_f32_sincos_abs_const_case(&mut self, case: SincosAbsCase<'_>) {
         let hit_label = self.unique_label("rt_f32_trig_const");
         let byte2_label = self.unique_label("rt_f32_trig_byte2");
         let miss_label = self.unique_label("rt_f32_trig_next_const");
         let sin_mode_label = self.unique_label("rt_f32_trig_sin_mode");
         self.emit_current_frame_byte_equals_branch(
-            abs_high_offset,
-            ((input_bits >> 24) & 0x7F) as u8,
+            case.abs_high_offset,
+            ((case.input_bits >> 24) & 0x7F) as u8,
             &byte2_label,
             &miss_label,
         );
         self.program.push(AsmLine::Label(byte2_label));
         self.emit_current_frame_byte_equals_branch(
-            byte2_offset,
-            ((input_bits >> 16) & 0xFF) as u8,
+            case.byte2_offset,
+            ((case.input_bits >> 16) & 0xFF) as u8,
             &hit_label,
             &miss_label,
         );
         self.program.push(AsmLine::Label(hit_label));
         self.emit_current_frame_nonzero_branch(
-            mode_offset,
+            case.mode_offset,
             Type::new(ScalarType::U8),
-            cos_result_label,
+            case.cos_result_label,
             &sin_mode_label,
         );
         self.program.push(AsmLine::Label(sin_mode_label));
-        self.branch_on_current_frame_bit(sign_offset, 7, neg_sin_result_label, sin_result_label);
+        self.branch_on_current_frame_bit(
+            case.sign_offset,
+            7,
+            case.neg_sin_result_label,
+            case.sin_result_label,
+        );
         self.program.push(AsmLine::Label(miss_label));
     }
 
@@ -7351,6 +7346,17 @@ struct TrigResultLabels<'a> {
     neg_sqrt_half: &'a str,
     pos_sqrt3_half: &'a str,
     neg_sqrt3_half: &'a str,
+}
+
+struct SincosAbsCase<'a> {
+    abs_high_offset: u16,
+    byte2_offset: u16,
+    mode_offset: u16,
+    sign_offset: u16,
+    input_bits: u32,
+    sin_result_label: &'a str,
+    neg_sin_result_label: &'a str,
+    cos_result_label: &'a str,
 }
 
 fn trig_result_label_for_bits<'a>(bits: u32, labels: &'a TrigResultLabels<'a>) -> &'a str {

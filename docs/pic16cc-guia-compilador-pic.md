@@ -21,7 +21,7 @@ Estado actual del proyecto estudiado:
 - dispositivos soportados: `PIC16F628A` y `PIC16F877A`
 - salida principal: Intel HEX programable
 - salidas auxiliares: `.map`, `.lst` y volcados opcionales de AST, IR y ASM
-- estado funcional actual: Phase 46
+- estado funcional actual: Phase 47
 
 ---
 
@@ -590,11 +590,13 @@ La trigonometría llega con una estrategia clara:
 
 Esto evita duplicar lógica y reduce el coste de runtime.
 
-## Phase 46: reducción de rango moderada
+## Phase 46 y 47: reducción de rango moderada y compactación
 
-La fase más reciente mejora la evaluación trigonométrica para rangos más amplios sin abandonar el modelo finito y controlado.
+Phase 46 mejora la evaluación trigonométrica para rangos más amplios sin abandonar el modelo finito y controlado.
 
-Esta fase es muy representativa del estilo del proyecto:
+Phase 47 recupera tamaño del runtime: el core compartido deja de duplicar ramas positivas y negativas, compara magnitudes positivas una vez y aplica signo sólo para `sinf`.
+
+Estas fases son muy representativas del estilo del proyecto:
 
 - no promete lo imposible
 - documenta lo que hace
