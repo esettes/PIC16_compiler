@@ -7973,6 +7973,39 @@ void main(void) {
 }
 
 #[test]
+/// Verifies Phase 47 sign-normalized alias matching recovers shared trig core size.
+fn phase47_sincos_core_size_recovered_after_alias_compaction() {
+    let source = r#"
+#include <math.h>
+
+float angle;
+float s;
+float c;
+
+void main(void) {
+    angle = 25.132742f;
+    s = sinf(angle);
+    c = cosf(angle);
+}
+"#;
+    let (_hex, _stdout, report) = compile_profile_source_size_report(
+        "balanced",
+        "phase47-sincos-size-recovery",
+        source,
+        &["--math-profile", "balanced"],
+    );
+    let core_words = parse_runtime_helper_actual_words(&report, "__rt_f32_sincos_core");
+    assert!(
+        core_words < 4429,
+        "shared core should be below Phase 46 baseline: {core_words}"
+    );
+    assert!(
+        core_words <= 3500,
+        "shared core missed preferred Phase 47 target: {core_words}"
+    );
+}
+
+#[test]
 /// Verifies Phase 43 compact/balanced profile reporting and precise deferral for dynamic trig.
 fn phase43_sincos_profile_policy_is_explicit() {
     let source = r#"
@@ -8107,6 +8140,9 @@ fn phase43_sincos_examples_compile_via_picc() {
         "examples/pic16f877a/math_sincos_range_moderate.c",
         "examples/pic16f877a/math_sincos_range_profiles.c",
         "examples/pic16f877a/math_sincos_range_resource_report.c",
+        "examples/pic16f877a/math_sincos_core_size_recovery.c",
+        "examples/pic16f877a/math_sincos_alias_compaction.c",
+        "examples/pic16f877a/math_sincos_phase47_resource_report.c",
     ] {
         let output = compile_example_via_picc_cli_with_extra_args(
             "pic16f877a",
