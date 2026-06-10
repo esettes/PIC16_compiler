@@ -3580,7 +3580,7 @@ void main(void) {
         MathProfile::Balanced,
     );
     assert!(map.contains("__rt_f32_tan"));
-    assert!(map.contains("__rt_f32_sincos_core"));
+    assert!(map.contains("__rt_f32_tan_core"));
     assert!(map.contains("__rt_math_sin_qwave_table_balanced"));
     assert!(f32_abs_error(symbol_f32_bits(&core, &map, "result"), 1.0) <= 0.10);
     assert!(f32_abs_error(symbol_f32_bits(&core, &map, "returned"), 1.0) <= 0.10);

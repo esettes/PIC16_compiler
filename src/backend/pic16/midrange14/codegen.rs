@@ -5522,6 +5522,125 @@ impl<'a> CodegenContext<'a> {
         self.program.push(AsmLine::Label(miss_label));
     }
 
+    /// Emits finite Phase 49 tangent core with isolated TAN-specific matching and saturation.
+    fn emit_float_f32_tan_core_helper(&mut self, arg_offset: u16, local_base: u16) {
+        let f32_ty = Type::new(ScalarType::F32);
+        let result_offset = local_base;
+        let sign_offset = result_offset + 4;
+        let abs_high_offset = result_offset + 5;
+        let finish_label = self.unique_label("rt_f32_tan_finish");
+        let result_zero_label = self.unique_label("rt_f32_tan_result_zero");
+        let result_pos_one_label = self.unique_label("rt_f32_tan_result_pos_one");
+        let result_neg_one_label = self.unique_label("rt_f32_tan_result_neg_one");
+        let result_pos_half_label = self.unique_label("rt_f32_tan_unused_pos_half");
+        let result_neg_half_label = self.unique_label("rt_f32_tan_unused_neg_half");
+        let result_pos_sqrt_half_label = self.unique_label("rt_f32_tan_unused_pos_sqrt_half");
+        let result_neg_sqrt_half_label = self.unique_label("rt_f32_tan_unused_neg_sqrt_half");
+        let result_pos_sqrt3_half_label = self.unique_label("rt_f32_tan_unused_pos_sqrt3_half");
+        let result_neg_sqrt3_half_label = self.unique_label("rt_f32_tan_unused_neg_sqrt3_half");
+        let result_pos_tan30_label = self.unique_label("rt_f32_tan_result_pos_tan30");
+        let result_neg_tan30_label = self.unique_label("rt_f32_tan_result_neg_tan30");
+        let result_pos_sqrt3_label = self.unique_label("rt_f32_tan_result_pos_sqrt3");
+        let result_neg_sqrt3_label = self.unique_label("rt_f32_tan_result_neg_sqrt3");
+        let result_pos_tan_sat_label = self.unique_label("rt_f32_tan_result_pos_sat");
+        let result_neg_tan_sat_label = self.unique_label("rt_f32_tan_result_neg_sat");
+        let labels = TrigResultLabels {
+            zero: &result_zero_label,
+            pos_one: &result_pos_one_label,
+            neg_one: &result_neg_one_label,
+            pos_half: &result_pos_half_label,
+            neg_half: &result_neg_half_label,
+            pos_sqrt_half: &result_pos_sqrt_half_label,
+            neg_sqrt_half: &result_neg_sqrt_half_label,
+            pos_sqrt3_half: &result_pos_sqrt3_half_label,
+            neg_sqrt3_half: &result_neg_sqrt3_half_label,
+            pos_tan30: &result_pos_tan30_label,
+            neg_tan30: &result_neg_tan30_label,
+            pos_sqrt3: &result_pos_sqrt3_label,
+            neg_sqrt3: &result_neg_sqrt3_label,
+            pos_tan_sat: &result_pos_tan_sat_label,
+            neg_tan_sat: &result_neg_tan_sat_label,
+        };
+
+        self.load_current_frame_byte_to_w(arg_offset + 3);
+        self.program.push(AsmLine::Instr(AsmInstr::Andlw(0x80)));
+        self.store_w_to_current_frame_byte(sign_offset);
+        self.load_current_frame_byte_to_w(arg_offset + 3);
+        self.program.push(AsmLine::Instr(AsmInstr::Andlw(0x7F)));
+        self.store_w_to_current_frame_byte(abs_high_offset);
+
+        for (input_bits, tan_bits) in PHASE49_TAN_POSITIVE_POINTS {
+            let tan_result_label = trig_result_label_for_bits(*tan_bits, &labels);
+            let neg_tan_result_label = trig_negated_result_label_for_bits(*tan_bits, &labels);
+            self.emit_f32_tan_abs_const_case(TanAbsCase {
+                abs_high_offset,
+                byte2_offset: arg_offset + 2,
+                sign_offset,
+                input_bits: *input_bits,
+                tan_result_label,
+                neg_tan_result_label,
+            });
+        }
+
+        self.program.push(AsmLine::Label(result_zero_label));
+        self.clear_current_frame_slot(result_offset, f32_ty);
+        self.jump_to_label(&finish_label);
+        self.program.push(AsmLine::Label(result_pos_one_label));
+        self.store_i32_const_to_current_frame(result_offset, 0x3F80_0000);
+        self.jump_to_label(&finish_label);
+        self.program.push(AsmLine::Label(result_neg_one_label));
+        self.store_i32_const_to_current_frame(result_offset, 0xBF80_0000);
+        self.jump_to_label(&finish_label);
+        self.program.push(AsmLine::Label(result_pos_tan30_label));
+        self.store_i32_const_to_current_frame(result_offset, 0x3F13_CD3A);
+        self.jump_to_label(&finish_label);
+        self.program.push(AsmLine::Label(result_neg_tan30_label));
+        self.store_i32_const_to_current_frame(result_offset, 0xBF13_CD3A);
+        self.jump_to_label(&finish_label);
+        self.program.push(AsmLine::Label(result_pos_sqrt3_label));
+        self.store_i32_const_to_current_frame(result_offset, 0x3FDD_B3D7);
+        self.jump_to_label(&finish_label);
+        self.program.push(AsmLine::Label(result_neg_sqrt3_label));
+        self.store_i32_const_to_current_frame(result_offset, 0xBFDD_B3D7);
+        self.jump_to_label(&finish_label);
+        self.program.push(AsmLine::Label(result_pos_tan_sat_label));
+        self.store_i32_const_to_current_frame(result_offset, i64::from(PHASE48_TAN_SAT_BITS));
+        self.jump_to_label(&finish_label);
+        self.program.push(AsmLine::Label(result_neg_tan_sat_label));
+        self.store_i32_const_to_current_frame(result_offset, 0xC6FF_FE00);
+        self.jump_to_label(&finish_label);
+
+        self.program.push(AsmLine::Label(finish_label));
+        self.emit_return_current_frame_value(result_offset, f32_ty);
+    }
+
+    fn emit_f32_tan_abs_const_case(&mut self, case: TanAbsCase<'_>) {
+        let hit_label = self.unique_label("rt_f32_tan_const");
+        let byte2_label = self.unique_label("rt_f32_tan_byte2");
+        let miss_label = self.unique_label("rt_f32_tan_next_const");
+        self.emit_current_frame_byte_equals_branch(
+            case.abs_high_offset,
+            ((case.input_bits >> 24) & 0x7F) as u8,
+            &byte2_label,
+            &miss_label,
+        );
+        self.program.push(AsmLine::Label(byte2_label));
+        self.emit_current_frame_byte_equals_branch(
+            case.byte2_offset,
+            ((case.input_bits >> 16) & 0xFF) as u8,
+            &hit_label,
+            &miss_label,
+        );
+        self.program.push(AsmLine::Label(hit_label));
+        self.branch_on_current_frame_bit(
+            case.sign_offset,
+            7,
+            case.neg_tan_result_label,
+            case.tan_result_label,
+        );
+        self.program.push(AsmLine::Label(miss_label));
+    }
+
     /// Emits compact Phase 35 f32 subtraction as `lhs + (-rhs)` through `__rt_f32_add`.
     fn emit_f32_sub_small_wrapper(&mut self, lhs_offset: u16, rhs_offset: u16, result_offset: u16) {
         self.load_current_frame_byte_to_w(rhs_offset + 3);
@@ -7424,6 +7543,13 @@ fn runtime_helper_variant(
             MathProfile::Precise => "precise_deferred",
         };
     }
+    if helper == RuntimeHelper::F32TanCore {
+        return match math_profile {
+            MathProfile::Compact => "tan_core_compact",
+            MathProfile::Balanced => "tan_core_balanced",
+            MathProfile::Precise => "precise_deferred",
+        };
+    }
     if helper
         .dependencies_for_profiles(runtime_profile, math_profile)
         .is_empty()
@@ -7467,6 +7593,20 @@ const PHASE48_TRIG_POSITIVE_POINTS: &[(u32, u32, u32, u32)] = &[
     (0x417B_53D1, 0x0000_0000, 0xBF80_0000, 0x0000_0000),
     (0x4196_CBE4, 0x0000_0000, 0x3F80_0000, 0x0000_0000),
     (0x41C9_0FDB, 0x0000_0000, 0x3F80_0000, 0x0000_0000),
+];
+
+const PHASE49_TAN_POSITIVE_POINTS: &[(u32, u32)] = &[
+    (0x0000_0000, 0x0000_0000),
+    (0x3F06_0A92, 0x3F13_CD3A),
+    (0x3F49_0FDB, 0x3F80_0000),
+    (0x3F86_0A92, 0x3FDD_B3D7),
+    (0x3FC9_0FDA, PHASE48_TAN_SAT_BITS),
+    (0x4006_0A92, 0xBFDD_B3D7),
+    (0x4016_CBE4, 0xBF80_0000),
+    (0x4027_8D36, 0xBF13_CD3A),
+    (0x4049_0FDB, 0x0000_0000),
+    (0x4096_CBE4, PHASE48_TAN_SAT_BITS),
+    (0x4116_CBE4, 0x0000_0000),
 ];
 
 struct TrigResultLabels<'a> {

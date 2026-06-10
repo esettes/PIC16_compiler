@@ -8124,7 +8124,7 @@ void main(void) {}
 }
 
 #[test]
-/// Verifies Phase 48 reports `tanf` as a wrapper over the shared trig core and prunes folded/runtime-unused cases.
+/// Verifies Phase 49 reports `tanf` as a wrapper over a tan-specific core and prunes folded/runtime-unused cases.
 fn phase48_tanf_reporting_and_pruning() {
     let source = r#"
 #include <math.h>
@@ -8147,29 +8147,30 @@ void main(void) {
     let listing = read_artifact(&hex, "lst");
     assert!(stdout.contains("Math profile: balanced"));
     assert!(report.contains("__rt_f32_tan"));
-    assert!(report.contains("__rt_f32_sincos_core"));
+    assert!(report.contains("__rt_f32_tan_core"));
     assert!(report.contains("variant=wrapper"));
-    assert!(report.contains("variant=shared_core_balanced"));
-    assert!(report.contains("__rt_f32_tan -> __rt_f32_sincos_core"));
+    assert!(report.contains("variant=tan_core_balanced"));
+    assert!(report.contains("__rt_f32_tan -> __rt_f32_tan_core"));
     assert!(report.contains("finite tan pole saturation"));
     assert!(rendered_map_has_symbol(&map, "__rt_f32_tan"));
-    assert!(rendered_map_has_symbol(&map, "__rt_f32_sincos_core"));
+    assert!(rendered_map_has_symbol(&map, "__rt_f32_tan_core"));
     assert!(!rendered_map_has_symbol(&map, "__rt_f32_sin"));
     assert!(!rendered_map_has_symbol(&map, "__rt_f32_cos"));
+    assert!(!rendered_map_has_symbol(&map, "__rt_f32_sincos_core"));
     assert!(listing.contains("__rt_f32_tan"));
-    assert!(listing.contains("__rt_f32_sincos_core"));
+    assert!(listing.contains("__rt_f32_tan_core"));
     assert_hex_is_programmable(&hex);
 
     let tan_words = parse_runtime_helper_actual_words(&report, "__rt_f32_tan");
-    let core_words = parse_runtime_helper_actual_words(&report, "__rt_f32_sincos_core");
+    let core_words = parse_runtime_helper_actual_words(&report, "__rt_f32_tan_core");
     assert!(tan_words < 700, "tan wrapper too large: {tan_words}");
     assert!(
-        core_words < 5200,
-        "shared trig core should not duplicate tan body: {core_words}"
+        core_words < 3500,
+        "tan-specific core should be isolated and compact: {core_words}"
     );
     assert!(
-        tan_words + core_words < 5540,
-        "tan wrapper plus shared core should stay below duplicated Phase 43 sin/cos bodies"
+        tan_words + core_words < 4000,
+        "tan wrapper plus tan core should improve on Phase 48 tan-only cost"
     );
 
     let folded = r#"
@@ -8183,6 +8184,7 @@ void main(void) {}
         compile_profile_source_size_report("balanced", "phase48-tanf-folded", folded, &[]);
     let folded_map = read_artifact(&folded_hex, "map");
     assert!(!folded_map.contains("__rt_f32_tan"));
+    assert!(!folded_map.contains("__rt_f32_tan_core"));
     assert!(!folded_map.contains("__rt_f32_sincos_core"));
     assert!(!folded_map.contains("__rt_math_sin_qwave_table"));
     assert!(!folded_report.contains("__rt_f32_tan"));
@@ -8195,6 +8197,98 @@ void main(void) {}
     );
     assert!(precise_error.contains("tanf") || precise_error.contains("__rt_f32_tan"));
     assert!(precise_error.contains("deferred"));
+}
+
+#[test]
+/// Verifies Phase 49 isolates TAN-specific code from sin/cos-only programs.
+fn phase49_tanf_cost_is_isolated_from_sincos_core() {
+    let sincos = r#"
+#include <math.h>
+
+float angle;
+float s;
+float c;
+
+void main(void) {
+    angle = 1.5707963f;
+    s = sinf(angle);
+    c = cosf(angle);
+}
+"#;
+    let (sincos_hex, _sincos_stdout, sincos_report) = compile_profile_source_size_report(
+        "balanced",
+        "phase49-sincos-cost-isolated",
+        sincos,
+        &["--math-profile", "balanced"],
+    );
+    let sincos_map = read_artifact(&sincos_hex, "map");
+    assert!(rendered_map_has_symbol(&sincos_map, "__rt_f32_sin"));
+    assert!(rendered_map_has_symbol(&sincos_map, "__rt_f32_cos"));
+    assert!(rendered_map_has_symbol(&sincos_map, "__rt_f32_sincos_core"));
+    assert!(!rendered_map_has_symbol(&sincos_map, "__rt_f32_tan"));
+    assert!(!rendered_map_has_symbol(&sincos_map, "__rt_f32_tan_core"));
+    let sincos_core_words = parse_runtime_helper_actual_words(&sincos_report, "__rt_f32_sincos_core");
+    assert!(
+        sincos_core_words <= 3500,
+        "sin/cos-only core should stay near Phase 47 size: {sincos_core_words}"
+    );
+
+    let tan = r#"
+#include <math.h>
+
+float angle;
+float t;
+
+void main(void) {
+    angle = 0.7853982f;
+    t = tanf(angle);
+}
+"#;
+    let (tan_hex, _tan_stdout, tan_report) = compile_profile_source_size_report(
+        "balanced",
+        "phase49-tan-cost-isolated",
+        tan,
+        &["--math-profile", "balanced"],
+    );
+    let tan_map = read_artifact(&tan_hex, "map");
+    assert!(rendered_map_has_symbol(&tan_map, "__rt_f32_tan"));
+    assert!(rendered_map_has_symbol(&tan_map, "__rt_f32_tan_core"));
+    assert!(!rendered_map_has_symbol(&tan_map, "__rt_f32_sin"));
+    assert!(!rendered_map_has_symbol(&tan_map, "__rt_f32_cos"));
+    assert!(!rendered_map_has_symbol(&tan_map, "__rt_f32_sincos_core"));
+    let tan_core_words = parse_runtime_helper_actual_words(&tan_report, "__rt_f32_tan_core");
+    assert!(
+        tan_core_words < 3500,
+        "tan-specific core should fit under isolation threshold: {tan_core_words}"
+    );
+
+    let combined = r#"
+#include <math.h>
+
+float angle;
+float s;
+float c;
+float t;
+
+void main(void) {
+    angle = 0.7853982f;
+    s = sinf(angle);
+    c = cosf(angle);
+    t = tanf(angle);
+}
+"#;
+    let (combined_hex, _combined_stdout, combined_report) = compile_profile_source_size_report(
+        "balanced",
+        "phase49-combined-trig-cost",
+        combined,
+        &["--math-profile", "balanced"],
+    );
+    let combined_map = read_artifact(&combined_hex, "map");
+    assert!(rendered_map_has_symbol(&combined_map, "__rt_f32_sincos_core"));
+    assert!(rendered_map_has_symbol(&combined_map, "__rt_f32_tan_core"));
+    assert!(combined_report.contains("__rt_f32_sin -> __rt_f32_sincos_core"));
+    assert!(combined_report.contains("__rt_f32_cos -> __rt_f32_sincos_core"));
+    assert!(combined_report.contains("__rt_f32_tan -> __rt_f32_tan_core"));
 }
 
 #[test]
