@@ -7501,6 +7501,15 @@ struct SincosAbsCase<'a> {
     neg_tan_result_label: &'a str,
 }
 
+struct TanAbsCase<'a> {
+    abs_high_offset: u16,
+    byte2_offset: u16,
+    sign_offset: u16,
+    input_bits: u32,
+    tan_result_label: &'a str,
+    neg_tan_result_label: &'a str,
+}
+
 fn trig_result_label_for_bits<'a>(bits: u32, labels: &'a TrigResultLabels<'a>) -> &'a str {
     match bits {
         0x0000_0000 | 0x8000_0000 => labels.zero,
