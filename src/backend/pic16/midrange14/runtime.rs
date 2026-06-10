@@ -82,6 +82,7 @@ pub enum RuntimeHelper {
     F32Cos,
     F32Tan,
     F32SinCosCore,
+    F32TanCore,
     F32ToQ16,
     Q16ToF32,
     I32ToF32,
@@ -167,6 +168,7 @@ impl RuntimeHelper {
         RuntimeHelper::F32Cos,
         RuntimeHelper::F32Tan,
         RuntimeHelper::F32SinCosCore,
+        RuntimeHelper::F32TanCore,
         RuntimeHelper::F32ToQ16,
         RuntimeHelper::Q16ToF32,
         RuntimeHelper::I32ToF32,
@@ -528,6 +530,13 @@ impl RuntimeHelper {
                 local_bytes: 8,
                 frame_bytes: 10,
             },
+            Self::F32TanCore => RuntimeHelperInfo {
+                label: "__rt_f32_tan_core",
+                operand_ty: Type::new(ScalarType::F32),
+                arg_bytes: 4,
+                local_bytes: 8,
+                frame_bytes: 10,
+            },
             Self::F32ToQ16 => RuntimeHelperInfo {
                 label: "__rt_f32_to_q16_16",
                 operand_ty: Type::new(ScalarType::F32),
@@ -606,7 +615,8 @@ impl RuntimeHelper {
             | Self::F32Sin
             | Self::F32Cos
             | Self::F32Tan
-            | Self::F32SinCosCore => RuntimeHelperCategory::Math,
+            | Self::F32SinCosCore
+            | Self::F32TanCore => RuntimeHelperCategory::Math,
             Self::F32ToQ16
             | Self::Q16ToF32
             | Self::I32ToF32
@@ -657,7 +667,8 @@ impl RuntimeHelper {
             Self::F32Floor => &[Self::F32ToQ16, Self::I32ToF32],
             Self::F32Ceil => &[Self::F32Floor],
             Self::F32Round => &[Self::F32ToQ16, Self::I32ToF32],
-            Self::F32Sin | Self::F32Cos | Self::F32Tan => &[Self::F32SinCosCore],
+            Self::F32Sin | Self::F32Cos => &[Self::F32SinCosCore],
+            Self::F32Tan => &[Self::F32TanCore],
             _ => &[],
         }
     }

@@ -4489,10 +4489,17 @@ impl<'a> CodegenContext<'a> {
                 self.emit_float_f32_trig_wrapper(arg0_offset, local_base, 1);
             }
             RuntimeHelper::F32Tan => {
-                self.emit_float_f32_trig_wrapper(arg0_offset, local_base, 2);
+                self.emit_float_f32_unary_core_wrapper(
+                    arg0_offset,
+                    local_base,
+                    RuntimeHelper::F32TanCore,
+                );
             }
             RuntimeHelper::F32SinCosCore => {
                 self.emit_float_f32_sincos_core_helper(arg0_offset, arg0_offset + 4, local_base);
+            }
+            RuntimeHelper::F32TanCore => {
+                self.emit_float_f32_tan_core_helper(arg0_offset, local_base);
             }
             RuntimeHelper::F32ToQ16 => {
                 self.emit_float_to_q16_frame(
