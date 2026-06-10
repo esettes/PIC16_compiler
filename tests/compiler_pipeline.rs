@@ -8125,7 +8125,7 @@ void main(void) {}
 
 #[test]
 /// Verifies Phase 49 reports `tanf` as a wrapper over a tan-specific core and prunes folded/runtime-unused cases.
-fn phase48_tanf_reporting_and_pruning() {
+fn phase49_tanf_reporting_and_pruning() {
     let source = r#"
 #include <math.h>
 
@@ -8139,7 +8139,7 @@ void main(void) {
 "#;
     let (hex, stdout, report) = compile_profile_source_size_report(
         "balanced",
-        "phase48-tanf-report",
+        "phase49-tanf-report",
         source,
         &["--math-profile", "balanced"],
     );
@@ -8181,7 +8181,7 @@ float value = tanf(0.78539816f);
 void main(void) {}
 "#;
     let (folded_hex, _folded_stdout, folded_report) =
-        compile_profile_source_size_report("balanced", "phase48-tanf-folded", folded, &[]);
+        compile_profile_source_size_report("balanced", "phase49-tanf-folded", folded, &[]);
     let folded_map = read_artifact(&folded_hex, "map");
     assert!(!folded_map.contains("__rt_f32_tan"));
     assert!(!folded_map.contains("__rt_f32_tan_core"));
@@ -8191,7 +8191,7 @@ void main(void) {}
 
     let precise_error = compile_error_with_extra_args(
         "pic16f877a",
-        "phase48-tanf-precise-deferred.c",
+        "phase49-tanf-precise-deferred.c",
         source,
         &["--math-profile", "precise"],
     );
@@ -8397,6 +8397,23 @@ fn phase48_tanf_examples_compile_via_picc() {
         "examples/pic16f877a/math_tanf_profile_compare.c",
         "examples/pic16f877a/math_tanf_poles.c",
         "examples/pic16f877a/math_tanf_resource_report.c",
+    ] {
+        let output = compile_example_via_picc_cli_with_extra_args(
+            "pic16f877a",
+            example,
+            &["--size", "--memory-report", "--verify-hex"],
+        );
+        assert_hex_is_programmable(&output);
+    }
+}
+
+#[test]
+/// Verifies checked-in Phase 49 tangent cost-isolation examples compile and report resources.
+fn phase49_tanf_cost_examples_compile_via_picc() {
+    for example in [
+        "examples/pic16f877a/math_tanf_cost_isolation.c",
+        "examples/pic16f877a/math_tanf_pruning.c",
+        "examples/pic16f877a/math_trig_combined_resource_report.c",
     ] {
         let output = compile_example_via_picc_cli_with_extra_args(
             "pic16f877a",
