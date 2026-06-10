@@ -39,4 +39,4 @@ Resource behavior:
 - pruned when unused or when calls fold at compile time
 - rejected inside ISRs because dynamic calls require helper execution
 
-Phase 44/48 finite `sinf` / `cosf` / `tanf` helpers are wrappers around one shared trig core with internal ROM tables. Min/max lowering remains unchanged and does not depend on math-profile trig accuracy.
+Phase 44 finite `sinf` / `cosf` helpers are wrappers around one shared trig core with internal ROM tables. Phase 49 routes `tanf` through an isolated tangent core. Min/max lowering remains unchanged and does not depend on math-profile trig accuracy.

@@ -15,7 +15,7 @@ Backend recognizes those symbols and lowers dynamic calls to:
 ```text
 sinf -> __rt_f32_sin wrapper -> __rt_f32_sincos_core
 cosf -> __rt_f32_cos wrapper -> __rt_f32_sincos_core
-tanf -> __rt_f32_tan wrapper -> __rt_f32_sincos_core
+tanf -> __rt_f32_tan wrapper -> __rt_f32_tan_core
 ```
 
 Folded constants disappear before backend lowering and do not emit helpers or ROM math tables.

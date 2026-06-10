@@ -315,15 +315,29 @@ Phase 48 adds finite-only tangent without duplicating the trig runtime:
 - `include/math.h` declares `float tanf(float x)`
 - `tanf` is radians-based, finite-only, approximate, and not libm/IEEE tangent
 - dynamic `tanf` lowers to a small `__rt_f32_tan` wrapper
-- `__rt_f32_tan` calls the existing page-safe `__rt_f32_sincos_core` with mode `TAN`
-- the shared core emits TAN-mode code only when `tanf` is actually used, so sin/cos-only programs keep the Phase 47 compact core
+- `__rt_f32_tan` originally called the existing page-safe `__rt_f32_sincos_core` with mode `TAN`
+- Phase 49 replaces that path with an isolated `__rt_f32_tan_core`, so sin/cos-only programs keep the Phase 47 compact core and tan-only programs no longer emit `__rt_f32_sincos_core`
 - no `__rt_f32_div` is pulled for tangent; validated tangent values are returned through the same point matcher
 - odd `pi/2` pole-like inputs return finite saturation `+32767.0f` or `-32767.0f`
 - compact non-pole tangent tolerance is `<= 0.20`; balanced non-pole tolerance is `<= 0.10`
 - dynamic `precise` `tanf` is deferred and diagnoses like precise dynamic `sinf` / `cosf`
-- reports show `__rt_f32_tan -> __rt_f32_sincos_core`, selected math profile, helper sizes, ROM table reuse, and the finite pole policy
+- reports show `__rt_f32_tan -> __rt_f32_tan_core`, selected math profile, helper sizes, and the finite pole policy
 
 This phase does not add `atanf`, `atan2f`, continuous argument reduction, `double`, or full ISO C `math.h`.
+
+### Phase 49 Tangent Cost Isolation
+
+Phase 49 compacts tangent resource cost by splitting tangent-specific branches out of the shared sine/cosine core:
+
+- `__rt_f32_sin` and `__rt_f32_cos` still call one page-safe `__rt_f32_sincos_core`
+- `__rt_f32_tan` calls a separate page-safe `__rt_f32_tan_core`
+- tan-only programs emit no sine/cosine wrappers and no `__rt_f32_sincos_core`
+- sin/cos-only programs emit no `__rt_f32_tan` or `__rt_f32_tan_core`
+- mixed sin/cos/tan programs emit both cores explicitly, and the dependency graph reports each wrapper-to-core edge
+- balanced tan-only examples drop from the Phase 48 shape of roughly `5746` program words to roughly `3182` words, with `__rt_f32_tan_core` around `2284` words
+- the Phase 47 sin/cos-only core remains around `3315` words because tangent branches no longer inflate it
+
+Phase 49 does not change tangent accuracy, pole saturation, finite-only policy, or precise-profile deferred behavior.
 
 ### Phase 4 Stack-first ABI
 

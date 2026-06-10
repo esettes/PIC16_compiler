@@ -11,8 +11,10 @@ tanf(x) -> direct call IR
 The PIC16 backend recognizes the symbol and lowers dynamic calls to:
 
 ```text
-__rt_f32_tan wrapper -> __rt_f32_sincos_core(mode=2)
+__rt_f32_tan wrapper -> __rt_f32_tan_core
 ```
+
+Phase 49 isolates tangent-specific branches in `__rt_f32_tan_core` so dynamic `tanf` no longer inflates or requires the sine/cosine `__rt_f32_sincos_core`.
 
 Folded constants disappear before IR/backend lowering and emit no trig wrapper, no shared core, and no internal ROM table.
 

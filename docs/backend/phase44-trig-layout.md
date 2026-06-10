@@ -7,7 +7,7 @@ Phase 44 adds helper-to-helper calls for trigonometry:
 ```text
 __rt_f32_sin -> __rt_f32_sincos_core
 __rt_f32_cos -> __rt_f32_sincos_core
-__rt_f32_tan -> __rt_f32_sincos_core
+__rt_f32_tan -> __rt_f32_tan_core
 ```
 
 Backend requirements:
@@ -30,4 +30,4 @@ ROM RETLW table __rt_math_sin_qwave_table_balanced
 
 No linker relaxation may remove required page setup across helper-to-helper calls unless the final layout proves it safe.
 
-Phase 45 and Phase 46 expand the shared core point set, so helper size can increase. Phase 47 compacts positive/negative aliases back into one sign-normalized core. Phase 48 emits TAN-mode code only when `__rt_f32_tan` is used. Resource fitting and page validation still treat `__rt_f32_sincos_core` as one math helper section with page-safe wrapper calls.
+Phase 45 and Phase 46 expand the shared core point set, so helper size can increase. Phase 47 compacts positive/negative aliases back into one sign-normalized core. Phase 49 isolates tangent-specific code in `__rt_f32_tan_core`, so resource fitting and page validation treat sine/cosine and tangent cores as separate math helper sections with page-safe wrapper calls.

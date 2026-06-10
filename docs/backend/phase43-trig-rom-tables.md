@@ -26,4 +26,4 @@ Reports:
 - `--size` includes ROM table words
 - `--memory-report` lists table as a ROM RETLW table
 
-The helper path is page-safe like other runtime helpers. Phase 44 adds helper-to-helper wrapper calls from `__rt_f32_sin` / `__rt_f32_cos` to `__rt_f32_sincos_core`; Phase 48 adds the same wrapper call from `__rt_f32_tan`. Those calls use page-safe call emission and appear in layout validation/reporting. `--math-profile precise` does not emit a trig table because dynamic precise trig is deferred.
+The helper path is page-safe like other runtime helpers. Phase 44 adds helper-to-helper wrapper calls from `__rt_f32_sin` / `__rt_f32_cos` to `__rt_f32_sincos_core`. Phase 49 routes `__rt_f32_tan` to the isolated `__rt_f32_tan_core` instead of the sine/cosine core. Those calls use page-safe call emission and appear in layout validation/reporting. `--math-profile precise` does not emit a trig table because dynamic precise trig is deferred.

@@ -19,9 +19,9 @@ ABI:
 - helpers are demand-pruned
 - stack and memory reports include helper cost
 - Phase 44 makes `__rt_f32_sin` and `__rt_f32_cos` wrappers around one shared core
-- Phase 48 adds `__rt_f32_tan` as another wrapper over the same core, with TAN-mode code emitted only when used
+- Phase 49 routes `__rt_f32_tan` to an isolated `__rt_f32_tan_core`
 
-Implementation is finite table-refined, not libm. The shared core matches validated f32 angle spellings and returns validated raw f32 results. Phase 45 adds `pi/6`, `pi/3`, `2pi/3`, `5pi/6`, negative mirrors, and common `±3pi` / `±4pi` aliases. Phase 46 extends scoped common-multiple aliases through `±8pi`. Phase 47 stores those aliases with sign-normalized matching to reduce duplicated branches. Phase 48 adds tangent values for the same matcher; odd `pi/2` pole-like points return finite `±32767.0f` saturation. Fallback returns a coarse finite value.
+Implementation is finite table-refined, not libm. The shared sine/cosine core matches validated f32 angle spellings and returns validated raw f32 results. Phase 45 adds `pi/6`, `pi/3`, `2pi/3`, `5pi/6`, negative mirrors, and common `±3pi` / `±4pi` aliases. Phase 46 extends scoped common-multiple aliases through `±8pi`. Phase 47 stores those aliases with sign-normalized matching to reduce duplicated branches. Phase 49 keeps tangent values in `__rt_f32_tan_core`; odd `pi/2` pole-like points return finite `±32767.0f` saturation. Fallback returns a coarse finite value.
 
 Internal ROM table emitted when dynamic trig is used:
 
@@ -37,5 +37,6 @@ Pruning:
 - unused `#include <math.h>` emits no trig helper or table
 - dynamic `sinf` emits `__rt_f32_sin`, `__rt_f32_sincos_core`, and the selected table
 - dynamic `cosf` emits `__rt_f32_cos`, `__rt_f32_sincos_core`, and the selected table
-- dynamic `tanf` emits `__rt_f32_tan`, `__rt_f32_sincos_core`, and the selected table
-- using multiple trig functions emits only the requested wrappers, one shared core, and one table
+- dynamic `tanf` emits `__rt_f32_tan` and the Phase 49 isolated `__rt_f32_tan_core`
+- using `sinf` and `cosf` emits only the requested wrappers, one shared sine/cosine core, and one table
+- using `tanf` emits the tangent wrapper and `__rt_f32_tan_core`
