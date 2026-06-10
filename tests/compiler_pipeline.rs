@@ -8227,7 +8227,8 @@ void main(void) {
     assert!(rendered_map_has_symbol(&sincos_map, "__rt_f32_sincos_core"));
     assert!(!rendered_map_has_symbol(&sincos_map, "__rt_f32_tan"));
     assert!(!rendered_map_has_symbol(&sincos_map, "__rt_f32_tan_core"));
-    let sincos_core_words = parse_runtime_helper_actual_words(&sincos_report, "__rt_f32_sincos_core");
+    let sincos_core_words =
+        parse_runtime_helper_actual_words(&sincos_report, "__rt_f32_sincos_core");
     assert!(
         sincos_core_words <= 3500,
         "sin/cos-only core should stay near Phase 47 size: {sincos_core_words}"
@@ -8284,7 +8285,10 @@ void main(void) {
         &["--math-profile", "balanced"],
     );
     let combined_map = read_artifact(&combined_hex, "map");
-    assert!(rendered_map_has_symbol(&combined_map, "__rt_f32_sincos_core"));
+    assert!(rendered_map_has_symbol(
+        &combined_map,
+        "__rt_f32_sincos_core"
+    ));
     assert!(rendered_map_has_symbol(&combined_map, "__rt_f32_tan_core"));
     assert!(combined_report.contains("__rt_f32_sin -> __rt_f32_sincos_core"));
     assert!(combined_report.contains("__rt_f32_cos -> __rt_f32_sincos_core"));

@@ -7563,10 +7563,10 @@ fn runtime_helper_variant(
 fn math_accuracy_policy(math_profile: MathProfile) -> &'static str {
     match math_profile {
         MathProfile::Compact => {
-            "compact sqrtf: finite-only compact approximation; sinf/cosf/tanf shared-core compact trig tolerance <=0.10 for sin/cos and <=0.20 for non-pole tan in validated range [-2pi,+2pi], scoped moderate aliases through +/-8pi, finite tan pole saturation, coarse fallback outside"
+            "compact sqrtf: finite-only compact approximation; sinf/cosf shared-core compact trig tolerance <=0.10, tanf isolated-core compact tolerance <=0.20 for non-pole tan in validated range [-2pi,+2pi], scoped moderate aliases through +/-8pi, finite tan pole saturation, coarse fallback outside"
         }
         MathProfile::Balanced => {
-            "balanced sqrtf: currently aliases compact finite approximation; sinf/cosf/tanf shared-core balanced trig tolerance <=0.05 for sin/cos and <=0.10 for non-pole tan in validated range [-2pi,+2pi], scoped moderate aliases through +/-8pi, finite tan pole saturation, coarse fallback outside"
+            "balanced sqrtf: currently aliases compact finite approximation; sinf/cosf shared-core balanced trig tolerance <=0.05, tanf isolated-core balanced tolerance <=0.10 for non-pole tan in validated range [-2pi,+2pi], scoped moderate aliases through +/-8pi, finite tan pole saturation, coarse fallback outside"
         }
         MathProfile::Precise => {
             "precise sqrtf: table-refined finite approximation; validated positives in [0.25, 64.0] within +/-0.03125; sinf/cosf/tanf precise dynamic helpers are deferred"
