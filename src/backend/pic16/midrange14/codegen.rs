@@ -5270,7 +5270,39 @@ impl<'a> CodegenContext<'a> {
         self.emit_return_current_frame_value(result_offset, Type::new(ScalarType::F32));
     }
 
-    /// Emits finite Phase 48 shared sinf/cosf/tanf core through sign-normalized validated points plus fallback.
+    fn emit_float_f32_unary_core_wrapper(
+        &mut self,
+        arg_offset: u16,
+        result_offset: u16,
+        core: RuntimeHelper,
+    ) {
+        let info = core.info();
+        debug_assert_eq!(info.arg_bytes, 4);
+        self.emit_stack_growth_check(
+            info.arg_bytes,
+            &format!("runtime helper {} args", info.label),
+        );
+        for byte in 0..4u16 {
+            self.load_current_frame_byte_to_w(arg_offset + byte);
+            self.push_w();
+        }
+        self.program
+            .push(AsmLine::Instr(AsmInstr::SetPage(info.label.to_string())));
+        self.program
+            .push(AsmLine::Instr(AsmInstr::Call(info.label.to_string())));
+        self.restore_code_page_after_call();
+        self.store_w_to_addr(self.layout.helpers.w_save);
+        self.add_immediate_to_pair(self.layout.helpers.stack_ptr, negate_u16(info.arg_bytes));
+        self.load_addr_to_w(self.layout.helpers.w_save);
+        self.store_w_to_current_frame_byte(result_offset);
+        for byte in 1..4usize {
+            self.load_return_byte_to_w(byte);
+            self.store_w_to_current_frame_byte(result_offset + byte as u16);
+        }
+        self.emit_return_current_frame_value(result_offset, Type::new(ScalarType::F32));
+    }
+
+    /// Emits finite Phase 49 shared sinf/cosf core through sign-normalized validated points plus fallback.
     fn emit_float_f32_sincos_core_helper(
         &mut self,
         arg_offset: u16,
@@ -5281,7 +5313,7 @@ impl<'a> CodegenContext<'a> {
         let result_offset = local_base;
         let sign_offset = result_offset + 4;
         let abs_high_offset = result_offset + 5;
-        let include_tan = self.used_helpers.contains(&RuntimeHelper::F32Tan);
+        let include_tan = false;
         let fallback_label = self.unique_label("rt_f32_trig_fallback");
         let finish_label = self.unique_label("rt_f32_trig_finish");
         let result_zero_label = self.unique_label("rt_f32_trig_result_zero");
