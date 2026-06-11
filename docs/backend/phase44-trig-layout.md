@@ -2,12 +2,13 @@
 
 # Phase 44 Trig Layout
 
-Phase 44 adds helper-to-helper calls for trigonometry:
+Phase 44 adds helper-to-helper calls for trigonometry. Phase 50 keeps the tangent-only core isolated but reuses the shared sine/cosine core for mixed sine/cosine/tangent programs:
 
 ```text
 __rt_f32_sin -> __rt_f32_sincos_core
 __rt_f32_cos -> __rt_f32_sincos_core
-__rt_f32_tan -> __rt_f32_tan_core
+__rt_f32_tan -> __rt_f32_tan_core      (tan-only)
+__rt_f32_tan -> __rt_f32_sincos_core   (mixed sin/cos/tan)
 ```
 
 Backend requirements:
@@ -30,4 +31,4 @@ ROM RETLW table __rt_math_sin_qwave_table_balanced
 
 No linker relaxation may remove required page setup across helper-to-helper calls unless the final layout proves it safe.
 
-Phase 45 and Phase 46 expand the shared core point set, so helper size can increase. Phase 47 compacts positive/negative aliases back into one sign-normalized core. Phase 49 isolates tangent-specific code in `__rt_f32_tan_core`, so resource fitting and page validation treat sine/cosine and tangent cores as separate math helper sections with page-safe wrapper calls.
+Phase 45 and Phase 46 expand the shared core point set, so helper size can increase. Phase 47 compacts positive/negative aliases back into one sign-normalized core. Phase 49 isolates tangent-specific code in `__rt_f32_tan_core`, so tan-only programs avoid sine/cosine cost. Phase 50 selects a combined strategy for mixed programs, so resource fitting and page validation treat `__rt_f32_tan -> __rt_f32_sincos_core` as a page-safe helper edge in that shape.

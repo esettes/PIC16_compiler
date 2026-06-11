@@ -3581,7 +3581,50 @@ void main(void) {
     );
     assert!(map.contains("__rt_f32_tan"));
     assert!(map.contains("__rt_f32_tan_core"));
-    assert!(map.contains("__rt_math_sin_qwave_table_balanced"));
+    assert!(!map.contains("__rt_math_sin_qwave_table_balanced"));
     assert!(f32_abs_error(symbol_f32_bits(&core, &map, "result"), 1.0) <= 0.10);
     assert!(f32_abs_error(symbol_f32_bits(&core, &map, "returned"), 1.0) <= 0.10);
+}
+
+#[test]
+fn executes_phase50_combined_sincos_tan_core() {
+    for (profile, sincos_tol, tan_tol) in [
+        (
+            MathProfile::Compact,
+            PHASE43_TRIG_COMPACT_ABS_TOLERANCE,
+            PHASE48_TAN_COMPACT_ABS_TOLERANCE,
+        ),
+        (
+            MathProfile::Balanced,
+            PHASE43_TRIG_BALANCED_ABS_TOLERANCE,
+            PHASE48_TAN_BALANCED_ABS_TOLERANCE,
+        ),
+    ] {
+        let (core, map) = run_source_with_math_profile(
+            "pic16f877a",
+            "phase50-combined-sincos-tan.c",
+            r#"
+#include <math.h>
+
+float s;
+float c;
+float t;
+
+void main(void) {
+    float angle;
+    angle = 0.7853982f;
+    s = sinf(angle);
+    c = cosf(angle);
+    t = tanf(angle);
+}
+"#,
+            profile,
+        );
+        assert!(map.contains("Trig runtime strategy: combined_sincos_tan_core"));
+        assert!(map.contains("__rt_f32_sincos_core"));
+        assert!(!map.contains("__rt_f32_tan_core"));
+        assert!(f32_abs_error(symbol_f32_bits(&core, &map, "s"), 0.70710677) <= sincos_tol);
+        assert!(f32_abs_error(symbol_f32_bits(&core, &map, "c"), 0.70710677) <= sincos_tol);
+        assert!(f32_abs_error(symbol_f32_bits(&core, &map, "t"), 1.0) <= tan_tol);
+    }
 }

@@ -1,7 +1,7 @@
 #include <math.h>
 
 /*
- * Phase 49 combined trig report check.
+ * Phase 49/50 combined trig report check.
  *
  * Suggested:
  * picc --target pic16f877a --math-profile balanced --size --memory-report \
@@ -9,9 +9,10 @@
  *      examples/pic16f877a/math_trig_combined_resource_report.c
  *
  * Expected report shape:
+ *   Trig runtime strategy: combined_sincos_tan_core
  *   __rt_f32_sin -> __rt_f32_sincos_core
  *   __rt_f32_cos -> __rt_f32_sincos_core
- *   __rt_f32_tan -> __rt_f32_tan_core
+ *   __rt_f32_tan -> __rt_f32_sincos_core
  */
 
 float angle;

@@ -32,3 +32,6 @@ show the standalone tangent core body; sin/cos-only listings do not contain it.
 This phase does not add a tangent ROM table. The tangent core uses compact
 finite point matching and finite saturation. It intentionally avoids pulling the
 full float divide helper.
+
+Phase 50 keeps this isolated path for tan-only programs, but mixed sin/cos/tan
+programs switch to a combined core strategy to reduce total program memory.

@@ -8146,7 +8146,7 @@ void main(void) {
     let map = read_artifact(&hex, "map");
     let listing = read_artifact(&hex, "lst");
     assert!(stdout.contains("Math profile: balanced"));
-    assert!(stdout.contains("tanf isolated-core balanced tolerance"));
+    assert!(stdout.contains("tanf balanced tolerance"));
     assert!(report.contains("__rt_f32_tan"));
     assert!(report.contains("__rt_f32_tan_core"));
     assert!(report.contains("variant=wrapper"));

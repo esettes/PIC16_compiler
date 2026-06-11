@@ -33,9 +33,9 @@ Outputs:
 
 ## Current Status
 
-Current implementation is **Phase 49: isolated compact `tanf` core, on top of Phase 48 finite `tanf`, Phase 47 trig shared-core size recovery and alias compaction, Phase 46 moderate trig range reduction, Phase 45 trig accuracy harness, Phase 44 shared finite `sinf` / `cosf` trig core, Phase 43 finite table-driven trig, Phase 42 float compare/minmax compaction, Phase 41 finite `fminf` / `fmaxf`, Phase 40 numeric accuracy harness and expanded precise-profile finite `sqrtf`, Phase 39 precise-profile `sqrtf`, Phase 38 math accuracy profiles, Phase 37 finite `sqrtf`, Phase 36 minimal finite `math.h` for `float`, Phase 35 fixed/float helper compaction, Phase 34 integer helper compaction, Phase 33 runtime helper reporting, Phase 32 page-aware code layout, Phase 31 backend page-safety, Phase 30 ROM float tables, Phase 29 dynamic float comparisons and 32-bit integer conversions, Phase 28 float hardening, Phase 27 basic finite software `float`, Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, and the earlier frontend/backend phases**.
+Current implementation is **Phase 50: combined trig runtime budget reduction, on top of Phase 49 isolated compact `tanf` core, Phase 48 finite `tanf`, Phase 47 trig shared-core size recovery and alias compaction, Phase 46 moderate trig range reduction, Phase 45 trig accuracy harness, Phase 44 shared finite `sinf` / `cosf` trig core, Phase 43 finite table-driven trig, Phase 42 float compare/minmax compaction, Phase 41 finite `fminf` / `fmaxf`, Phase 40 numeric accuracy harness and expanded precise-profile finite `sqrtf`, Phase 39 precise-profile `sqrtf`, Phase 38 math accuracy profiles, Phase 37 finite `sqrtf`, Phase 36 minimal finite `math.h` for `float`, Phase 35 fixed/float helper compaction, Phase 34 integer helper compaction, Phase 33 runtime helper reporting, Phase 32 page-aware code layout, Phase 31 backend page-safety, Phase 30 ROM float tables, Phase 29 dynamic float comparisons and 32-bit integer conversions, Phase 28 float hardening, Phase 27 basic finite software `float`, Phase 26 device configuration/HEX validation/programmer workflow, Phase 25 target resource limits, and the earlier frontend/backend phases**.
 
-Phase 49 scope:
+Phase 50 scope:
 
 - `include/math.h` exposes the finite float-only subset `fabsf`, `truncf`, `floorf`, `ceilf`, `roundf`, `sqrtf`, `fminf`, `fmaxf`, `sinf`, `cosf`, and `tanf`
 - `sinf` / `cosf` / `tanf` interpret input as radians and use internal ROM quarter-wave tables plus validated finite point matches
@@ -50,6 +50,9 @@ Phase 49 scope:
 - dynamic precise-profile `sinf` / `cosf` / `tanf` is deferred and diagnoses instead of silently falling back
 - internal ROM math tables such as `__rt_math_sin_qwave_table_balanced` are emitted only when dynamic sin/cos helpers are used and appear in reports, `.map`, and `.lst`
 - tan-only programs emit `__rt_f32_tan` and `__rt_f32_tan_core`, not `__rt_f32_sin`, `__rt_f32_cos`, or `__rt_f32_sincos_core`; sin/cos-only programs likewise do not emit tangent helpers
+- combined `sinf` / `cosf` / `tanf` programs select `combined_sincos_tan_core`, routing all three wrappers through `__rt_f32_sincos_core` and avoiding `__rt_f32_tan_core`
+- reports, maps, and listings show `Trig runtime strategy: sincos_shared_core`, `isolated_tan_core`, or `combined_sincos_tan_core`
+- balanced combined trig drops from the Phase 49 split-core shape of `8005 / 8192` words to roughly `7250 / 8192` words; this is a clear reduction but still not a small-target trig budget
 - dynamic float comparisons use compact raw finite f32 ordering in `__rt_f32_cmp` instead of Q16.16 conversion
 - `fminf` / `fmaxf` lower to `__rt_f32_cmp` plus local compare/select code; no `__rt_f32_min` or `__rt_f32_max` helper body is emitted
 - constant math calls fold when their argument is a finite compile-time `float`
@@ -1181,6 +1184,8 @@ picc --list-targets
 - [docs/backend/phase48-tanf-resource-cost.md](docs/backend/phase48-tanf-resource-cost.md)
 - [docs/runtime/phase49-tanf-cost-isolation.md](docs/runtime/phase49-tanf-cost-isolation.md)
 - [docs/backend/phase49-trig-helper-splitting.md](docs/backend/phase49-trig-helper-splitting.md)
+- [docs/runtime/phase50-combined-trig-budget.md](docs/runtime/phase50-combined-trig-budget.md)
+- [docs/backend/phase50-trig-runtime-strategies.md](docs/backend/phase50-trig-runtime-strategies.md)
 - [docs/developer-guide/math-subset.md](docs/developer-guide/math-subset.md)
 - [docs/migration/phase3-to-phase4-abi.md](docs/migration/phase3-to-phase4-abi.md)
 - [docs/developer-guide/adding-device.md](docs/developer-guide/adding-device.md)

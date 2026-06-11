@@ -45,4 +45,5 @@ Pruning rules:
 - constant-folded `tanf` emits no trig helpers
 - tan-only emits `__rt_f32_tan` and `__rt_f32_tan_core`
 - sin/cos-only emits `__rt_f32_sin`, `__rt_f32_cos`, and `__rt_f32_sincos_core`
-- mixed sin/cos/tan emits both cores and reports all wrapper-to-core edges
+- Phase 49 mixed sin/cos/tan emitted both cores and reported all wrapper-to-core edges
+- Phase 50 replaces that mixed case with `combined_sincos_tan_core`, so `__rt_f32_tan` depends on `__rt_f32_sincos_core` only when sine/cosine are also used

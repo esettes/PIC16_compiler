@@ -22,13 +22,15 @@ Phase 40 documents the tested precise range as positive inputs in `[0.25, 64.0]`
 
 Phase 41 `fminf` / `fmaxf` are not accuracy-profile-dependent. Phase 42 lowers them to compact `__rt_f32_cmp` plus local select and returns one of the original operands.
 
-Phase 44/49 `sinf` / `cosf` / `tanf` use the math profile. Sine/cosine share one runtime core; tangent uses an isolated tangent core:
+Phase 44/50 `sinf` / `cosf` / `tanf` use the math profile. Sine/cosine share one runtime core; tangent uses an isolated tangent core unless combined with sine/cosine:
 
 - `compact`: `variant=shared_core_compact` for sine/cosine, `variant=tan_core_compact` for tangent, smaller internal ROM quarter-wave table, validated `sinf` / `cosf` tolerance `<= 0.10`, non-pole `tanf` tolerance `<= 0.20`
 - `balanced`: default `variant=shared_core_balanced` for sine/cosine, `variant=tan_core_balanced` for tangent, larger internal ROM quarter-wave table, validated `sinf` / `cosf` tolerance `<= 0.05`, non-pole `tanf` tolerance `<= 0.10`
 - `precise`: dynamic `sinf` / `cosf` / `tanf` is deferred and diagnoses; constant folded calls still fold at compile time
 
 Phase 46 validates compact and balanced trig over the documented point grid in `[-2pi,+2pi]` plus scoped common aliases through `±8pi`. Phase 47 compacts sine/cosine aliases with one sign-normalized matcher. Phase 49 keeps tangent-specific matching and odd `pi/2` finite `±32767.0f` saturation in `__rt_f32_tan_core`. Balanced must be no worse than compact on the validated grid; it does not imply continuous or libm-grade argument reduction.
+
+Phase 50 selects `combined_sincos_tan_core` when `sinf`/`cosf` and `tanf` are used together. This lowers combined PIC16F877A cost but does not change accuracy or finite pole policy.
 
 Runtime profile still controls helper sharing/size strategy. Math profile controls numerical policy. Do not use `--math-profile precise` for dynamic trig in Phase 49.
 

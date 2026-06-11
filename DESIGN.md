@@ -339,6 +339,18 @@ Phase 49 compacts tangent resource cost by splitting tangent-specific branches o
 
 Phase 49 does not change tangent accuracy, pole saturation, finite-only policy, or precise-profile deferred behavior.
 
+### Phase 50 Combined Trig Runtime Budget
+
+Phase 50 reduces the cost of programs that use `sinf`, `cosf`, and `tanf` together:
+
+- sin/cos-only keeps the Phase 47/49 `__rt_f32_sincos_core` path
+- tan-only keeps the Phase 49 `__rt_f32_tan_core` path and no longer emits the unused trig ROM table
+- combined sin/cos/tan switches to `combined_sincos_tan_core`, where `__rt_f32_tan` calls `__rt_f32_sincos_core` with TAN mode
+- reports show the selected trig runtime strategy
+- balanced combined trig drops from `8005 / 8192` to roughly `7250 / 8192` program words on PIC16F877A
+
+The combined strategy is smaller than split cores but still large. Phase 50 does not add `atanf`, `atan2f`, new argument reduction, new accuracy promises, or dynamic precise trig.
+
 ### Phase 4 Stack-first ABI
 
 Current ABI is stack-first, caller-pushed, upward-growing.

@@ -911,9 +911,8 @@ impl<'a> CodegenContext<'a> {
     }
 
     fn trig_runtime_strategy(&self) -> TrigRuntimeStrategy {
-        let uses_sincos =
-            self.used_helpers.contains(&RuntimeHelper::F32Sin)
-                || self.used_helpers.contains(&RuntimeHelper::F32Cos);
+        let uses_sincos = self.used_helpers.contains(&RuntimeHelper::F32Sin)
+            || self.used_helpers.contains(&RuntimeHelper::F32Cos);
         let uses_tan = self.used_helpers.contains(&RuntimeHelper::F32Tan);
         match (uses_sincos, uses_tan) {
             (false, false) => TrigRuntimeStrategy::None,
@@ -927,10 +926,7 @@ impl<'a> CodegenContext<'a> {
         self.trig_runtime_strategy() == TrigRuntimeStrategy::CombinedSinCosTanCore
     }
 
-    fn runtime_helper_dependencies_for_codegen(
-        &self,
-        helper: RuntimeHelper,
-    ) -> Vec<RuntimeHelper> {
+    fn runtime_helper_dependencies_for_codegen(&self, helper: RuntimeHelper) -> Vec<RuntimeHelper> {
         if helper == RuntimeHelper::F32Tan && self.use_combined_trig_core() {
             return vec![RuntimeHelper::F32SinCosCore];
         }
@@ -7629,8 +7625,12 @@ fn runtime_helper_stack_cost_for_strategy(
     trig_strategy: TrigRuntimeStrategy,
 ) -> u16 {
     let info = helper.info();
-    let dependencies =
-        runtime_helper_dependencies_for_report(helper, runtime_profile, math_profile, trig_strategy);
+    let dependencies = runtime_helper_dependencies_for_report(
+        helper,
+        runtime_profile,
+        math_profile,
+        trig_strategy,
+    );
     let dependency_cost = dependencies
         .iter()
         .map(|dependency| {
@@ -7700,10 +7700,10 @@ fn runtime_helper_variant(
 fn math_accuracy_policy(math_profile: MathProfile) -> &'static str {
     match math_profile {
         MathProfile::Compact => {
-            "compact sqrtf: finite-only compact approximation; sinf/cosf shared-core compact trig tolerance <=0.10, tanf isolated-core compact tolerance <=0.20 for non-pole tan in validated range [-2pi,+2pi], scoped moderate aliases through +/-8pi, finite tan pole saturation, coarse fallback outside"
+            "compact sqrtf: finite-only compact approximation; sinf/cosf shared-core compact trig tolerance <=0.10, tanf compact tolerance <=0.20 for non-pole tan in validated range [-2pi,+2pi], scoped moderate aliases through +/-8pi, finite tan pole saturation, coarse fallback outside"
         }
         MathProfile::Balanced => {
-            "balanced sqrtf: currently aliases compact finite approximation; sinf/cosf shared-core balanced trig tolerance <=0.05, tanf isolated-core balanced tolerance <=0.10 for non-pole tan in validated range [-2pi,+2pi], scoped moderate aliases through +/-8pi, finite tan pole saturation, coarse fallback outside"
+            "balanced sqrtf: currently aliases compact finite approximation; sinf/cosf shared-core balanced trig tolerance <=0.05, tanf balanced tolerance <=0.10 for non-pole tan in validated range [-2pi,+2pi], scoped moderate aliases through +/-8pi, finite tan pole saturation, coarse fallback outside"
         }
         MathProfile::Precise => {
             "precise sqrtf: table-refined finite approximation; validated positives in [0.25, 64.0] within +/-0.03125; sinf/cosf/tanf precise dynamic helpers are deferred"
