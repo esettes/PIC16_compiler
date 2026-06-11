@@ -4242,11 +4242,8 @@ impl<'a> CodegenContext<'a> {
         while changed {
             changed = false;
             for helper in helpers.clone() {
-                for dependency in helper.dependencies_for_profiles(
-                    self.options.runtime_profile,
-                    self.options.math_profile,
-                ) {
-                    changed |= helpers.insert(*dependency);
+                for dependency in self.runtime_helper_dependencies_for_codegen(helper) {
+                    changed |= helpers.insert(dependency);
                 }
             }
         }
@@ -4271,12 +4268,11 @@ impl<'a> CodegenContext<'a> {
 
     /// Emits internal Phase 43/44 finite trig lookup data as RETLW ROM tables.
     fn emit_runtime_math_tables(&mut self) {
-        if !self.used_helpers.iter().any(|helper| {
-            matches!(
-                helper,
-                RuntimeHelper::F32Sin | RuntimeHelper::F32Cos | RuntimeHelper::F32Tan
-            )
-        }) {
+        if !self
+            .used_helpers
+            .iter()
+            .any(|helper| matches!(helper, RuntimeHelper::F32Sin | RuntimeHelper::F32Cos))
+        {
             return;
         }
         if self.options.math_profile == MathProfile::Precise {
@@ -4513,7 +4509,7 @@ impl<'a> CodegenContext<'a> {
             "runtime helper: {} helper={} variant={} runtime_profile={} math_profile={} required_by={} args={} locals={} frame_bytes={}",
             catalog.category.as_str(),
             info.label,
-            runtime_helper_variant(helper, self.options.runtime_profile, self.options.math_profile),
+            self.runtime_helper_variant_for_codegen(helper),
             self.options.runtime_profile.as_str(),
             self.options.math_profile.as_str(),
             catalog.required_by,
@@ -4557,11 +4553,15 @@ impl<'a> CodegenContext<'a> {
                 self.emit_float_f32_trig_wrapper(arg0_offset, local_base, 1);
             }
             RuntimeHelper::F32Tan => {
-                self.emit_float_f32_unary_core_wrapper(
-                    arg0_offset,
-                    local_base,
-                    RuntimeHelper::F32TanCore,
-                );
+                if self.use_combined_trig_core() {
+                    self.emit_float_f32_trig_wrapper(arg0_offset, local_base, 2);
+                } else {
+                    self.emit_float_f32_unary_core_wrapper(
+                        arg0_offset,
+                        local_base,
+                        RuntimeHelper::F32TanCore,
+                    );
+                }
             }
             RuntimeHelper::F32SinCosCore => {
                 self.emit_float_f32_sincos_core_helper(arg0_offset, arg0_offset + 4, local_base);
@@ -5381,7 +5381,7 @@ impl<'a> CodegenContext<'a> {
         let result_offset = local_base;
         let sign_offset = result_offset + 4;
         let abs_high_offset = result_offset + 5;
-        let include_tan = false;
+        let include_tan = self.use_combined_trig_core();
         let fallback_label = self.unique_label("rt_f32_trig_fallback");
         let finish_label = self.unique_label("rt_f32_trig_finish");
         let result_zero_label = self.unique_label("rt_f32_trig_result_zero");
