@@ -7267,6 +7267,7 @@ fn analyze_stack(
     layout: &StorageLayout,
     options: BackendOptions,
 ) -> StackAnalysis {
+    let trig_strategy = trig_runtime_strategy_from_ir(typed_program, ir_program);
     let mut helper_depths = BTreeMap::<SymbolId, u16>::new();
     let mut direct_callees = BTreeMap::<SymbolId, Vec<SymbolId>>::new();
     let mut indirect_groups = BTreeMap::<SymbolId, Vec<IndirectTargetSet>>::new();
@@ -7289,17 +7290,19 @@ fn analyze_stack(
                             .unwrap_or("");
                         if matches!(callee_name, "fminf" | "fmaxf") {
                             helper_depth =
-                                helper_depth.max(runtime_helper_stack_cost_for_profiles(
+                                helper_depth.max(runtime_helper_stack_cost_for_strategy(
                                     RuntimeHelper::F32Cmp,
                                     options.runtime_profile,
                                     options.math_profile,
+                                    trig_strategy,
                                 ));
                         } else if let Some(helper) = runtime_helper_for_math_call(callee_name) {
                             helper_depth =
-                                helper_depth.max(runtime_helper_stack_cost_for_profiles(
+                                helper_depth.max(runtime_helper_stack_cost_for_strategy(
                                     helper,
                                     options.runtime_profile,
                                     options.math_profile,
+                                    trig_strategy,
                                 ));
                         } else {
                             callees.push(*callee);
@@ -7336,20 +7339,22 @@ fn analyze_stack(
                     IrInstr::Binary { dst, op, .. } => {
                         if let Some(helper) = binary_helper(*op, function.temp_types[*dst]) {
                             helper_depth =
-                                helper_depth.max(runtime_helper_stack_cost_for_profiles(
+                                helper_depth.max(runtime_helper_stack_cost_for_strategy(
                                     helper,
                                     options.runtime_profile,
                                     options.math_profile,
+                                    trig_strategy,
                                 ));
                         }
                     }
                     IrInstr::Cast { kind, .. } => {
                         if let Some(helper) = runtime_helper_for_cast(*kind) {
                             helper_depth =
-                                helper_depth.max(runtime_helper_stack_cost_for_profiles(
+                                helper_depth.max(runtime_helper_stack_cost_for_strategy(
                                     helper,
                                     options.runtime_profile,
                                     options.math_profile,
+                                    trig_strategy,
                                 ));
                         }
                     }
@@ -7362,10 +7367,11 @@ fn analyze_stack(
             } = &block.terminator
                 && let Some(helper) = runtime_helper_for_float_compare(*op, *ty)
             {
-                helper_depth = helper_depth.max(runtime_helper_stack_cost_for_profiles(
+                helper_depth = helper_depth.max(runtime_helper_stack_cost_for_strategy(
                     helper,
                     options.runtime_profile,
                     options.math_profile,
+                    trig_strategy,
                 ));
             }
         }
@@ -7573,12 +7579,32 @@ fn runtime_helper_stack_cost_for_profiles(
     runtime_profile: RuntimeProfile,
     math_profile: MathProfile,
 ) -> u16 {
+    runtime_helper_stack_cost_for_strategy(
+        helper,
+        runtime_profile,
+        math_profile,
+        TrigRuntimeStrategy::None,
+    )
+}
+
+fn runtime_helper_stack_cost_for_strategy(
+    helper: RuntimeHelper,
+    runtime_profile: RuntimeProfile,
+    math_profile: MathProfile,
+    trig_strategy: TrigRuntimeStrategy,
+) -> u16 {
     let info = helper.info();
-    let dependency_cost = helper
-        .dependencies_for_profiles(runtime_profile, math_profile)
+    let dependencies =
+        runtime_helper_dependencies_for_report(helper, runtime_profile, math_profile, trig_strategy);
+    let dependency_cost = dependencies
         .iter()
         .map(|dependency| {
-            runtime_helper_stack_cost_for_profiles(*dependency, runtime_profile, math_profile)
+            runtime_helper_stack_cost_for_strategy(
+                *dependency,
+                runtime_profile,
+                math_profile,
+                trig_strategy,
+            )
         })
         .max()
         .unwrap_or(0);
@@ -7591,6 +7617,7 @@ fn runtime_helper_variant(
     helper: RuntimeHelper,
     runtime_profile: RuntimeProfile,
     math_profile: MathProfile,
+    trig_strategy: TrigRuntimeStrategy,
 ) -> &'static str {
     if helper == RuntimeHelper::F32Sqrt {
         return match math_profile {
@@ -7605,6 +7632,13 @@ fn runtime_helper_variant(
         return "wrapper";
     }
     if helper == RuntimeHelper::F32SinCosCore {
+        if trig_strategy == TrigRuntimeStrategy::CombinedSinCosTanCore {
+            return match math_profile {
+                MathProfile::Compact => "combined_core_compact",
+                MathProfile::Balanced => "combined_core_balanced",
+                MathProfile::Precise => "precise_deferred",
+            };
+        }
         return match math_profile {
             MathProfile::Compact => "shared_core_compact",
             MathProfile::Balanced => "shared_core_balanced",
@@ -7796,6 +7830,7 @@ fn build_resource_report(inputs: ResourceReportInputs<'_>) -> ResourceReport {
         collect_resource_contributions(target, typed_program, layout, words, labels);
     let page_layout = build_page_layout(target, words);
     let code_sections = build_code_sections(&contributions);
+    let trig_runtime_strategy = trig_runtime_strategy_from_contributions(&contributions);
     let program_words_used = u16::try_from(
         words
             .keys()
@@ -7890,6 +7925,7 @@ fn build_resource_report(inputs: ResourceReportInputs<'_>) -> ResourceReport {
         page_relaxation_passes: u16::try_from(relaxation.passes).unwrap_or(u16::MAX),
         runtime_profile,
         math_profile,
+        trig_runtime_strategy,
     };
 
     ResourceReport {
@@ -8116,6 +8152,11 @@ fn render_size_summary(
     );
     let _ = writeln!(
         output,
+        "Trig runtime strategy: {}",
+        summary.trig_runtime_strategy.as_str()
+    );
+    let _ = writeln!(
+        output,
         "Program words: {} / {}",
         summary.program_words_used, summary.program_words_available
     );
@@ -8201,6 +8242,11 @@ fn render_memory_report(
         output,
         "math accuracy: {}",
         math_accuracy_policy(summary.math_profile)
+    );
+    let _ = writeln!(
+        output,
+        "trig runtime strategy: {}",
+        summary.trig_runtime_strategy.as_str()
     );
     let _ = writeln!(
         output,
@@ -8323,8 +8369,12 @@ fn render_memory_report(
             let frame = helper.stack_frame.unwrap_or(0);
             if let Some(runtime_helper) = runtime_helper_by_label(&helper.name) {
                 let catalog = runtime_helper.catalog_entry();
-                let dependencies = runtime_helper
-                    .dependencies_for_profiles(summary.runtime_profile, summary.math_profile);
+                let dependencies = runtime_helper_dependencies_for_report(
+                    runtime_helper,
+                    summary.runtime_profile,
+                    summary.math_profile,
+                    summary.trig_runtime_strategy,
+                );
                 let dependencies = if dependencies.is_empty() {
                     "(none)".to_string()
                 } else {
@@ -8342,7 +8392,8 @@ fn render_memory_report(
                     runtime_helper_variant(
                         runtime_helper,
                         summary.runtime_profile,
-                        summary.math_profile
+                        summary.math_profile,
+                        summary.trig_runtime_strategy,
                     ),
                     helper.words,
                     catalog.estimated_words,
@@ -8369,8 +8420,12 @@ fn render_memory_report(
             .iter()
             .filter_map(|item| runtime_helper_by_label(&item.name))
         {
-            let dependencies =
-                helper.dependencies_for_profiles(summary.runtime_profile, summary.math_profile);
+            let dependencies = runtime_helper_dependencies_for_report(
+                helper,
+                summary.runtime_profile,
+                summary.math_profile,
+                summary.trig_runtime_strategy,
+            );
             if dependencies.is_empty() {
                 let _ = writeln!(output, "{} -> (none)", helper.label());
             } else {
@@ -8416,6 +8471,10 @@ fn render_resource_map_lines(
         format!(
             "Math accuracy: {}",
             math_accuracy_policy(summary.math_profile)
+        ),
+        format!(
+            "Trig runtime strategy: {}",
+            summary.trig_runtime_strategy.as_str()
         ),
         format!(
             "Program words: {} / {}",
@@ -8554,6 +8613,45 @@ fn helper_words_by_category(
                 .map(|_| item.words)
         })
         .sum()
+}
+
+fn trig_runtime_strategy_from_contributions(
+    contributions: &[ResourceContribution],
+) -> TrigRuntimeStrategy {
+    let has_sincos_core = contributions
+        .iter()
+        .any(|item| item.name == RuntimeHelper::F32SinCosCore.label());
+    let has_tan_core = contributions
+        .iter()
+        .any(|item| item.name == RuntimeHelper::F32TanCore.label());
+    let has_tan = contributions
+        .iter()
+        .any(|item| item.name == RuntimeHelper::F32Tan.label());
+    match (has_sincos_core, has_tan_core, has_tan) {
+        (false, false, false) => TrigRuntimeStrategy::None,
+        (true, false, false) => TrigRuntimeStrategy::SinCosSharedCore,
+        (false, true, true) => TrigRuntimeStrategy::IsolatedTanCore,
+        (true, false, true) => TrigRuntimeStrategy::CombinedSinCosTanCore,
+        (true, true, true) => TrigRuntimeStrategy::SplitSinCosTan,
+        (true, true, false) => TrigRuntimeStrategy::SplitSinCosTan,
+        (false, true, false) => TrigRuntimeStrategy::IsolatedTanCore,
+    }
+}
+
+fn runtime_helper_dependencies_for_report(
+    helper: RuntimeHelper,
+    runtime_profile: RuntimeProfile,
+    math_profile: MathProfile,
+    trig_strategy: TrigRuntimeStrategy,
+) -> Vec<RuntimeHelper> {
+    if helper == RuntimeHelper::F32Tan
+        && trig_strategy == TrigRuntimeStrategy::CombinedSinCosTanCore
+    {
+        return vec![RuntimeHelper::F32SinCosCore];
+    }
+    helper
+        .dependencies_for_profiles(runtime_profile, math_profile)
+        .to_vec()
 }
 
 fn collect_resource_contributions(
