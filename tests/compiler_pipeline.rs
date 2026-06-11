@@ -8201,8 +8201,8 @@ void main(void) {}
 }
 
 #[test]
-/// Verifies Phase 49 isolates TAN-specific code from sin/cos-only programs.
-fn phase49_tanf_cost_is_isolated_from_sincos_core() {
+/// Verifies Phase 50 selects the lowest-cost trig runtime strategy for each usage shape.
+fn phase50_trig_runtime_strategy_minimizes_combined_cost() {
     let sincos = r#"
 #include <math.h>
 
@@ -8216,13 +8216,14 @@ void main(void) {
     c = cosf(angle);
 }
 "#;
-    let (sincos_hex, _sincos_stdout, sincos_report) = compile_profile_source_size_report(
+    let (sincos_hex, sincos_stdout, sincos_report) = compile_profile_source_size_report(
         "balanced",
         "phase49-sincos-cost-isolated",
         sincos,
         &["--math-profile", "balanced"],
     );
     let sincos_map = read_artifact(&sincos_hex, "map");
+    assert!(sincos_stdout.contains("Trig runtime strategy: sincos_shared_core"));
     assert!(rendered_map_has_symbol(&sincos_map, "__rt_f32_sin"));
     assert!(rendered_map_has_symbol(&sincos_map, "__rt_f32_cos"));
     assert!(rendered_map_has_symbol(&sincos_map, "__rt_f32_sincos_core"));
@@ -8246,13 +8247,15 @@ void main(void) {
     t = tanf(angle);
 }
 "#;
-    let (tan_hex, _tan_stdout, tan_report) = compile_profile_source_size_report(
+    let (tan_hex, tan_stdout, tan_report) = compile_profile_source_size_report(
         "balanced",
         "phase49-tan-cost-isolated",
         tan,
         &["--math-profile", "balanced"],
     );
     let tan_map = read_artifact(&tan_hex, "map");
+    assert!(tan_stdout.contains("Trig runtime strategy: isolated_tan_core"));
+    assert!(tan_stdout.contains("ROM table words: 0"));
     assert!(rendered_map_has_symbol(&tan_map, "__rt_f32_tan"));
     assert!(rendered_map_has_symbol(&tan_map, "__rt_f32_tan_core"));
     assert!(!rendered_map_has_symbol(&tan_map, "__rt_f32_sin"));
@@ -8262,6 +8265,10 @@ void main(void) {
     assert!(
         tan_core_words < 3500,
         "tan-specific core should fit under isolation threshold: {tan_core_words}"
+    );
+    assert!(
+        parse_program_words(&tan_stdout) < 8192,
+        "tan-only should fit PIC16F877A"
     );
 
     let combined = r#"
@@ -8279,21 +8286,27 @@ void main(void) {
     t = tanf(angle);
 }
 "#;
-    let (combined_hex, _combined_stdout, combined_report) = compile_profile_source_size_report(
+    let (combined_hex, combined_stdout, combined_report) = compile_profile_source_size_report(
         "balanced",
         "phase49-combined-trig-cost",
         combined,
         &["--math-profile", "balanced"],
     );
     let combined_map = read_artifact(&combined_hex, "map");
+    assert!(combined_stdout.contains("Trig runtime strategy: combined_sincos_tan_core"));
     assert!(rendered_map_has_symbol(
         &combined_map,
         "__rt_f32_sincos_core"
     ));
-    assert!(rendered_map_has_symbol(&combined_map, "__rt_f32_tan_core"));
+    assert!(!rendered_map_has_symbol(&combined_map, "__rt_f32_tan_core"));
     assert!(combined_report.contains("__rt_f32_sin -> __rt_f32_sincos_core"));
     assert!(combined_report.contains("__rt_f32_cos -> __rt_f32_sincos_core"));
-    assert!(combined_report.contains("__rt_f32_tan -> __rt_f32_tan_core"));
+    assert!(combined_report.contains("__rt_f32_tan -> __rt_f32_sincos_core"));
+    assert!(combined_report.contains("variant=combined_core_balanced"));
+    assert!(
+        parse_program_words(&combined_stdout) < 8005,
+        "combined trig should improve on Phase 49 split-core cost"
+    );
 }
 
 #[test]

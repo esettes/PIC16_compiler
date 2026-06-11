@@ -7260,6 +7260,41 @@ fn compute_max_stack_depth_with_interrupts(
     normal_max + interrupt_extra
 }
 
+fn trig_runtime_strategy_from_ir(
+    typed_program: &TypedProgram,
+    ir_program: &IrProgram,
+) -> TrigRuntimeStrategy {
+    let mut uses_sincos = false;
+    let mut uses_tan = false;
+    for function in &ir_program.functions {
+        for block in &function.blocks {
+            for instr in &block.instructions {
+                if let IrInstr::Call {
+                    function: callee, ..
+                } = instr
+                {
+                    let callee_name = typed_program
+                        .symbols
+                        .get(*callee)
+                        .map(|symbol| symbol.name.as_str())
+                        .unwrap_or("");
+                    match callee_name {
+                        "sinf" | "cosf" => uses_sincos = true,
+                        "tanf" => uses_tan = true,
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    match (uses_sincos, uses_tan) {
+        (false, false) => TrigRuntimeStrategy::None,
+        (true, false) => TrigRuntimeStrategy::SinCosSharedCore,
+        (false, true) => TrigRuntimeStrategy::IsolatedTanCore,
+        (true, true) => TrigRuntimeStrategy::CombinedSinCosTanCore,
+    }
+}
+
 /// Builds one stack analysis model used by Phase 18 reports and visibility features.
 fn analyze_stack(
     typed_program: &TypedProgram,
@@ -8635,6 +8670,7 @@ fn trig_runtime_strategy_from_contributions(
         (true, true, true) => TrigRuntimeStrategy::SplitSinCosTan,
         (true, true, false) => TrigRuntimeStrategy::SplitSinCosTan,
         (false, true, false) => TrigRuntimeStrategy::IsolatedTanCore,
+        (false, false, true) => TrigRuntimeStrategy::IsolatedTanCore,
     }
 }
 
