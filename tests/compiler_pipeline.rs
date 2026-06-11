@@ -8441,3 +8441,20 @@ fn phase49_tanf_cost_examples_compile_via_picc() {
         assert_hex_is_programmable(&output);
     }
 }
+
+#[test]
+/// Verifies checked-in Phase 50 combined trig budget examples compile and report resources.
+fn phase50_trig_budget_examples_compile_via_picc() {
+    for example in [
+        "examples/pic16f877a/math_trig_combined_budget.c",
+        "examples/pic16f877a/math_trig_strategy_report.c",
+        "examples/pic16f877a/math_trig_pruning_matrix.c",
+    ] {
+        let output = compile_example_via_picc_cli_with_extra_args(
+            "pic16f877a",
+            example,
+            &["--size", "--memory-report", "--verify-hex"],
+        );
+        assert_hex_is_programmable(&output);
+    }
+}
