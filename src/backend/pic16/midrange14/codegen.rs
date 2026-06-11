@@ -105,6 +105,29 @@ pub struct ResourceSummary {
     pub page_relaxation_passes: u16,
     pub runtime_profile: RuntimeProfile,
     pub math_profile: MathProfile,
+    pub trig_runtime_strategy: TrigRuntimeStrategy,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TrigRuntimeStrategy {
+    #[default]
+    None,
+    SinCosSharedCore,
+    IsolatedTanCore,
+    CombinedSinCosTanCore,
+    SplitSinCosTan,
+}
+
+impl TrigRuntimeStrategy {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::SinCosSharedCore => "sincos_shared_core",
+            Self::IsolatedTanCore => "isolated_tan_core",
+            Self::CombinedSinCosTanCore => "combined_sincos_tan_core",
+            Self::SplitSinCosTan => "split_sincos_tan",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -885,6 +908,51 @@ impl<'a> CodegenContext<'a> {
         self.emit_function_pointer_dispatchers();
         self.emit_runtime_helpers(diagnostics);
         self.emit_runtime_math_tables();
+    }
+
+    fn trig_runtime_strategy(&self) -> TrigRuntimeStrategy {
+        let uses_sincos =
+            self.used_helpers.contains(&RuntimeHelper::F32Sin)
+                || self.used_helpers.contains(&RuntimeHelper::F32Cos);
+        let uses_tan = self.used_helpers.contains(&RuntimeHelper::F32Tan);
+        match (uses_sincos, uses_tan) {
+            (false, false) => TrigRuntimeStrategy::None,
+            (true, false) => TrigRuntimeStrategy::SinCosSharedCore,
+            (false, true) => TrigRuntimeStrategy::IsolatedTanCore,
+            (true, true) => TrigRuntimeStrategy::CombinedSinCosTanCore,
+        }
+    }
+
+    fn use_combined_trig_core(&self) -> bool {
+        self.trig_runtime_strategy() == TrigRuntimeStrategy::CombinedSinCosTanCore
+    }
+
+    fn runtime_helper_dependencies_for_codegen(
+        &self,
+        helper: RuntimeHelper,
+    ) -> Vec<RuntimeHelper> {
+        if helper == RuntimeHelper::F32Tan && self.use_combined_trig_core() {
+            return vec![RuntimeHelper::F32SinCosCore];
+        }
+        helper
+            .dependencies_for_profiles(self.options.runtime_profile, self.options.math_profile)
+            .to_vec()
+    }
+
+    fn runtime_helper_variant_for_codegen(&self, helper: RuntimeHelper) -> &'static str {
+        if helper == RuntimeHelper::F32SinCosCore && self.use_combined_trig_core() {
+            return match self.options.math_profile {
+                MathProfile::Compact => "combined_core_compact",
+                MathProfile::Balanced => "combined_core_balanced",
+                MathProfile::Precise => "precise_deferred",
+            };
+        }
+        runtime_helper_variant(
+            helper,
+            self.options.runtime_profile,
+            self.options.math_profile,
+            self.trig_runtime_strategy(),
+        )
     }
 
     /// Applies backend-local optimization passes and returns a summary for reporting.
